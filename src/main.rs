@@ -638,7 +638,7 @@ fn run_optimize(cfg: &Config) {
     println!("用指分布输出顺序: {}", cfg.keys.display_order);
 
     // 创建输出目录
-    let timestamp = Local::now().format("%Y%m%d%H%M%S").to_string();
+    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
     let output_dir = format!("output-{}", timestamp);
     std::fs::create_dir_all(&output_dir).expect("无法创建输出目录");
     println!("输出目录: {}", output_dir);
