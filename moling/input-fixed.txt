@@ -1,0 +1,1085 @@
+# freq=1.42421926
+ス.A マ.A 又.A	w r s d f g h j k l v n m
+# freq=1.06194006
+{冓上}.A {華中}.A 卄.A 卅.A 卌.A 廾.A 艹.A 龷.A	w r s d f g h j k l v n m
+# freq=0.36395392
+犬.A 犭.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.13851437
+{乐上}.A {卬左}.A 卯.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03896540
+爿.A 片.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.27301789
+{飞右}.A ⺀.A 二.A 冫.A	w r s d f g h j k l v n m
+# freq=0.49296591
+{乍下}.A {龍右}.A ⺊.A 卜.A 虍.A 虎.A 鹵.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.21565878
+皿.A 罒.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.45943391
+{南心}.A ⺶.A 羊.A	q w r t y p s d f g h j k l x c v b n m
+# freq=3.34223155
+丶.A 乀.A	s d f g h j k l
+# freq=1.15425388
+大.A 𡗗.A	w r s d f g h j k l v n m
+# freq=0.71099172
+{荒下}.A 儿.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03790992
+巛.A 巜.A 川.A	q w r t y p s d f g h j k l x c v b n m
+# freq=2.11337375
+{周框}.A 勹.A	w r s d f g h j k l v n m
+# freq=0.03433270
+⺽.A 臼.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07056028
+{卑上}.A 鬼.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.00390443
+乜.A 也.A	w r s d f g h j k l v n m
+# freq=0.52534503
+{奉下}.A 㐄.A	q w r t y p s d f g h j k l x c v b n m
+# freq=2.48203336
+{穀框}.A 土.A 士.A 壴.A 耂.A 龶.A	s d f g h j k l
+# freq=0.43295151
+尢.A 尤.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.20291357
+{豕下}.A 豕.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00003730
+{鳥上}.A 烏.A 鳥.A	q w r t y p s d f g h j k l x c v b n m
+# freq=4.76701070
+〇.A 口.A	s d f g h j k l
+# freq=0.03843692
+{鸟上}.A 乌.A 鸟.A	q w r t y p s d f g h j k l x c v b n m
+# freq=4.60977360
+一.A	f
+# freq=0.19574152
+丆.A 厂.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.11820567
+{母框}.A 彑.A 母.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.27297054
+{畏下}.A {衣下}.A 衤.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.36987710
+{即左}.A 艮.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.31316542
+厶.A 幺.A	w r s d f g h j k l v n m
+# freq=0.74197249
+丁.A 丅.A 下.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.47181965
+了.A 予.A 子.A 孑.A	w r s d f g h j k l v n m
+# freq=2.76346342
+{曾中}.A {横日}.A 日.A 曰.A	s d f g h j k l
+# freq=0.00899190
+長.A 镸.A 髟.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.68238844
+{发左}.A ㄩ.A 丩.A 丱.A 屮.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.09486626
+{向框}.A {囟框}.A 向.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.33885329
+{于下}.A 寸.A	w r s d f g h j k l v n m
+# freq=0.38950919
+{丄丶}.A 丄.A 上.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.06907868
+{五下}.A 丑.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.33637793
+〢.A 丨.A	w r s d f g h j k l v n m
+# freq=1.81000613
+{二撇}.A 丿.A 彡.A	s d f g h j k l
+# freq=0.45541559
+{微框}.A 彳.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.09605348
+{贏框}.A 亡.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.56664872
+几.A 殳.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.22750483
+ㄗ.A 卩.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.83494149
+宀.A 穴.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.09229672
+尚.A 龸.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.01410997
+咼.A 骨.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00314339
+{專上}.A 車.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.51618271
+{冂丶}.A {雋下}.A 冂.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.94542230
+手.A 扌.A 龵.A	s d f g h j k l
+# freq=0.05082883
+未.A 末.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.16188437
+戶.A 户.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.68987088
+{炙上}.A {祭上}.A 月.A	w r s d f g h j k l v n m
+# freq=1.14216178
+止.A 齒.A 龰.A	w r s d f g h j k l v n m
+# freq=1.53045097
+木.A 朩.A	w r s d f g h j k l v n m
+# freq=1.29800824
+リ.A 䒑.A 丷.A	w r s d f g h j k l v n m
+# freq=0.01606824
+ᅲ.A 丌.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.59122334
+㔾.A 己.A 已.A 巳.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00404535
+{鹿上}.A 鹿.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.53517844
+{纟上}.A 纟.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.12190220
+{亮上}.A 高.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.20060138
+コ.A ユ.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.97405885
+刀.A 刂.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.26312510
+{具上}.A 且.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.14714602
+水.A 氵.A	w r s d f g h j k l v n m
+# freq=0.51289932
+{鬯中}.A 乂.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.23177610
+{奐上}.A ⺈.A 冖.A	w r s d f g h j k l v n m
+# freq=0.46085124
+{反彐}.A 彐.A 肀.A 隶.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.56702846
+立.A 辛.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.02048952
+{姬右}.A 臣.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.16711428
+{龠上}.A 僉.A 合.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.61184932
+{兴上}.A {步下}.A ⺌.A ⺍.A 小.A	w r s d f g h j k l v n m
+# freq=0.49340067
+{⺮右}.A {乞上}.A 竹.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.31841381
+西.A 酉.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.19717163
+弋.A 戈.A 戊.A	w r s d f g h j k l v n m
+# freq=0.28596982
+⺧.A 牛.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.38746842
+{眉上}.A 尸.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.18002068
+爪.A 瓜.A	q w r t y p s d f g h j k l x c v b n m
+# freq=2.36106682
+人.A	w r s d f g h j k l v n m
+# freq=2.39464451
+亻.A	w r s d f g h j k l v n m
+# freq=0.92487775
+八.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.24221948
+巴.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.34327044
+灬.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.95162183
+白.A	s d f g h j k l
+# freq=0.00019674
+貝.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.23927126
+贝.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.01925957
+匕.A	w r s d f g h j k l v n m
+# freq=0.01241392
+癶.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.87599272
+不.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.12164875
+长.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.02459643
+冊.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.30666933
+车.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.02396735
+辰.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.12332739
+虫.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.48305631
+辶.A	w r s d f g h j k l v n m
+# freq=0.07386855
+亍.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.04092269
+电.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00000474
+鬥.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.08562044
+匚.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.25479700
+方.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.09770966
+丰.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07960647
+非.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00002876
+風.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00007134
+飛.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03394111
+缶.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.14118158
+夫.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.02520305
+甫.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.83320567
+阝.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.11925708
+干.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.20953447
+广.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.02144052
+革.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.38158286
+工.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.24394153
+弓.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.19545224
+古.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.08716087
+亥.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.39483527
+禾.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05295370
+黑.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.22589448
+火.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00872506
+甲.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00016983
+見.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.27906952
+见.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.14963820
+而.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.16810445
+耳.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.25842464
+巾.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.33526442
+斤.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03173708
+金.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.14454261
+钅.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.08695104
+九.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.11182643
+丂.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.10139731
+千.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.15399179
+欠.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.25104657
+七.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.13784299
+其.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07813514
+气.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00582806
+曲.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00020153
+來.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.69900413
+力.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.31761609
+里.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03377182
+毛.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.10297612
+面.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00010913
+馬.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.17205737
+马.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05329447
+麻.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00039202
+門.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.49944597
+门.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.54436852
+米.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.89274814
+目.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.10874502
+乃.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.06527034
+疒.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.13760493
+女.A	w r s d f g h j k l v n m
+# freq=0.00004206
+{亞下}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.36338474
+{京上}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.20548075
+{介下}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.01108199
+{曹上}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00009782
+{爲下}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00349759
+{襄上}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.01362282
+{阜上}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00000226
+{黽中}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00195110
+{鼠下}.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.23597407
+⺁.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.31795296
+⺮.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05009492
+⺷.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.13927460
+丬.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.12852705
+皮.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05785862
+壬.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03338158
+入.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.08433573
+三.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.13875991
+山.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.19767788
+生.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07431480
+申.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.17923755
+舌.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.14550738
+身.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03541901
+世.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.74861332
+十.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.75401778
+夊.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.23056089
+矢.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.11421984
+石.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.23027444
+示.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.08128611
+糸.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.01269889
+食.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.03501510
+饣.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.29239296
+田.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.37564879
+亠.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.10673938
+早.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.12507988
+正.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.12890381
+之.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.45429401
+自.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.35304879
+至.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00583066
+豸.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.18400677
+隹.A	q w r t y p s d f g h j k l x c v b n m
+# freq=1.05235768
+ナ.A	w r s d f g h j k l v n m
+# freq=0.05206956
+舟.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.27609625
+走.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.17122088
+足.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.69428081
+王.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00728781
+瓦.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.34798198
+囗.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.53461207
+文.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.21128853
+兀.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.08647200
+习.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.59342205
+夕.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.89223681
+心.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.41488491
+忄.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.10613382
+夭.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05401188
+牙.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07366222
+言.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.87856437
+讠.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.09205071
+业.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00016441
+頁.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.14941444
+页.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.87917753
+乙.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.37688048
+乚.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05713939
+亦.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.04077945
+廴.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.21629807
+用.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07774328
+由.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.01523141
+禺.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.11220407
+雨.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00001849
+魚.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.02484681
+鱼.A	q w r t y p s d f g h j k l x c v b n m
+{周框}.S	b
+{周框}.Y	a
+リ.S	b
+リ.Y	a
+丷.S	b
+丷.Y	a
+八.S	b
+八.Y	a
+勹.S	b
+勹.Y	a
+巴.S	b
+巴.Y	a
+灬.S	b
+灬.Y	a
+白.S	b
+白.Y	a
+髟.S	b
+髟.Y	a
+貝.S	b
+貝.Y	e
+贝.S	b
+贝.Y	e
+匕.S	b
+匕.Y	i
+⺊.S	b
+⺊.Y	o
+卜.S	b
+卜.Y	o
+癶.S	b
+癶.Y	o
+不.S	b
+不.Y	u
+䒑.S	c
+䒑.Y	a
+丆.S	c
+丆.Y	a
+厂.S	c
+厂.Y	a
+屮.S	c
+屮.Y	a
+巛.S	c
+巛.Y	a
+巜.S	c
+巜.Y	a
+川.S	c
+川.Y	a
+艹.S	c
+艹.Y	a
+長.S	c
+長.Y	a
+镸.S	c
+镸.Y	a
+长.S	c
+长.Y	a
+冊.S	c
+冊.Y	e
+臣.S	c
+臣.Y	e
+車.S	c
+車.Y	e
+车.S	c
+车.Y	e
+辰.S	c
+辰.Y	e
+彳.S	c
+彳.Y	i
+齒.S	c
+齒.Y	i
+丑.S	c
+丑.Y	o
+虫.S	c
+虫.Y	o
+辶.S	c
+辶.Y	o
+亍.S	c
+亍.Y	u
+寸.S	c
+寸.Y	u
+丶.S	d
+丶.Y	a
+乀.S	d
+乀.Y	a
+刀.S	d
+刀.Y	a
+刂.S	d
+刂.Y	a
+大.S	d
+大.Y	a
+电.S	d
+电.Y	a
+丁.S	d
+丁.Y	i
+丅.S	d
+丅.Y	i
+𡗗.S	d
+𡗗.Y	i
+鬥.S	d
+鬥.Y	o
+匚.S	f
+匚.Y	a
+方.S	f
+方.Y	a
+丰.S	f
+丰.Y	e
+非.S	f
+非.Y	e
+風.S	f
+風.Y	e
+飛.S	f
+飛.Y	e
+缶.S	f
+缶.Y	o
+夫.S	f
+夫.Y	u
+甫.S	f
+甫.Y	u
+阝.S	f
+阝.Y	u
+丱.S	g
+丱.Y	a
+干.S	g
+干.Y	a
+广.S	g
+广.Y	a
+瓜.S	g
+瓜.Y	a
+高.S	g
+高.Y	a
+{即左}.S	g
+{即左}.Y	e
+戈.S	g
+戈.Y	e
+艮.S	g
+艮.Y	e
+革.S	g
+革.Y	e
+鬼.S	g
+鬼.Y	i
+咼.S	g
+咼.Y	o
+工.S	g
+工.Y	o
+廾.S	g
+廾.Y	o
+弓.S	g
+弓.Y	o
+龷.S	g
+龷.Y	o
+古.S	g
+古.Y	u
+骨.S	g
+骨.Y	u
+亥.S	h
+亥.Y	a
+合.S	h
+合.Y	e
+禾.S	h
+禾.Y	e
+黑.S	h
+黑.Y	e
+火.S	h
+火.Y	o
+戶.S	h
+戶.Y	u
+户.S	h
+户.Y	u
+虍.S	h
+虍.Y	u
+虎.S	h
+虎.Y	u
+甲.S	j
+甲.Y	a
+見.S	j
+見.Y	a
+见.S	j
+见.Y	a
+{荒下}.S	j
+{荒下}.Y	e
+{飞右}.S	j
+{飞右}.Y	e
+⺀.S	j
+⺀.Y	e
+ㄗ.S	j
+ㄗ.Y	e
+㔾.S	j
+㔾.Y	e
+二.S	j
+二.Y	e
+儿.S	j
+儿.Y	e
+冫.S	j
+冫.Y	e
+卩.S	j
+卩.Y	e
+孑.S	j
+孑.Y	e
+而.S	j
+而.Y	e
+耳.S	j
+耳.Y	e
+ᅲ.S	j
+ᅲ.Y	i
+丌.S	j
+丌.Y	i
+几.S	j
+几.Y	i
+己.S	j
+己.Y	i
+巾.S	j
+巾.Y	i
+彐.S	j
+彐.Y	i
+彑.S	j
+彑.Y	i
+斤.S	j
+斤.Y	i
+金.S	j
+金.Y	i
+钅.S	j
+钅.Y	i
+冂.S	j
+冂.Y	o
+⺽.S	j
+⺽.Y	u
+丩.S	j
+丩.Y	u
+九.S	j
+九.Y	u
+臼.S	j
+臼.Y	u
+{奉下}.S	k
+{奉下}.Y	a
+ㄩ.S	k
+ㄩ.Y	a
+㐄.S	k
+㐄.Y	a
+丂.S	k
+丂.Y	a
+僉.S	k
+僉.Y	a
+千.S	k
+千.Y	a
+欠.S	k
+欠.Y	a
+犬.S	k
+犬.Y	a
+犭.S	k
+犭.Y	a
+且.S	k
+且.Y	e
+七.S	k
+七.Y	i
+其.S	k
+其.Y	i
+气.S	k
+气.Y	i
+口.S	k
+口.Y	o
+曲.S	k
+曲.Y	u
+來.S	l
+來.Y	a
+耂.S	l
+耂.Y	a
+了.S	l
+了.Y	e
+〇.S	l
+〇.Y	i
+力.S	l
+力.Y	i
+立.S	l
+立.Y	i
+里.S	l
+里.Y	i
+隶.S	l
+隶.Y	i
+{贏框}.S	l
+{贏框}.Y	o
+鹵.S	l
+鹵.Y	u
+鹿.S	l
+鹿.Y	u
+卯.S	m
+卯.Y	a
+宀.S	m
+宀.Y	a
+毛.S	m
+毛.Y	a
+面.S	m
+面.Y	a
+馬.S	m
+馬.Y	a
+马.S	m
+马.Y	a
+麻.S	m
+麻.Y	a
+乜.S	m
+乜.Y	e
+門.S	m
+門.Y	e
+门.S	m
+门.Y	e
+冖.S	m
+冖.Y	i
+皿.S	m
+皿.Y	i
+米.S	m
+米.Y	i
+末.S	m
+末.Y	o
+木.S	m
+木.Y	u
+朩.S	m
+朩.Y	u
+母.S	m
+母.Y	u
+目.S	m
+目.Y	u
+乃.S	n
+乃.Y	a
+卄.S	n
+卄.Y	a
+鳥.S	n
+鳥.Y	a
+鸟.S	n
+鸟.Y	a
+疒.S	n
+疒.Y	e
+女.S	n
+女.Y	u
+牛.S	n
+牛.Y	u
+{⺮右}.Y	o
+{乍下}.Y	o
+{乐上}.Y	o
+{乞上}.Y	o
+{二撇}.Y	o
+{于下}.Y	o
+{五下}.Y	o
+{亞下}.Y	o
+{京上}.Y	o
+{亮上}.Y	o
+{介下}.Y	o
+{兴上}.Y	o
+{具上}.Y	o
+{冂丶}.Y	o
+{冓上}.Y	o
+{卑上}.Y	o
+{南心}.Y	o
+{卬左}.Y	o
+{反彐}.Y	o
+{发左}.Y	o
+{向框}.Y	o
+{囟框}.Y	o
+{奐上}.Y	o
+{姬右}.Y	o
+{專上}.Y	o
+{微框}.Y	o
+{曹上}.Y	o
+{步下}.Y	o
+{母框}.Y	o
+{炙上}.Y	o
+{爲下}.Y	o
+{畏下}.Y	o
+{祭上}.Y	o
+{穀框}.Y	o
+{纟上}.Y	o
+{華中}.Y	o
+{衣下}.Y	o
+{襄上}.Y	o
+{阜上}.Y	o
+{雋下}.Y	o
+{鬯中}.Y	o
+{鳥上}.Y	o
+{鸟上}.Y	o
+{鹿上}.Y	o
+{黽中}.Y	o
+{鼠下}.Y	o
+{龍右}.Y	o
+{龠上}.Y	o
+⺁.Y	o
+⺈.Y	o
+⺌.Y	o
+⺍.Y	o
+⺧.Y	o
+⺮.Y	o
+⺷.Y	o
+〢.Y	o
+コ.Y	o
+ス.Y	o
+マ.Y	o
+ユ.Y	o
+龸.Y	o
+丬.S	p
+丬.Y	a
+爿.S	p
+爿.Y	a
+片.S	p
+片.Y	a
+丿.S	p
+丿.Y	e
+皮.S	p
+皮.Y	i
+人.S	r
+人.Y	e
+亻.S	r
+亻.Y	e
+壬.S	r
+壬.Y	e
+{曾中}.S	r
+{曾中}.Y	i
+{横日}.S	r
+{横日}.Y	i
+日.S	r
+日.Y	i
+入.S	r
+入.Y	u
+{丄丶}.S	s
+{丄丶}.Y	a
+丄.S	s
+丄.Y	a
+三.S	s
+三.Y	a
+上.S	s
+上.Y	a
+卅.S	s
+卅.Y	a
+尚.S	s
+尚.Y	a
+山.S	s
+山.Y	a
+彡.S	s
+彡.Y	a
+生.S	s
+生.Y	e
+申.S	s
+申.Y	e
+舌.S	s
+舌.Y	e
+身.S	s
+身.Y	e
+龶.S	s
+龶.Y	e
+{眉上}.S	s
+{眉上}.Y	i
+{豕下}.S	s
+{豕下}.Y	i
+世.S	s
+世.Y	i
+十.S	s
+十.Y	i
+厶.S	s
+厶.Y	i
+士.S	s
+士.Y	i
+夊.S	s
+夊.Y	i
+尸.S	s
+尸.Y	i
+巳.S	s
+巳.Y	i
+水.S	s
+水.Y	i
+氵.S	s
+氵.Y	i
+矢.S	s
+矢.Y	i
+石.S	s
+石.Y	i
+示.S	s
+示.Y	i
+糸.S	s
+糸.Y	i
+纟.S	s
+纟.Y	i
+豕.S	s
+豕.Y	i
+食.S	s
+食.Y	i
+饣.S	s
+饣.Y	i
+手.S	s
+手.Y	o
+扌.S	s
+扌.Y	o
+龵.S	s
+龵.Y	o
+丨.S	s
+丨.Y	u
+殳.S	s
+殳.Y	u
+田.S	t
+田.Y	a
+亠.S	t
+亠.Y	o
+土.S	t
+土.Y	u
+早.S	v
+早.Y	a
+爪.S	v
+爪.Y	a
+正.S	v
+正.Y	e
+之.S	v
+之.Y	i
+子.S	v
+子.Y	i
+止.S	v
+止.Y	i
+自.S	v
+自.Y	i
+至.S	v
+至.Y	i
+豸.S	v
+豸.Y	i
+隹.S	v
+隹.Y	i
+ナ.S	v
+ナ.Y	o
+舟.S	v
+舟.Y	o
+走.S	v
+走.Y	o
+龰.S	v
+龰.Y	o
+壴.S	v
+壴.Y	u
+竹.S	v
+竹.Y	u
+足.S	v
+足.Y	u
+亡.S	w
+亡.Y	a
+王.S	w
+王.Y	a
+瓦.S	w
+瓦.Y	a
+罒.S	w
+罒.Y	a
+囗.S	w
+囗.Y	e
+文.S	w
+文.Y	e
+未.S	w
+未.Y	e
+乌.S	w
+乌.Y	u
+兀.S	w
+兀.Y	u
+戊.S	w
+戊.Y	u
+烏.S	w
+烏.Y	u
+下.S	x
+下.Y	a
+向.S	x
+向.Y	a
+小.S	x
+小.Y	a
+穴.S	x
+穴.Y	e
+习.S	x
+习.Y	i
+卌.S	x
+卌.Y	i
+夕.S	x
+夕.Y	i
+心.S	x
+心.Y	i
+忄.S	x
+忄.Y	i
+西.S	x
+西.Y	i
+辛.S	x
+辛.Y	i
+⺶.S	y
+⺶.Y	a
+夭.S	y
+夭.Y	a
+幺.S	y
+幺.Y	a
+牙.S	y
+牙.Y	a
+羊.S	y
+羊.Y	a
+言.S	y
+言.Y	a
+讠.S	y
+讠.Y	a
+业.S	y
+业.Y	e
+也.S	y
+也.Y	e
+曰.S	y
+曰.Y	e
+月.S	y
+月.Y	e
+頁.S	y
+頁.Y	e
+页.S	y
+页.Y	e
+一.S	y
+一.Y	i
+乂.S	y
+乂.Y	i
+乙.S	y
+乙.Y	i
+乚.S	y
+乚.Y	i
+亦.S	y
+亦.Y	i
+已.S	y
+已.Y	i
+廴.S	y
+廴.Y	i
+弋.S	y
+弋.Y	i
+衤.S	y
+衤.Y	i
+又.S	y
+又.Y	o
+尢.S	y
+尢.Y	o
+尤.S	y
+尤.Y	o
+用.S	y
+用.Y	o
+由.S	y
+由.Y	o
+酉.S	y
+酉.Y	o
+予.S	y
+予.Y	u
+禺.S	y
+禺.Y	u
+肀.S	y
+肀.Y	u
+雨.S	y
+雨.Y	u
+魚.S	y
+魚.Y	u
+鱼.S	y
+鱼.Y	u
