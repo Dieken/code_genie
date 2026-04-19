@@ -208,7 +208,7 @@ perl -CSDA -F'\t' -lanE '
 
       printf "%s\t%.2f\t%s\t%.2f\t%.2f (%.2f : %.2f) ## %s\n", @{ $h2{$_} }, $a, $b, $s;
     }
-  }' chaifen.txt | grep SELECT | head -n 50 | cat -n
+  }' chaifen.txt | grep SELECT | head -n 50 | cat -n || true  # ignore SIGPIPE
 
 
 echo '(8) 生成码灵输入文件 input-fixed.txt, 大码约束 ...'
