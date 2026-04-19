@@ -1,2 +1,8 @@
+.DS_Store
+
 checkpoint.json
 output*/
+
+Unihan_Readings.txt
+Unihan_Variants.txt
+Unihan.zip

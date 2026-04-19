@@ -4,13 +4,20 @@
 
 1. 运行 `./prepare-inputs.sh` 生成所需文件；
 2. 在上层目录运行 `cargo build --release`；
-3. 在本目录运行 `../target/release/code_genie optimize` 或 `../target/release/code_genie optimize --amhb --keysoul`；
+3. 在本目录运行 `../target/release/code_genie optimize` 或 `../target/release/code_genie optimize --amhb --keysoul`(需最新版 Code Genie)，macOS 下可以命令前加 `caffeinate -i` 防止系统休眠；
+
+## 检查结果
+
+1. 使用 https://ceping.shurufa.app 查看 `output-<TIMESTAMP>/output-combined.txt` 码表的指标，注意在「首页」里设置「編碼終止指示符] 为 "aeuio_" (不要引号)；
+2. 运行 `./stat-moling-roots.pl --mabiao output-<TIMESTAMP>/output-combined.txt`；
+3. 运行 `./generate-root-chart.sh output-<TIMESTAMP>` 生成字根表和字根图，也可以指定到 `output-<TIMESTAMP>/thread-<NN>` 目录；
 
 ## 文件说明
 
 * 脚本程序
-    * prepare-inputs.sh     准备码灵输入文件所用的脚本
-    * stat-moling-roots.pl  统计优化出的魔灵码表和字根表
+    * prepare-inputs.sh         准备码灵输入文件所用的脚本
+    * stat-moling-roots.pl      统计优化出的魔灵码表和字根表
+    * generate-root-chart.sh    生成字根表和字根图
 
 * 第三方文件
     * 简体字频表-2.5b.txt       北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm

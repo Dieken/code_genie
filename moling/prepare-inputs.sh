@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+shopt -s failglob
 
 
 echo '(1) 从 yuhao_charsets.lua 生成简繁常用字符集 chars.txt ...'
