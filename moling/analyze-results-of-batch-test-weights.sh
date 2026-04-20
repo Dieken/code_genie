@@ -5,6 +5,9 @@ shopt -s failglob
 
 which tabulate >/dev/null && TABULATE="tabulate -f plain" || TABULATE=cat
 
+if [ $# -eq 0 ]; then
+  set -- test-*.log
+fi
 
 echo "Writing batch-test-weights.txt ..."
 perl -CSDA -Mautodie -Mutf8 -lnE 'use List::Util qw/min max/;
@@ -36,7 +39,7 @@ perl -CSDA -Mautodie -Mutf8 -lnE 'use List::Util qw/min max/;
     }
 
     print "@a | $d | @a2 | @a3 | @a4";
-  }' test-*.log | $TABULATE > batch-test-weights.txt
+  }' "$@" | $TABULATE > batch-test-weights.txt
 
 
 echo "Writing batch-test-weights.html ..."
