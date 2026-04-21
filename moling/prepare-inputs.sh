@@ -132,6 +132,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
   }
   $a =~ s/^z/v/;  # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
   $a =~ s/^q/k/;  # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
+  $a =~ s/^y/d/ unless $ENV{OPTIMIZE_Y};    # 经过多轮优化试探，映射 Y 到 D 最好
   print "$F[0]\t$a";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
 
@@ -259,8 +260,18 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
 
 echo '(9) 添加码灵输入文件 input-fixed.txt, 声码和韵码约束 ...'
 perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
-  print "$F[0].S\t", substr($F[1], 0, 1) if length($F[1]) > 1;
+  if (length($F[1]) > 1) {
+    if (substr($F[1], 0, 1) eq "y") {
+      push @a, $F[0];   # 声母 y 过于高频，需要映射
+    } else {
+      print "$F[0].S\t", substr($F[1], 0, 1) if length($F[1]) > 1;
+    }
+  }
   print "$F[0].Y\t", substr($F[1], -1);
+
+  END {
+    print join(" ", map { "$_.S" } @a), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @a > 0;
+  }
 ' roots.txt >> input-fixed.txt
 
 

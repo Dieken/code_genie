@@ -17,7 +17,7 @@ key_dist = "key_distribution.txt"    # 用指分布文件
 # -------------------------------------------------------------------------
 [annealing]
 threads = 16             # 并行线程数
-total_steps = 180000000     # 总迭代步数
+total_steps = 150000000     # 总迭代步数
 temp_start = 100.0         # 初始温度
 temp_end = 0.00000001      # 结束温度
 comfort_temp = 0.4       # 舒适温度区间

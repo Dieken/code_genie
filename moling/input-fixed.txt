@@ -192,10 +192,44 @@
 辶.A	w r s d f g h j k l v n m
 # freq=0.07386855
 亍.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.10613382
+夭.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05401188
+牙.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.04092269
 电.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07366222
+言.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.87856437
+讠.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.09205071
+业.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00016441
+頁.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.14941444
+页.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.87917753
+乙.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.37688048
+乚.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.05713939
+亦.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.04077945
+廴.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.21629807
+用.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.07774328
+由.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.00000474
 鬥.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.01523141
+禺.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.11220407
+雨.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.00001849
+魚.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.02484681
+鱼.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.08562044
 匚.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.25479700
@@ -406,40 +440,6 @@
 心.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.41488491
 忄.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.10613382
-夭.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.05401188
-牙.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.07366222
-言.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.87856437
-讠.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.09205071
-业.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.00016441
-頁.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.14941444
-页.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.87917753
-乙.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.37688048
-乚.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.05713939
-亦.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.04077945
-廴.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.21629807
-用.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.07774328
-由.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.01523141
-禺.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.11220407
-雨.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.00001849
-魚.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.02484681
-鱼.A	q w r t y p s d f g h j k l x c v b n m
 {周框}.S	b
 {周框}.Y	a
 リ.S	b
@@ -518,6 +518,8 @@
 亍.Y	u
 寸.S	c
 寸.Y	u
+⺶.S	d
+⺶.Y	a
 丶.S	d
 丶.Y	a
 乀.S	d
@@ -528,16 +530,82 @@
 刂.Y	a
 大.S	d
 大.Y	a
+夭.S	d
+夭.Y	a
+幺.S	d
+幺.Y	a
+牙.S	d
+牙.Y	a
 电.S	d
 电.Y	a
+羊.S	d
+羊.Y	a
+言.S	d
+言.Y	a
+讠.S	d
+讠.Y	a
+业.S	d
+业.Y	e
+也.S	d
+也.Y	e
+曰.S	d
+曰.Y	e
+月.S	d
+月.Y	e
+頁.S	d
+頁.Y	e
+页.S	d
+页.Y	e
+一.S	d
+一.Y	i
 丁.S	d
 丁.Y	i
 丅.S	d
 丅.Y	i
+乂.S	d
+乂.Y	i
+乙.S	d
+乙.Y	i
+乚.S	d
+乚.Y	i
+亦.S	d
+亦.Y	i
+已.S	d
+已.Y	i
+廴.S	d
+廴.Y	i
+弋.S	d
+弋.Y	i
+衤.S	d
+衤.Y	i
 𡗗.S	d
 𡗗.Y	i
+又.S	d
+又.Y	o
+尢.S	d
+尢.Y	o
+尤.S	d
+尤.Y	o
+用.S	d
+用.Y	o
+由.S	d
+由.Y	o
+酉.S	d
+酉.Y	o
 鬥.S	d
 鬥.Y	o
+予.S	d
+予.Y	u
+禺.S	d
+禺.Y	u
+肀.S	d
+肀.Y	u
+雨.S	d
+雨.Y	u
+魚.S	d
+魚.Y	u
+鱼.S	d
+鱼.Y	u
 匚.S	f
 匚.Y	a
 方.S	f
@@ -1015,71 +1083,3 @@
 西.Y	i
 辛.S	x
 辛.Y	i
-⺶.S	y
-⺶.Y	a
-夭.S	y
-夭.Y	a
-幺.S	y
-幺.Y	a
-牙.S	y
-牙.Y	a
-羊.S	y
-羊.Y	a
-言.S	y
-言.Y	a
-讠.S	y
-讠.Y	a
-业.S	y
-业.Y	e
-也.S	y
-也.Y	e
-曰.S	y
-曰.Y	e
-月.S	y
-月.Y	e
-頁.S	y
-頁.Y	e
-页.S	y
-页.Y	e
-一.S	y
-一.Y	i
-乂.S	y
-乂.Y	i
-乙.S	y
-乙.Y	i
-乚.S	y
-乚.Y	i
-亦.S	y
-亦.Y	i
-已.S	y
-已.Y	i
-廴.S	y
-廴.Y	i
-弋.S	y
-弋.Y	i
-衤.S	y
-衤.Y	i
-又.S	y
-又.Y	o
-尢.S	y
-尢.Y	o
-尤.S	y
-尤.Y	o
-用.S	y
-用.Y	o
-由.S	y
-由.Y	o
-酉.S	y
-酉.Y	o
-予.S	y
-予.Y	u
-禺.S	y
-禺.Y	u
-肀.S	y
-肀.Y	u
-雨.S	y
-雨.Y	u
-魚.S	y
-魚.Y	u
-鱼.S	y
-鱼.Y	u

@@ -6,15 +6,18 @@ shopt -s failglob
 : ${CODE_GENIE:=../target/release/code_genie}
 : ${THREADS:=8}
 : ${STEPS:=2000000}
-: ${PARAMS:="5 10 15 20 25 30 35 40 45 50"}
+: ${PARAMS:="10 20 30 40 50"}
 : ${COUNT_PARAMS:=$PARAMS}
 : ${RATE_PARAMS:=$PARAMS}
 : ${EQUIV_PARAMS:=$PARAMS}
 : ${EQUIV_CV:=1}
 : ${DRYRUN:=false}
+: ${OUT_DIR:=batch-test-weights}
 
 which caffeinate >/dev/null && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
 [ "$DRYRUN" = true ] && DRYRUN=echo || DRYRUN=
+
+mkdir -p "$OUT_DIR"
 
 for collision_count in $COUNT_PARAMS; do
   for collision_rate in $RATE_PARAMS; do
@@ -37,13 +40,13 @@ for collision_count in $COUNT_PARAMS; do
       echo "Test collision_count=$collision_count collision_rate=$collision_rate equivalance=$equivalance equiv_cv=$equiv_cv distribution=$distribution ..."
 
       suffix="c$collision_count-r$collision_rate-e$equivalance-cv$equiv_cv-d$distribution"
-      [ -e done-$suffix ] && continue
+      [ -e "$OUT_DIR/done-$suffix" ] && continue
 
       sed -e "s/@@THREADS@@/$THREADS/; s/@@TOTAL_STEPS@@/$STEPS/; s/@@COLLISION_COUNT@@/0.$collision_count/; s/@@COLLISION_RATE@@/0.$collision_rate/; s/@@EQUIVALENCE@@/0.$equivalance/; s/@@EQUIV_CV@@/0.$equiv_cv/; s/@@DISTRIBUTION@@/0.$distribution/" \
-        config.toml.tmpl > config-$suffix.toml
+        config.toml.tmpl > "$OUT_DIR/config-$suffix.toml"
 
       set -x
-      $DRYRUN time $CAFFEINATE $CODE_GENIE --config config-$suffix.toml optimize && $DRYRUN touch done-$suffix
+      $DRYRUN time $CAFFEINATE $CODE_GENIE --config "$OUT_DIR/config-$suffix.toml" optimize && $DRYRUN touch "$OUT_DIR/done-$suffix"
       set +x
 
       echo; echo
