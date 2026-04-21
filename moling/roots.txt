@@ -21,7 +21,6 @@
 巛	ca
 巜	ca
 川	ca
-艹	ca
 長	ca
 镸	ca
 长	ca
@@ -103,7 +102,6 @@
 鬼	gi
 咼	go
 工	go
-廾	go
 弓	go
 龷	go
 古	gu
@@ -193,6 +191,8 @@
 目	mu
 乃	na
 卄	na
+廾	na
+艹	na
 鳥	na
 鸟	na
 疒	ne

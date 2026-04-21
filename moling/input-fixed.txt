@@ -486,8 +486,6 @@
 巜.Y	a
 川.S	c
 川.Y	a
-艹.S	c
-艹.Y	a
 長.S	c
 長.Y	a
 镸.S	c
@@ -650,8 +648,6 @@
 咼.Y	o
 工.S	g
 工.Y	o
-廾.S	g
-廾.Y	o
 弓.S	g
 弓.Y	o
 龷.S	g
@@ -830,6 +826,10 @@
 乃.Y	a
 卄.S	n
 卄.Y	a
+廾.S	n
+廾.Y	a
+艹.S	n
+艹.Y	a
 鳥.S	n
 鳥.Y	a
 鸟.S	n
