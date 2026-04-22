@@ -16,8 +16,8 @@ key_dist = "key_distribution.txt"    # 用指分布文件
 # 🌡️ 模拟退火参数
 # -------------------------------------------------------------------------
 [annealing]
-threads = 16             # 并行线程数
-total_steps = 150000000     # 总迭代步数
+threads = 8             # 并行线程数
+total_steps = 8000000      # 总迭代步数
 temp_start = 100.0         # 初始温度
 temp_end = 0.00000001      # 结束温度
 comfort_temp = 0.4       # 舒适温度区间
@@ -50,8 +50,8 @@ display_order = "qwertyuiopasdfghjklzxcvbnm"
 [weights.full_code]
 # 全码部分权重（总和应为 1.0）
 collision_count = 0.2    # 重码数权重
-collision_rate = 0.3     # 重码率权重
-equivalence = 0.45        # 当量权重
+collision_rate = 0.35     # 重码率权重
+equivalence = 0.4         # 当量权重
 equiv_cv = 0.01           # 当量变异系数权重
 distribution = 0.04       # 分布偏差权重
 

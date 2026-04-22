@@ -22,7 +22,7 @@
 
 ```sh
 ./batch-test-weights.sh
-./analyze-results-of-batch-test-weights.sh | tabulate -f plain
+./analyze-results-of-batch-test-weights.sh
 ```
 
 ## 检查结果
