@@ -14,9 +14,8 @@
 
 ## 算码流程
 
-1. 运行 `./prepare-inputs.sh` 生成所需文件；
-2. 在上层目录运行 `cargo build --release`；
-3. 在本目录运行 `../target/release/code_genie optimize` 或 `../target/release/code_genie optimize --amhb --keysoul`(需最新版 Code Genie)，macOS 下可以命令前加 `caffeinate -imsu` 防止系统休眠；
+1. 在上层目录运行 `cargo build --release` 构建码灵；
+2. 在本目录运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；
 
 可以使用 `./batch-test-weights.sh` 来探测合理的权重参数范围：
 
@@ -34,6 +33,7 @@
 ## 文件说明
 
 * 脚本程序
+    * `optimize.sh`               算码流程包装脚本，调用 ./prepare-input.sh 和 code_genie optimize
     * `prepare-inputs.sh`         准备码灵输入文件所用的脚本
     * `stat-moling-roots.pl`      统计优化出的魔灵码表和字根表
     * `generate-root-chart.sh`    生成字根表和字根图
