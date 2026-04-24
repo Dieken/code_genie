@@ -788,7 +788,7 @@ impl Evaluator {
         let new_score = self.get_score(ctx);
         let delta = new_score - old_score;
 
-        if delta <= 0.0 || rng.gen::<f64>() < (-delta / temp).exp() {
+        if delta <= 0.0 || rng.random::<f64>() < (-delta / temp).exp() {
             true
         } else {
             // 回滚 key_weighted_usage
@@ -855,7 +855,7 @@ impl Evaluator {
         let new_score = self.get_score(ctx);
         let delta = new_score - old_score;
 
-        if delta <= 0.0 || rng.gen::<f64>() < (-delta / temp).exp() {
+        if delta <= 0.0 || rng.random::<f64>() < (-delta / temp).exp() {
             true
         } else {
             // 回滚 key_weighted_usage

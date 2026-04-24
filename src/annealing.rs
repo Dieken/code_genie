@@ -55,7 +55,7 @@ fn greedy_balance_init(ctx: &OptContext, cfg: &Config, rng: &mut ThreadRng) -> V
         let best = if candidates.is_empty() {
             allowed[0]
         } else {
-            candidates[rng.gen_range(0..candidates.len())]
+            candidates[rng.random_range(0..candidates.len())]
         };
 
         assignment[gi] = best;
@@ -74,7 +74,7 @@ fn frequency_greedy_init(ctx: &OptContext, rng: &mut ThreadRng) -> Vec<u8> {
     let mut group_info: Vec<(usize, f64)> = (0..n)
         .map(|gi| {
             let weight = ctx.group_to_chars[gi].len() as f64;
-            let noise = 1.0 + rng.gen::<f64>() * 0.25;
+            let noise = 1.0 + rng.random::<f64>() * 0.25;
             (gi, weight * noise)
         })
         .collect();
@@ -139,7 +139,7 @@ fn random_valid_init(ctx: &OptContext, rng: &mut ThreadRng) -> Vec<u8> {
     let mut assignment = vec![0u8; n];
     for gi in 0..n {
         let allowed = &ctx.groups[gi].allowed_keys;
-        assignment[gi] = allowed[rng.gen_range(0..allowed.len())];
+        assignment[gi] = allowed[rng.random_range(0..allowed.len())];
     }
     assignment
 }
@@ -217,10 +217,10 @@ fn try_resolve_conflict(
         return false;
     }
 
-    let idx = rng.gen_range(0..collisions.len().min(20));
+    let idx = rng.random_range(0..collisions.len().min(20));
     let (g1, g2, _) = collisions[idx];
 
-    let groups_to_try = if rng.gen_bool(0.5) { vec![g1, g2] } else { vec![g2, g1] };
+    let groups_to_try = if rng.random_bool(0.5) { vec![g1, g2] } else { vec![g2, g1] };
 
     for &gi in &groups_to_try {
         let current_key = assignment[gi];
@@ -236,7 +236,7 @@ fn try_resolve_conflict(
             continue;
         }
 
-        let new_key = other_keys[rng.gen_range(0..other_keys.len())];
+        let new_key = other_keys[rng.random_range(0..other_keys.len())];
         if evaluator.try_move(ctx, assignment, gi, new_key, temp, rng) {
             return true;
         }
@@ -258,14 +258,14 @@ fn try_key_reorganization(
         return false;
     }
 
-    let k1 = assignment[rng.gen_range(0..n)];
+    let k1 = assignment[rng.random_range(0..n)];
     let groups_on_k1: Vec<usize> = find_groups_on_key(ctx, assignment, k1);
 
     if groups_on_k1.is_empty() {
         return false;
     }
 
-    let gi = groups_on_k1[rng.gen_range(0..groups_on_k1.len())];
+    let gi = groups_on_k1[rng.random_range(0..groups_on_k1.len())];
     let allowed = &ctx.groups[gi].allowed_keys;
 
     let other_keys: Vec<u8> = allowed
@@ -278,7 +278,7 @@ fn try_key_reorganization(
         return false;
     }
 
-    let new_key = other_keys[rng.gen_range(0..other_keys.len())];
+    let new_key = other_keys[rng.random_range(0..other_keys.len())];
     evaluator.try_move(ctx, assignment, gi, new_key, temp, rng)
 }
 
@@ -295,7 +295,7 @@ fn try_triple_swap(
         return false;
     }
 
-    let indices: Vec<usize> = (0..n).choose_multiple(rng, 3);
+    let indices: Vec<usize> = (0..n).sample(rng, 3);
     if indices.len() < 3 {
         return false;
     }
@@ -357,7 +357,7 @@ fn try_triple_swap(
     let new_score = evaluator.get_score(ctx);
     let delta = new_score - old_score;
 
-    if delta <= 0.0 || rng.gen::<f64>() < (-delta / temp).exp() {
+    if delta <= 0.0 || rng.random::<f64>() < (-delta / temp).exp() {
         true
     } else {
         // 回滚 key_weighted_usage
@@ -433,8 +433,8 @@ fn enhanced_hill_climb(
             }
             4..=6 => {
                 if n >= 2 {
-                    let r1 = rng.gen_range(0..n);
-                    let r2 = rng.gen_range(0..n - 1);
+                    let r1 = rng.random_range(0..n);
+                    let r2 = rng.random_range(0..n - 1);
                     let r2 = if r2 >= r1 { r2 + 1 } else { r2 };
                     let k1 = assignment[r1];
                     let k2 = assignment[r2];
@@ -452,9 +452,9 @@ fn enhanced_hill_climb(
             7 => try_triple_swap(ctx, &mut assignment, &mut evaluator, zero_temp, rng),
             8 => try_key_reorganization(ctx, &mut assignment, &mut evaluator, zero_temp, rng),
             _ => {
-                let r = rng.gen_range(0..n);
+                let r = rng.random_range(0..n);
                 let allowed = &ctx.groups[r].allowed_keys;
-                let new_k = allowed[rng.gen_range(0..allowed.len())];
+                let new_k = allowed[rng.random_range(0..allowed.len())];
                 evaluator.try_move(ctx, &mut assignment, r, new_k, zero_temp, rng)
             }
         };
@@ -594,7 +594,7 @@ fn coordinate_descent(ctx: &OptContext, init: Vec<u8>) -> (Vec<u8>, f64) {
 // =========================================================================
 
 pub fn multi_start_init(ctx: &OptContext, cfg: &Config, thread_id: usize) -> Vec<u8> {
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
     let n = ctx.num_groups;
     if n == 0 {
         return vec![];
@@ -673,7 +673,7 @@ pub fn simulated_annealing(
     cfg: &Config,
     thread_id: usize,
 ) -> (Vec<u8>, f64, Metrics, SimpleMetrics) {
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
 
     let mut assignment = multi_start_init(ctx, cfg, thread_id);
     let mut evaluator = Evaluator::new(ctx, &assignment);
@@ -741,9 +741,9 @@ pub fn simulated_annealing(
 
         let swap_prob = swap_prob_base + (1.0 - swap_prob_base) * (step as f64 / steps as f64) * 0.3;
 
-        if rng.gen::<f64>() < swap_prob && n_groups >= 2 {
-            let r1 = rng.gen_range(0..n_groups);
-            let r2 = rng.gen_range(0..n_groups - 1);
+        if rng.random::<f64>() < swap_prob && n_groups >= 2 {
+            let r1 = rng.random_range(0..n_groups);
+            let r2 = rng.random_range(0..n_groups - 1);
             let r2 = if r2 >= r1 { r2 + 1 } else { r2 };
 
             let k1 = assignment[r1];
@@ -756,13 +756,13 @@ pub fn simulated_annealing(
             } else {
                 let r = r1;
                 let allowed = &ctx.groups[r].allowed_keys;
-                let new_k = allowed[rng.gen_range(0..allowed.len())];
+                let new_k = allowed[rng.random_range(0..allowed.len())];
                 evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
             }
         } else {
-            let r = rng.gen_range(0..n_groups);
+            let r = rng.random_range(0..n_groups);
             let allowed = &ctx.groups[r].allowed_keys;
-            let new_k = allowed[rng.gen_range(0..allowed.len())];
+            let new_k = allowed[rng.random_range(0..allowed.len())];
             evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
         }
 
@@ -807,7 +807,7 @@ pub fn simulated_annealing(
         if perturb_interval > 0 && step > 0 && step % perturb_interval == 0 && base_temp < cfg.annealing.comfort_temp * 0.01 {
             let collisions = find_collision_groups(ctx, &assignment);
             let n_perturb = (n_groups as f64 * cfg.annealing.perturb_strength) as usize;
-            
+
             if !collisions.is_empty() {
                 let mut perturbed_groups: HashSet<usize> = HashSet::new();
                 for (g1, g2, _) in collisions.iter().take(10) {
@@ -818,14 +818,14 @@ pub fn simulated_annealing(
                 for &gi in groups.iter().take(n_perturb) {
                     let allowed = &ctx.groups[gi].allowed_keys;
                     if allowed.len() > 1 {
-                        let new_k = allowed[rng.gen_range(0..allowed.len())];
+                        let new_k = allowed[rng.random_range(0..allowed.len())];
                         evaluator.try_move(ctx, &mut assignment, gi, new_k, temp * 2.0, &mut rng);
                     }
                 }
             } else {
                 for _ in 0..n_perturb {
-                    let r1 = rng.gen_range(0..n_groups);
-                    let r2 = rng.gen_range(0..n_groups);
+                    let r1 = rng.random_range(0..n_groups);
+                    let r2 = rng.random_range(0..n_groups);
                     if r1 != r2 {
                         let ka = assignment[r1];
                         let kb = assignment[r2];
