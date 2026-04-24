@@ -16,7 +16,7 @@ echo "Running './prepare-input.sh' and 'code_genie optimize', writing log to $LO
 set -x
 {
     date
-    ./prepare-inputs.sh && $DRYRUN time $CAFFEINATE $CODE_GENIE "$@" optimize
+    ./prepare-inputs.sh && $DRYRUN time $CAFFEINATE $CODE_GENIE optimize "$@"
     date
 } >$LOG 2>&1
 set +x
