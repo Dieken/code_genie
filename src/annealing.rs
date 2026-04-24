@@ -17,7 +17,7 @@ use crate::types::{char_to_key_index, Metrics, SimpleMetrics, GROUP_MARKER, KEY_
 // =========================================================================
 
 /// 原始贪心初始化 - 按组大小降序，均衡分配到键位
-fn greedy_balance_init(ctx: &OptContext, cfg: &Config, rng: &mut ThreadRng) -> Vec<u8> {
+fn greedy_balance_init(ctx: &OptContext, cfg: &Config, rng: &mut StdRng) -> Vec<u8> {
     let mut assignment = vec![0u8; ctx.num_groups];
 
     let mut group_freq: Vec<(usize, usize)> = ctx
@@ -67,7 +67,7 @@ fn greedy_balance_init(ctx: &OptContext, cfg: &Config, rng: &mut ThreadRng) -> V
 }
 
 /// 频率感知贪心 - 按组权重降序，最小化碰撞代价
-fn frequency_greedy_init(ctx: &OptContext, rng: &mut ThreadRng) -> Vec<u8> {
+fn frequency_greedy_init(ctx: &OptContext, rng: &mut StdRng) -> Vec<u8> {
     let n = ctx.num_groups;
     let mut assignment = vec![0u8; n];
 
@@ -110,7 +110,7 @@ fn frequency_greedy_init(ctx: &OptContext, rng: &mut ThreadRng) -> Vec<u8> {
 }
 
 /// 分散优先贪心
-fn spread_greedy_init(ctx: &OptContext, rng: &mut ThreadRng) -> Vec<u8> {
+fn spread_greedy_init(ctx: &OptContext, rng: &mut StdRng) -> Vec<u8> {
     let n = ctx.num_groups;
     let mut assignment = vec![0u8; n];
 
@@ -134,7 +134,7 @@ fn spread_greedy_init(ctx: &OptContext, rng: &mut ThreadRng) -> Vec<u8> {
 }
 
 /// 纯随机有效解
-fn random_valid_init(ctx: &OptContext, rng: &mut ThreadRng) -> Vec<u8> {
+fn random_valid_init(ctx: &OptContext, rng: &mut StdRng) -> Vec<u8> {
     let n = ctx.num_groups;
     let mut assignment = vec![0u8; n];
     for gi in 0..n {
@@ -211,7 +211,7 @@ fn try_resolve_conflict(
     evaluator: &mut Evaluator,
     collisions: &[(usize, usize, usize)],
     temp: f64,
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
 ) -> bool {
     if collisions.is_empty() {
         return false;
@@ -251,7 +251,7 @@ fn try_key_reorganization(
     assignment: &mut [u8],
     evaluator: &mut Evaluator,
     temp: f64,
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
 ) -> bool {
     let n = assignment.len();
     if n < 2 {
@@ -288,7 +288,7 @@ fn try_triple_swap(
     assignment: &mut [u8],
     evaluator: &mut Evaluator,
     temp: f64,
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
 ) -> bool {
     let n = assignment.len();
     if n < 3 {
@@ -406,7 +406,7 @@ fn try_triple_swap(
 fn enhanced_hill_climb(
     ctx: &OptContext,
     init: Vec<u8>,
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
     max_steps: usize,
 ) -> (Vec<u8>, f64) {
     let mut assignment = init;
@@ -480,7 +480,7 @@ fn enhanced_hill_climb(
 fn hill_climb_warmup(
     ctx: &OptContext,
     init: Vec<u8>,
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
     max_steps: usize,
 ) -> (Vec<u8>, f64) {
     enhanced_hill_climb(ctx, init, rng, max_steps)
@@ -594,7 +594,7 @@ fn coordinate_descent(ctx: &OptContext, init: Vec<u8>) -> (Vec<u8>, f64) {
 // =========================================================================
 
 pub fn multi_start_init(ctx: &OptContext, cfg: &Config, thread_id: usize) -> Vec<u8> {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::from_rng(&mut rand::rng());
     let n = ctx.num_groups;
     if n == 0 {
         return vec![];
@@ -673,7 +673,7 @@ pub fn simulated_annealing(
     cfg: &Config,
     thread_id: usize,
 ) -> (Vec<u8>, f64, Metrics, SimpleMetrics) {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::from_rng(&mut rand::rng());
 
     let mut assignment = multi_start_init(ctx, cfg, thread_id);
     let mut evaluator = Evaluator::new(ctx, &assignment);

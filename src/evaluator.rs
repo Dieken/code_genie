@@ -760,7 +760,7 @@ impl Evaluator {
         r: usize,
         new_key: u8,
         temp: f64,
-        rng: &mut ThreadRng,
+        rng: &mut StdRng,
     ) -> bool {
         let old_key = assignment[r];
         if old_key == new_key {
@@ -819,7 +819,7 @@ impl Evaluator {
         r1: usize,
         r2: usize,
         temp: f64,
-        rng: &mut ThreadRng,
+        rng: &mut StdRng,
     ) -> bool {
         let k1 = assignment[r1];
         let k2 = assignment[r2];
