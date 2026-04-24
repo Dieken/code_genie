@@ -139,7 +139,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
 
 
-echo '(7) 分析首根冲突情况，为选择飞键字根提供参考 ...'
+echo '(7) 分析首根冲突情况，为选择飞键字根提供参考，写入 roots-fly-candidates.txt ...'
 perl -CSDA -F'\t' -lanE '
   @a = split /\s/, $F[1];
   next unless @a > 1;
@@ -178,7 +178,11 @@ perl -CSDA -F'\t' -lanE '
     }
 
     # 按每一对字根的冲突概率从高往低，每次挑出两字根中整体冲突概率高的字根安排到 AEUIO。
-    for (sort { $h2{$b}[4] <=> $h2{$a}[4] } keys %h2) {
+    $selected = 0;
+    for (sort { $h2{$b}[4] <=> $h2{$a}[4] || $h2{$a}[0] cmp $h2{$b}[0] || $h2{$a}[2] cmp $h2{$b}[2] } keys %h2) {
+      next if $h2{$_}[4] < 0.01;
+      last if $selected >= 50;
+
       $p = $h2{$_}[0];
       $q = $h2{$_}[2];
       $a = 100 * $h3{$p} / $n;
@@ -195,6 +199,7 @@ perl -CSDA -F'\t' -lanE '
               $s = "SELECT";
               $h4{$p} = 1;
               $h5{$q}{$p} = 1 unless exists $h4{$q};
+              ++$selected;
             }
             $s = sprintf "$s %s/%.2f/%d/%d/%.2f/%.2f", $p, $a, @{ $freq{$p} }[0, 1], 100 * $freq{$p}[2] / $n, 100 * $freq{$p}[3] / $n;
             $s .= " ?? " . join(" ", map { sprintf "%s/%.2f", $_, 100 * $h3{$_} / $n } sort keys %{ $h5{$p} }) if exists $h5{$p};    # 之前高冲突的字根又被选上了
@@ -203,6 +208,7 @@ perl -CSDA -F'\t' -lanE '
               $s = "SELECT";
               $h4{$q} = 1;
               $h5{$p}{$q} = 1 unless exists $h4{$p};
+              ++$selected;
             }
             $s = sprintf "$s %s/%.2f/%d/%d/%.2f/%.2f", $q, $b, @{ $freq{$q} }[0, 1], 100 * $freq{$q}[2] / $n, 100 * $freq{$q}[3] / $n;
             $s .= " ?? " . join(" ", map { sprintf "%s/%.2f", $_, 100 * $h3{$_} / $n } sort keys %{ $h5{$q} }) if exists $h5{$q};    # 之前高冲突的字根又被选上了
@@ -211,7 +217,7 @@ perl -CSDA -F'\t' -lanE '
 
       printf "%s\t%.2f\t%s\t%.2f\t%.2f (%.2f : %.2f) ## %s\n", @{ $h2{$_} }, $a, $b, $s;
     }
-  }' chaifen.txt | grep SELECT | head -n 50 | cat -n || true  # ignore SIGPIPE
+  }' chaifen.txt > roots-fly-candidates.txt
 
 
 echo '(8) 生成码灵输入文件 input-fixed.txt, 大码约束 ...'

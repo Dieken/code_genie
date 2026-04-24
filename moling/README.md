@@ -62,6 +62,7 @@
     * `input-division.txt`        生成的码灵输入文件
     * `input-fixed.txt`           生成的码灵输入文件
     * `input-roots.txt`           生成的码灵输入文件
+    * `roots-fly-candidates.txt`  生成的飞键字根候选表
     * `roots-freq.txt`            生成的字根频率表
     * `roots-pinyin.txt`          生成的字根拼音
     * `roots.txt`                 生成的字根声码和韵码
