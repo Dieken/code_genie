@@ -24,6 +24,19 @@
 ./analyze-results-of-batch-test-weights.sh
 ```
 
+可以使用 `./analyze-duplicates-by-cluster.pl` 来检查字根聚类的影响：
+
+```sh
+# 使用 roots-cluster.txt 中指定的聚类
+diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./analyze-duplicates-by-cluster.pl -m 0)
+
+# 命令行指定聚类
+diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "虍 虎 ; 皿 罒")
+
+# 评估 roots-cluster.txt 中每一行聚类单独可能带来的重码
+./analyze-duplicates-by-cluster.sh | tabulate -s '\t' -f plain
+```
+
 ## 检查结果
 
 1. 使用 https://ceping.shurufa.app 查看 `output-<TIMESTAMP>/output-combined.txt` 码表的指标，注意在「首页」里设置「編碼終止指示符] 为 "aeuio_" (不要引号)；
@@ -33,11 +46,15 @@
 ## 文件说明
 
 * 脚本程序
-    * `optimize.sh`               算码流程包装脚本，调用 ./prepare-input.sh 和 code_genie optimize
+    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-input.sh` 和 `code_genie optimize`
     * `prepare-inputs.sh`         准备码灵输入文件所用的脚本
     * `stat-moling-roots.pl`      统计优化出的魔灵码表和字根表
     * `generate-root-chart.sh`    生成字根表和字根图
     * `batch-test-weights.sh`     批处理优化以探测合理的权重参数范围
+    * `analyze-duplicates-by-cluster.pl`
+                                  分析字根聚类带来的重码
+    * `analyze-duplicates-by-cluster.sh`
+                                  评估 roots-cluster.txt 中每一行聚类单独可能带来的重码
     * `analyze-results-of-batch-test-weights.sh`
                                   分析 `batch-test-weights.sh` 的运行结果
 
