@@ -121,7 +121,6 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
       "长"     => "ca",  # za, 取 chang
       "長"     => "ca",  # za, 取 chang
       "ㄗ"     => "je",  # zi, 与 卩 归并
-      "廾"     => "na",  # go, 取 nian
       "艹"     => "na",  # ca, 与 卄 归并
     );
   }

@@ -102,6 +102,7 @@
 鬼	gi
 咼	go
 工	go
+廾	go
 弓	go
 龷	go
 古	gu
@@ -191,7 +192,6 @@
 目	mu
 乃	na
 卄	na
-廾	na
 艹	na
 鳥	na
 鸟	na
