@@ -16,7 +16,13 @@ echo "Running './prepare-input.sh' and 'code_genie optimize', writing log to $LO
 set -x
 {
     date
+
+    echo '检查优化相关环境变量：---->'
+    env | grep -E 'USE_VOWEL|OPTIMIZE_'
+    echo '<--------------------------'
+
     ./prepare-inputs.sh && $DRYRUN time $CAFFEINATE $CODE_GENIE optimize "$@"
+
     date
 } >$LOG 2>&1
 set +x
