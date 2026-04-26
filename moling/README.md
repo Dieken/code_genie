@@ -6,7 +6,7 @@
 
 1. 参照灵明，使用 25 键方案，声母 z/zh 用 v 代替，声母 q 用 k 代替，零声母用 j 代替，另外声母 y 用 d 代替以降低 Y 键压力；
 2. 字根聚类参照灵明，因为它已经验证了这些聚在一起不太损耗性能；
-3. 声码和韵码基本参照灵明，严格按拼音，但去掉了省略声码的设计，而且字根尽量只聚类不归并，除非形状过于相似容易看错，不归并带来的好处是可以保留字根原来的读音，不因字根设计而导致读音变了，得特殊记忆错误的读音；
+3. 声码和韵码基本参照灵明，严格按拼音，非成字字根和非常用字字根省略声母，字根尽量只聚类不归并，除非形状过于相似容易看错，不归并带来的好处是可以保留字根原来的读音，不因字根设计而导致读音变了，得特殊记忆错误的读音，注意为了提高手感，默认配置下韵码使用首笔笔画代替，参见下面 `USE_VOWEL` 环境变量的说明；
 4. 单字编码为 A1A2A3AzSzYz，除了双根字编码为 A1A2S2S1Y1 ，模仿了星陈的回头码设计，单字编码限长四码；
 
 魔灵两可的初衷是降低灵明的学习难度（灵明要记忆省略声母的小根），以及舍弃了灵明二码字根字不能组二字词的设计决策（灵明是为了码长短），虽然魔灵两可的简体动态重码率还不错，但在静态重码数、繁体动态重码率、当量、码长上都距灵明甚远，只能算是结合了灵明特性的改进版星陈（但繁体性能依然比星陈差），因此并不推荐使用，对自分割码感兴趣的朋友应去学习宇浩输入法系列的[日月](https://shurufa.app/docs/ming.html)和[灵明](https://shurufa.app/docs/ling.html) 方案，这里公开算码相关文件是希望同道中人一起挖掘宇码方案的不同玩法，复用宇码的基础设施如拆分、字根图、字根练习、拆分查询等。
@@ -16,6 +16,15 @@
 
 1. 在上层目录运行 `cargo build --release` 构建码灵；
 2. 在本目录运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；
+
+`optimize.sh` 调用了 `prepare-inputs.sh`，后者接受几个环境变量来定制行为：
+
+* `USE_VOWEL`: 设置为 1 表示字根的补码使用字根的韵母，默认是使用字根的首笔笔画；
+* `OPTIMIZE_0`: 设置为 1 时使用退火算法决定零声母的按键，默认使用 j；
+* `OPTIMIZE_Q`: 设置为 1 时使用退火算法决定声母 q 的按键，默认使用 k；
+* `OPTIMIZE_R`: 设置为 1 时使用退火算法决定声母 r 的按键，默认使用 g；
+* `OPTIMIZE_Y`: 设置为 1 时使用退火算法决定声母 y 的按键，默认使用 d；
+* `OPTIMIZE_Z`: 设置为 1 时使用退火算法决定声母 z 的按键，默认使用 v；
 
 可以使用 `./batch-test-weights.sh` 来探测合理的权重参数范围：
 
@@ -46,7 +55,7 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 ## 文件说明
 
 * 脚本程序
-    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-input.sh` 和 `code_genie optimize`
+    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-inputs.sh` 和 `code_genie optimize`
     * `prepare-inputs.sh`         准备码灵输入文件所用的脚本
     * `stat-moling-roots.pl`      统计优化出的魔灵码表和字根表
     * `generate-root-chart.sh`    生成字根表和字根图
@@ -59,7 +68,8 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
                                   分析 `batch-test-weights.sh` 的运行结果
 
 * 第三方文件
-    * 简体字频表-2.5b.txt         北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm
+    * `简体字频表-2.5b.txt`       北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm
+    * `宇浩字根列表.csv`          宇浩输入法系列的字根元信息，来自其作者朱宇浩
     * `chars.dict.yaml`           万象拼音词典，https://github.com/amzxyz/RIME-LMDG/blob/62f844d0fd6ac0d6ab2cf9bace6ed34b5a3e318c/dicts/chars.dict.yaml
     * `yuhao_charsets.lua`        宇浩 RIME 方案 Lua 脚本, 来自`星陳輸入法_v3.11.0/schema/lua/yuhao/yuhao_charsets.lua`
     * `yustar_chaifen.dict.yaml`  星陳拆分表，来自`星陳輸入法_v3.11.0/schema/yustar_chaifen.dict.yaml`

@@ -79,23 +79,34 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
     while (<$fh>) {
       @a = split;
       next if exists $h{$a[0]};
-      $a[1] = "je" if $a[1] eq "er";  # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
-      $a[1] = "nu" if $a[1] eq "nv";
+      $a[1] = "0e" if $a[1] eq "er";
+      $a[1] = "nu" if $a[1] eq "nv";  # 女
       die "Invalid pinyin: $_\n" unless $a[1] =~ /^([^aeuio]).*?(?:[iu])?([aeuio])/;
       $h{$a[0]} = "$1$2";
     }
+    close $fh;
+    undef $fh;
+
+    open $fh, "chars.txt";
+    while (<$fh>) {
+        chomp;
+        $common_chars{$_} = 1;
+    }
+
     %fixes = (
-      "冫"     => "je",  # bi，与 二 归并
-      "⺀"     => "je",  # o, 与 二 归并
-      "{飞右}" => "je",  # o, 与 二 归并
+      "冫"     => "0e",  # bi，与 二 归并
+      "⺀"     => "0e",  # o, 与 二 归并
+      "{飞右}" => "0e",  # o, 与 二 归并
       "屮"     => "ca",  # ce，取 cao
       "丶"     => "da",  # zu, 取 dian
       "乀"     => "da",  # fu, 与 丶 归并
+      "土"     => "du",  # tu, 取 du
       "朩"     => "mu",  # de, 与 木 归并
       "丨"     => "su",  # gu, 取 shu
       "丆"     => "ca",  # ha, 与 厂 归并
       "乚"     => "yi",  # ha, 取 yi
-      "車"     => "ce",  # ju, 取 che
+      "车"     => "ju",  # ce，取 ju
+      "車"     => "ju",  # ju, 确保取 ju
       "巜"     => "ca",  # ka, 与 巛 归并
       "糸"     => "si",  # mi, 取 si
       "{丄丶}" => "sa",  # o，与 丄 归并
@@ -103,7 +114,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
       "{周框}" => "ba",  # o, 与 勹 归并
       "⺊"     => "bo",  # o, 与 卜 归并
       "{即左}" => "ge",  # o, 与 艮 归并
-      "{荒下}" => "je",  # o, 与 儿 归并
+      "{荒下}" => "0e",  # o, 与 儿 归并
       "ᅲ"       => "ji",  # o, 与 丌 归并
       "⺽"     => "ju",  # o, 与 臼 归并
       "{奉下}" => "ka",  # o，与 㐄 归并
@@ -122,8 +133,11 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
       "長"     => "ca",  # za, 取 chang
       "ㄗ"     => "je",  # zi, 与 卩 归并
       "艹"     => "na",  # ca, 与 卄 归并
+      "彳"     => "i",   # ci, 在常用字里，但不取声母
+      "亍"     => "u",   # cu, 在常用字里，但不取声母
     );
   }
+
   if (exists $fixes{$F[0]}) {
     $a = $fixes{$F[0]};
   } elsif (exists $h{$F[0]}) {
@@ -131,9 +145,17 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
   } else {
     $a = "o";
   }
-  $a =~ s/^z/v/;  # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
-  $a =~ s/^q/k/;  # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
-  $a =~ s/^y/d/ unless $ENV{OPTIMIZE_Y};    # 经过多轮优化试探，映射 Y 到 D 最好
+
+  # 非常用字字根不取声母
+  if (! exists $common_chars{$F[0]}) {
+      $a =~ s/[^aeuio]//;
+  }
+
+  $a =~ s/^0/j/ unless $ENV{OPTIMIZE_0};    # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
+  $a =~ s/^q/k/ unless $ENV{OPTIMIZE_Q};    # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
+  $a =~ s/^r/g/ unless $ENV{OPTIMIZE_R};    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
+  $a =~ s/^y/d/ unless $ENV{OPTIMIZE_Y};    # 经过多轮优化试探，映射 y 到 d 最好；
+  $a =~ s/^z/v/ unless $ENV{OPTIMIZE_Z};    # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
   print "$F[0]\t$a";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
 
@@ -267,17 +289,71 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
 
 echo '(9) 添加码灵输入文件 input-fixed.txt, 声码和韵码约束 ...'
 perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
+  BEGIN {
+    if (! $ENV{USE_VOWEL}) {
+      %stroke_overrides = (
+        "乙" => "5",
+        "卯" => "3",
+        "水" => "2",
+        "艹" => "1",
+      );
+
+      open my $fh, "宇浩字根列表.csv";
+      while (<$fh>) {
+        next if $. == 1;
+        chomp;
+        @a = split /,/;
+        $b = substr($a[4], 0, 1);
+        $b = "5" if $b eq "6";
+        die "Conflict strokes: $_ vs. previously $strokes{$a[1]}\n" if exists $strokes{$a[1]} && $strokes{$a[1]} ne $b;
+        $strokes{$a[1]} = $b unless exists $strokes{$a[1]} || exists $stroke_overrides{$a[1]};
+      }
+      close $fh;
+
+      while (my ($k, $v) = each %stroke_overrides) {
+        $strokes{$k} = $v;
+      }
+    }
+  }
+
   if (length($F[1]) > 1) {
-    if (substr($F[1], 0, 1) eq "y") {
-      push @a, $F[0];   # 声母 y 过于高频，需要映射
+    $a = substr($F[1], 0, 1);
+
+    if (     $a eq "0" && $ENV{OPTIMIZE_0}) {     # 零声母 0 需要映射
+      push @o, $F[0];
+    } elsif ($a eq "q" && $ENV{OPTIMIZE_Q}) {     # 声母 q 不好按，需要映射
+      push @q, $F[0];
+    } elsif ($a eq "r" && $ENV{OPTIMIZE_R}) {     # 声母 r 不好按，需要映射
+      push @r, $F[0];
+    } elsif ($a eq "y" && $ENV{OPTIMIZE_Y}) {     # 声母 y 过于高频，需要映射
+      push @y, $F[0];
+    } elsif ($a eq "z" && $ENV{OPTIMIZE_Z}) {     # 25 键方案，z 需要映射
+      push @z, $F[0];
     } else {
       print "$F[0].S\t", substr($F[1], 0, 1) if length($F[1]) > 1;
     }
   }
-  print "$F[0].Y\t", substr($F[1], -1);
+
+  if ($ENV{USE_VOWEL}) {
+    # 使用韵母作为字根的补码
+    print "$F[0].Y\t", substr($F[1], -1);
+  } else {
+    # 使用首笔作为字根的补码
+    die "No stroke found for $F[0]!\n" unless exists $strokes{$F[0]};
+    push @{ $Y{ $strokes{$F[0]} } },  $F[0];
+  }
 
   END {
-    print join(" ", map { "$_.S" } @a), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @a > 0;
+    print join(" ", map { "$_.S" } @o), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @o > 0;
+    print join(" ", map { "$_.S" } @q), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @q > 0;
+    print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @r > 0;
+    print join(" ", map { "$_.S" } @y), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @y > 0;
+    print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @z > 0;
+
+    for (sort keys %Y) {
+      @a = @{ $Y{$_} };
+      print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, "aeuio");
+    }
   }
 ' roots.txt >> input-fixed.txt
 
