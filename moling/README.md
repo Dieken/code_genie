@@ -27,20 +27,26 @@
 `optimize.sh` 调用了 `prepare-inputs.sh`，后者接受几个环境变量来定制行为：
 
 * `USE_VOWEL`: 设置为 1 表示字根的补码使用字根的韵母，默认是使用字根的首笔笔画；
-* `OPTIMIZE_0`: 设置为 1 时使用退火算法决定零声母的按键，默认使用 j；
-* `OPTIMIZE_Q`: 设置为 1 时使用退火算法决定声母 q 的按键，默认使用 k；
-* `OPTIMIZE_R`: 设置为 1 时使用退火算法决定声母 r 的按键，默认使用 g；
-* `OPTIMIZE_Y`: 设置为 1 时使用退火算法决定声母 y 的按键，默认使用 d；
-* `OPTIMIZE_Z`: 设置为 1 时使用退火算法决定声母 z 的按键，默认使用 v；
+* `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
+    * 包含 0 时，使用退火算法决定零声母的按键，默认使用 j；
+    * 包含 q 时，使用退火算法决定声母 q 的按键，默认使用 k；
+    * 包含 r 时，使用退火算法决定声母 r 的按键，默认使用 g；
+    * 包含 y 时，使用退火算法决定声母 y 的按键，默认使用 d；
+    * 包含 z 时，使用退火算法决定声母 z 的按键，默认使用 v；
+    * 包含 1 时，使用退火算法决定笔画「横」的按键，默认使用 i；
+    * 包含 2 时，使用退火算法决定笔画「竖」的按键，默认使用 u；
+    * 包含 3 时，使用退火算法决定笔画「撇」的按键，默认使用 o；
+    * 包含 4 时，使用退火算法决定笔画「点」的按键，默认使用 e；
+    * 包含 5 时，使用退火算法决定笔画「折」的按键，默认使用 a；
 
 例如：
 
 ```sh
-# 优化全部五个键映射，使用字根首笔作为韵码
-OPTIMIZE_0=1 OPTIMIZE_Q=1 OPTIMIZE_R=1 OPTIMIZE_Y=1 OPTIMIZE_Z=1 ./optimize.sh
+# 优化全部十个键映射，使用字根首笔作为韵码
+OPTIMIZE_KEYS=012345qryz ./optimize.sh
 
 # 优化全部五个键映射，使用字根韵母作为韵码
-USE_VOWEL=1 OPTIMIZE_0=1 OPTIMIZE_Q=1 OPTIMIZE_R=1 OPTIMIZE_Y=1 OPTIMIZE_Z=1 ./optimize.sh
+USE_VOWEL=1 OPTIMIZE_KEYS=0qryz ./optimize.sh
 ```
 
 注意，开启按键映射后，`roots.tsv` 中的字根声码不是最终版，关闭 `USE_VOWEL` 使用字根首笔时，

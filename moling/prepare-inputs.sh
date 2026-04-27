@@ -151,11 +151,11 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
       $a =~ s/[^aeuio]//;
   }
 
-  $a =~ s/^0/j/ unless $ENV{OPTIMIZE_0};    # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
-  $a =~ s/^q/k/ unless $ENV{OPTIMIZE_Q};    # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
-  $a =~ s/^r/g/ unless $ENV{OPTIMIZE_R};    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
-  $a =~ s/^y/d/ unless $ENV{OPTIMIZE_Y};    # 经过多轮优化试探，映射 y 到 d 最好；
-  $a =~ s/^z/v/ unless $ENV{OPTIMIZE_Z};    # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+  $a =~ s/^0/j/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
+  $a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
+  $a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;     # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
+  $a =~ s/^y/d/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 经过多轮优化试探，映射 y 到 d 最好；
+  $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
   print "$F[0]\t$a";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
 
@@ -326,15 +326,15 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   if (length($F[1]) > 1) {
     $a = substr($F[1], 0, 1);
 
-    if (     $a eq "0" && $ENV{OPTIMIZE_0}) {     # 零声母 0 需要映射
+    if (     $a eq "0" && $ENV{OPTIMIZE_KEYS} =~ /0/ ) {    # 零声母 0 需要映射
       push @o, $F[0];
-    } elsif ($a eq "q" && $ENV{OPTIMIZE_Q}) {     # 声母 q 不好按，需要映射
+    } elsif ($a eq "q" && $ENV{OPTIMIZE_KEYS} =~ /q/i) {    # 声母 q 不好按，需要映射
       push @q, $F[0];
-    } elsif ($a eq "r" && $ENV{OPTIMIZE_R}) {     # 声母 r 不好按，需要映射
+    } elsif ($a eq "r" && $ENV{OPTIMIZE_KEYS} =~ /r/i) {    # 声母 r 不好按，需要映射
       push @r, $F[0];
-    } elsif ($a eq "y" && $ENV{OPTIMIZE_Y}) {     # 声母 y 过于高频，需要映射
+    } elsif ($a eq "y" && $ENV{OPTIMIZE_KEYS} =~ /y/i) {    # 声母 y 过于高频，需要映射
       push @y, $F[0];
-    } elsif ($a eq "z" && $ENV{OPTIMIZE_Z}) {     # 25 键方案，z 需要映射
+    } elsif ($a eq "z" && $ENV{OPTIMIZE_KEYS} =~ /z/i) {    # 25 键方案，z 需要映射
       push @z, $F[0];
     } else {
       print "$F[0].S\t", substr($F[1], 0, 1) if length($F[1]) > 1;
@@ -351,15 +351,23 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   }
 
   END {
-    print join(" ", map { "$_.S" } @o), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @o > 0;
-    print join(" ", map { "$_.S" } @q), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @q > 0;
-    print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @r > 0;
+    print join(" ", map { "$_.S" } @o), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @o > 0;
+    print join(" ", map { "$_.S" } @q), "\t", join(" ", split /\s*/, "q sdfghjkl vnm") if @q > 0;
+    print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "r sdfghjkl vnm") if @r > 0;
     print join(" ", map { "$_.S" } @y), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @y > 0;
     print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @z > 0;
 
-    for (sort keys %Y) {
-      @a = @{ $Y{$_} };
-      print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, "aeuio");
+    # 按拆分里字根首笔使用情况以及字频加权统计，字根首笔折(5)和竖(2)少，横(1)、撇(3)、点(4) 多
+    %stroke_mapping = qw( 1 i 2 u 3 o 4 e 5 a);
+    %stroke_constraint = qw(1 eio 2 au 3 eio 4 eio 5 au);
+
+    for my $stroke (sort keys %Y) {
+      @a = sort @{ $Y{$stroke} };
+      if ($ENV{OPTIMIZE_KEYS} =~ /$stroke/i) {
+          print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, $stroke_constraint{$stroke});
+      } else {
+          print join("\n", map { "$_.Y\t$stroke_mapping{$stroke}" } @a);
+      }
     }
   }
 ' roots.txt >> input-fixed.txt
