@@ -351,11 +351,11 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   }
 
   END {
-    print join(" ", map { "$_.S" } @o), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @o > 0;
-    print join(" ", map { "$_.S" } @q), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @q > 0;
-    print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @r > 0;
-    print join(" ", map { "$_.S" } @y), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @y > 0;
-    print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @z > 0;
+    print join(" ", map { "$_.S" } @o), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @o > 0;
+    print join(" ", map { "$_.S" } @q), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @q > 0;
+    print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @r > 0;
+    print join(" ", map { "$_.S" } @y), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @y > 0;
+    print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @z > 0;
 
     for (sort keys %Y) {
       @a = @{ $Y{$_} };
