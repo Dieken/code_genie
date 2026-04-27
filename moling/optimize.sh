@@ -21,7 +21,7 @@ set -x
     env | grep -E 'USE_VOWEL|OPTIMIZE_'
     echo '<--------------------------'
 
-    ./prepare-inputs.sh && $DRYRUN time $CAFFEINATE $CODE_GENIE optimize "$@"
+    ./prepare-inputs.sh && time $DRYRUN $CAFFEINATE $CODE_GENIE optimize "$@"
 
     date
 } >$LOG 2>&1
