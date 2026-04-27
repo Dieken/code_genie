@@ -18,22 +18,25 @@ shopt -s failglob
 }
 
 echo "Writing $1/roots.tsv ..."
-perl -CSDA -Mautodie -lanE '
-  BEGIN {
-    open my $fh, "roots.txt";
-    while (<$fh>) {
-      chomp;
-      @a = split;
-      $h{$a[0]} = $a[1];
+perl -CSDA -lanE '
+  next unless /^(\S+)\.([UASY])/;
+  $h{$1}{$2} = lc($F[1]);
+  END {
+    while (($k, $v) = each %h) {
+      push @roots, [$k, "$v->{U}$v->{S}$v->{Y}"] if exists $v->{U};   # 飞键字根
+      die "No ASY root found for $k!\n" unless exists $v->{A};
+      push @roots, [$k, "$v->{A}$v->{S}$v->{Y}"];                     # 正常字根
     }
-  }
 
-  next unless /^(\S+)\.A/;
-  die "Unknown root $1\n" unless exists $h{$1};
-  print "$1\t$F[1]$h{$1}";
-  delete $h{$1};
-  END { @a=keys %h; die "Missing roots: @a\n" if @a > 0 }
-  ' "$1/output-keymap.txt" | LC_ALL=C sort -k2,2 -k1,1 > "$1/roots.tsv"
+    @roots = sort {
+      $b->[1] =~ /[aeuio]/ <=> $a->[1] =~ /[aeuio]/ ||
+      $a->[1] cmp $b->[1] ||
+      $a->[0] cmp $b->[0]
+    } @roots;
+
+    for (@roots) { print "$_->[0]\t", ucfirst($_->[1]); }
+  }
+  ' "$1/output-keymap.txt" > "$1/roots.tsv"
 
 echo "Writing $1/chaifen.tsv ..."
 perl -CSDA -F'\t' -lanE '$F[1]=~s/\s//g; print "$F[0]\t$F[1]"' chaifen.txt > "$1/chaifen.tsv"
