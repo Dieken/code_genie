@@ -169,7 +169,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
 
   $a =~ s/^0/j/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
   $a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
-  $a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;     # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
+  #$a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
   $a =~ s/^y/d/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 经过多轮优化试探，映射 y 到 d 最好；
   $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
   print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
