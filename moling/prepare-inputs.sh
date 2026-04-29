@@ -21,7 +21,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "chars.txt"; while (<$fh
   }' 简体字频表-2.5b.txt  > freq.txt
 
 
-echo '(3) 从宇浩星陈方案的大陆字形拆分表 yustar_chaifen.dict.yaml 生成简繁常用字符集的拆分表 chaifen.txt ...'
+echo '(3) 从宇浩星陈方案的大陆字形拆分表 yustar_chaifen.dict.yaml 生成简繁常用字符集的拆分表 chaifen.txt 和 chaifen-all.txt ...'
 perl -CSDA -Mautodie -lanE 'BEGIN { open my $fh, "freq.txt"; while (<$fh>) { chomp; @a = split; $h{$a[0]} = $a[1] } }
   if (! $ok) {
     next unless /^\.\.\./;
@@ -36,21 +36,32 @@ perl -CSDA -Mautodie -lanE 'BEGIN { open my $fh, "freq.txt"; while (<$fh>) { cho
   END { @a = sort keys %h; die "No chaifen found for @a" if @a > 0}
   ' yustar_chaifen.dict.yaml | LC_ALL=C sort -t $'\t' -s -k3,3nr -k1,1 > chaifen.txt
 
+perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "简体字频表-2.5b.txt"; while (<$fh>) { chomp; @a = split; $h{$a[0]} = $a[1] } }
+  if (! $ok) {
+    next unless /^\.\.\./;
+    $ok = 1;
+  }
+  next unless /^(\S)\t\[([^,]+)/;
+  $a = $1;
+  @a = $2 =~ /\{[^\}]+\}|\S/g;
+  print "$a\t", join(" ", @a), "\t", $h{$a} // 0;
+  ' yustar_chaifen.dict.yaml | LC_ALL=C sort -t $'\t' -s -k3,3nr -k1,1 > chaifen-all.txt
 
-echo '(4) 从 chaifen.txt 生成字根频率表 roots-freq.txt ...'
+
+echo '(4) 从 chaifen-all.txt 生成字根频率表 roots-freq.txt ...'
 perl -CSDA -F'\t' -lanE '
   @a = split /\s/, $F[1];
   $n += $F[2] * @a;
   for (@a) { $h{$_} += $F[2]; }
   END {
-    for (sort { $h{$b} <=> $h{$a} } keys %h) {
+    for (sort { $h{$b} <=> $h{$a} || $a cmp $b } keys %h) {
       printf "%s\t%.8f\n", $_, 100 * $h{$_} / $n;
     }
-  }' chaifen.txt > roots-freq.txt
+  }' chaifen-all.txt > roots-freq.txt
 
 
 echo '(5) 从万象拼音词典 chars.dict.yaml 生成字根读音 roots-pinyin.txt ...'
-perl -CSDA -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
+perl -CSDA -Mautodie -Mutf8 -lanE '
   BEGIN {
     open my $fh, "roots-freq.txt";
     while (<$fh>) {
@@ -63,9 +74,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
   @a = @F[1..$#F];
   %h2=();
   for (@a) {
-    $_ = NFKD($_);
-    s/\p{M}//g;
-    $h2{$1}=1 if /^([a-z]+)/i;
+    $h2{$1}=1 if /^([^\d\s]+)/i && $1 ne "无";
   }
   for (sort keys %h2) {
     print "$F[0]\t$_\t", ($F[-1] =~ /^\d/ ? $F[-1] : "0");
@@ -73,12 +82,17 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
 
 
 echo '(6) 从 roots-pinyin.txt 修正并生成字根声码韵码表 roots.txt ...'
-perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
+perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
   BEGIN {
     open my $fh, "roots-pinyin.txt";
     while (<$fh>) {
       @a = split;
       next if exists $h{$a[0]};
+      $pinyin{$a[0]} = $a[1];
+
+      $a[1] = NFKD($a[1]);
+      $a[1] =~ s/\p{M}//g;
+
       $a[1] = "0e" if $a[1] eq "er";
       $a[1] = "nu" if $a[1] eq "nv";  # 女
       die "Invalid pinyin: $_\n" unless $a[1] =~ /^([^aeuio]).*?(?:[iu])?([aeuio])/;
@@ -92,6 +106,8 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
         chomp;
         $common_chars{$_} = 1;
     }
+
+    $common_chars{"戸"} = 1;     # 特殊处理，保持 hu 音
 
     %fixes = (
       "冫"     => "0e",  # bi，与 二 归并
@@ -156,7 +172,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
   $a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;     # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
   $a =~ s/^y/d/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 经过多轮优化试探，映射 y 到 d 最好；
   $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
-  print "$F[0]\t$a";
+  print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
 
 

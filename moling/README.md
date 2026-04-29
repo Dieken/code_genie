@@ -110,6 +110,7 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 
 * 脚本生成的文件
     * `chaifen.txt`               生成的拆分表
+    * `chaifen-all.txt`           生成的全字集拆分表，不参与优化，只用于生成大字集码表
     * `chars.txt`                 生成的常用字表
     * `freq.txt`                  生成的常用字字频文件
     * `input-division.txt`        生成的码灵输入文件

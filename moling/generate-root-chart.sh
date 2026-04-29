@@ -38,8 +38,66 @@ perl -CSDA -lanE '
   }
   ' "$1/output-keymap.txt" > "$1/roots.tsv"
 
+echo "Writing $1/roots-mapping.tsv ..."
+perl -CSDA -F, -lanE '
+    next if $. == 1 || exists $h{$F[1]};
+    print "$F[1]\t$F[2]" if $F[1] ne $F[2] && $F[1] =~ /\{/;
+    $h{$F[1]} = 1;
+    ' 宇浩字根列表.csv | LC_ALL=C sort -u > "$1/roots-mapping.tsv"
+
+echo "Writing $1/zigen-moling.csv ..."
+perl -CSDA -Mautodie -Mutf8 -lanE '
+  $roots{$F[0]} = lc($F[1]);
+
+  END {
+      %order = ();
+      for $root (sort { $roots{$a} cmp $roots{$b} || $a cmp $b } keys %roots) {
+          $order{$root} = scalar(keys(%order)) * 1000;
+      }
+
+      open my $fh, "宇浩字根列表.csv";
+      while (<$fh>) {
+          next if $. == 1;
+          chomp;
+          @a = split /,/;
+          $mapping{ $a[1] } = $a[2];
+      }
+      undef $fh;
+
+      $mapping{"乙"} = "乙";
+      $mapping{"乚"} = "乚";
+
+      open $fh, "roots.txt";
+      while (<$fh>) {
+          chomp;
+          @a = split;
+          $pinyin{ $a[0] } = $a[2] // "";
+      }
+      undef $fh;
+
+      open $fh, "roots-cluster.txt";
+      while (<$fh>) {
+          next if /^\s*#/ || /^\s*$/;
+          @a = split /\t/;
+          @a = split /\s+/, $a[0];
+          for ($i = 1; $i < @a; ++$i) {
+              $order{$a[$i]} = $order{$a[0]} + $i;
+          }
+      }
+
+      $a = scalar keys %roots;
+      $b = scalar keys %mapping;
+      die "Inconsistent number of roots: $a vs $b\n" if $a != $b;
+
+      print "font,ma,pinyin";
+      for $r (sort { $order{$a} <=> $order{$b} } keys %roots) {
+          print $mapping{$r}, ",", $roots{$r}, ",", $pinyin{$r};
+      }
+  }
+' "$1/roots.tsv" > "$1/zigen-moling.csv"
+
 echo "Writing $1/chaifen.tsv ..."
-perl -CSDA -F'\t' -lanE '$F[1]=~s/\s//g; print "$F[0]\t$F[1]"' chaifen.txt > "$1/chaifen.tsv"
+perl -CSDA -F'\t' -lanE '$F[1]=~s/\s//g; print "$F[0]\t$F[1]"' chaifen-all.txt > "$1/chaifen.tsv"
 
 echo "Writing $1/mabiao.tsv ..."
 perl -CSDA -Mutf8 -F'\t' -lanE '
@@ -52,7 +110,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
       print "的\te";
       print "了\ta";
 
-      open my $fh, "chaifen.txt";
+      open my $fh, "chaifen-all.txt";
       while (<$fh>) {
           chomp;
           @a = split /\t/;
@@ -111,8 +169,12 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 echo "Writing $1/moling.js ..."
 "$TYPER_ROOT/scripts/turn-roots-chaifen-mabiao-into-js.pl" "$1/roots.tsv" "$1/chaifen.tsv" "$1/mabiao.tsv" > "$1/moling.js"
 
-VER=$(date +%Y.%m.%d.%H%M)
+echo "Downloading https://shurufa.app/fonts/Yuniversus.woff to $1/Yuniversus.woff ..."
+curl -L -z "$1/Yuniversus.woff" -o "$1/Yuniversus.woff" 'https://shurufa.app/fonts/Yuniversus.woff'
+
+VER=$(date +%Y.%m.%d)
 echo "Writing $1/moling-$VER.html ..."
 "$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/moling.js" -t "魔靈輸入法字根表 $VER" -c 简体字频表-2.5b.txt \
+  -f "$1/Yuniversus.woff" -r "$1/roots-mapping.tsv" \
   "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 6000 简体字频表-2.5b.txt | awk '{print $1}') > "$1/moling-$VER.html"
 
