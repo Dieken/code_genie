@@ -146,8 +146,8 @@
 {僉上}.A {龠上}.A 僉.A 合.A	q w r t y p s d f g h j k l x c v b n m
 # freq=1.61177388
 {兴上}.A {步下}.A ⺌.A ⺍.A 小.A	w r s d f g h j k l v n m
-# freq=0.49337376
-{⺮右}.A {乞上}.A 竹.A	q w r t y p s d f g h j k l x c v b n m
+# freq=0.81131798
+{⺮右}.A {乞上}.A ⺮.A 竹.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.31839811
 西.A 酉.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.28596596
@@ -328,8 +328,6 @@
 {鼠下}.A	q w r t y p s d f g h j k l x c v b n m
 # freq=0.23595593
 ⺁.A	q w r t y p s d f g h j k l x c v b n m
-# freq=0.31794422
-⺮.A	q w r t y p s d f g h j k l x c v b n m
 # freq=1.05228475
 ナ.A	w r s d f g h j k l v n m
 # freq=0.37564632
