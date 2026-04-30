@@ -77,6 +77,8 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
     $h2{$1}=1 if /^([^\d\s]+)/i && $1 ne "无";
   }
   for (sort keys %h2) {
+    next if "$F[0] $_" eq "車 jū";      # 使用更低频的 chē
+
     print "$F[0]\t$_\t", ($F[-1] =~ /^\d/ ? $F[-1] : "0");
   }'  chars.dict.yaml | LC_ALL=C sort -u -k1,1 -k3,3nr -k2,2 > roots-pinyin.txt
 
