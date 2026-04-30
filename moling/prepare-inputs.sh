@@ -121,8 +121,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       "丨"     => "su",  # gu, 取 shu
       "丆"     => "ca",  # ha, 与 厂 归并
       "乚"     => "yi",  # ha, 取 yi
-      "车"     => "ju",  # ce，取 ju
-      "車"     => "ju",  # ju, 确保取 ju
+      "車"     => "ce",  # ju, 取 che
       "巜"     => "ca",  # ka, 与 巛 归并
       "糸"     => "si",  # mi, 取 si
       "{丄丶}" => "sa",  # o，与 丄 归并
