@@ -97,7 +97,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
 ' "$1/roots.tsv" > "$1/zigen-moling.csv"
 
 echo "Writing $1/chaifen.tsv ..."
-perl -CSDA -F'\t' -lanE '$F[1]=~s/\s//g; print "$F[0]\t$F[1]"' chaifen-all.txt > "$1/chaifen.tsv"
+perl -CSDA -F'\t' -lanE '$F[1]=~s/\s+//g; print "$F[0]\t$F[1]"' chaifen-all.txt > "$1/chaifen.tsv"
 
 echo "Writing $1/mabiao.tsv ..."
 perl -CSDA -Mutf8 -F'\t' -lanE '

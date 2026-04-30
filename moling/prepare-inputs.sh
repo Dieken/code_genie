@@ -50,7 +50,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "简体字频表-2.5b.tx
 
 echo '(4) 从 chaifen-all.txt 生成字根频率表 roots-freq.txt ...'
 perl -CSDA -F'\t' -lanE '
-  @a = split /\s/, $F[1];
+  @a = split /\s+/, $F[1];
   $n += $F[2] * @a;
   for (@a) { $h{$_} += $F[2]; }
   END {
@@ -150,6 +150,8 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       "艹"     => "na",  # ca, 与 卄 归并
       "彳"     => "i",   # ci, 在常用字里，但不取声母
       "亍"     => "u",   # cu, 在常用字里，但不取声母
+      "咼"     => "a",   # ga, 在常用字里，但不取声母以与「骨」首笔分开
+      "尢"     => "o",   # yo, 在常用字里，但不取声母以与「尤」首笔分开
     );
   }
 
@@ -177,7 +179,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
 
 echo '(7) 分析首根冲突情况，为选择飞键字根提供参考，写入 roots-fly-candidates.txt ...'
 perl -CSDA -F'\t' -lanE '
-  @a = split /\s/, $F[1];
+  @a = split /\s+/, $F[1];
   next unless @a > 1;
   $a = shift @a;
   $h{"@a"}{$a} += $F[2];
@@ -414,11 +416,11 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     while (<$fh>) {
       next if /^\s*#/ || /^\s*#/;
       chomp;
-      s/\s//g;
+      s/\s+//g;
       $h2{$_} = 1;
     }
   }
-  @a = split /\s/, $F[1];
+  @a = split /\s+/, $F[1];
   @b = ();
   for (@a) { push @b, "$_.A" }
   $b[0] = "$a[0].U" if exists $h2{$a[0]};
