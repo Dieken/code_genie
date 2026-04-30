@@ -277,7 +277,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
       chomp;
       @a = split /\t/, $_, 2;
       @b = sort split /\s+/, $a[0];
-      $a = sum(map { $freq{$_} } @b);
+      $a = sum(map { $freq{$_} // die "ERROR: Unknown root $_ in roots-cluster.txt" } @b);
       if ($a >= 1.8) {
         $a[1] ||= "sdfghjkl";
       } elsif ($a >= 1) {
@@ -288,7 +288,10 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
       $a[1] = join(" ", split /\s*/, $a[1]);
       printf "# freq=%.8f\n", $a;
       print join(" ", map { "$_.A" } @b), "\t$a[1]";
-      for (@b) { $h{$_} = 1 };
+      for (@b) {
+        die "ERROR: root $_ in multiple clusters, check roots-cluster.txt!\n" if exists $h{$_};
+        $h{$_} = 1;
+      }
     }
   }
 
