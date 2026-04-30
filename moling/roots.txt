@@ -24,6 +24,7 @@
 匚	a	
 卄	a	
 叀	a	
+咼	a	
 宀	a	
 屮	a	
 巛	a	
@@ -51,6 +52,8 @@
 长	ca	zhǎng
 冊	ce	cè
 臣	ce	chén
+車	ce	chē
+车	ce	chē
 辰	ce	chén
 齒	ci	chǐ
 丑	co	chǒu
@@ -91,7 +94,6 @@
 艮	ge	gèn
 革	ge	gé
 鬼	gi	guǐ
-咼	go	guō
 工	go	gōng
 弓	go	gōng
 古	gu	gǔ
@@ -138,8 +140,6 @@
 金	ji	jīn
 九	ju	jiǔ
 臼	ju	jiù
-車	ju	jū
-车	ju	chē
 口	ko	kǒu
 來	la	lái
 了	le	le
@@ -248,6 +248,7 @@
 ユ	o	
 亠	o	
 冂	o	
+尢	o	
 廾	o	
 扌	o	
 癶	o	
@@ -343,7 +344,6 @@
 已	yi	yǐ
 弋	yi	yì
 又	yo	yòu
-尢	yo	yóu
 尤	yo	yóu
 用	yo	yòng
 由	yo	yóu
