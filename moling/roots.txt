@@ -1,7 +1,3 @@
-二	0e	èr
-儿	0e	ér
-而	0e	ér
-耳	0e	ěr
 {丄丶}	a	
 {周框}	a	
 {奉下}	a	
@@ -140,7 +136,34 @@
 金	ji	jīn
 九	ju	jiǔ
 臼	ju	jiù
+夭	ka	yāo
+幺	ka	yāo
+牙	ka	yá
+羊	ka	yáng
+言	ka	yán
+业	ke	yè
+也	ke	yě
+曰	ke	yuē
+月	ke	yuè
+頁	ke	yè
+页	ke	yè
+一	ki	yī
+乂	ki	yì
+乙	ki	yǐ
+亦	ki	yì
+已	ki	yǐ
+弋	ki	yì
+又	ko	yòu
 口	ko	kǒu
+尤	ko	yóu
+用	ko	yòng
+由	ko	yóu
+酉	ko	yǒu
+予	ku	yǔ
+禺	ku	yú
+雨	ku	yǔ
+魚	ku	yú
+鱼	ku	yú
 來	la	lái
 了	le	le
 〇	li	líng
@@ -236,7 +259,6 @@
 ⺌	o	
 ⺍	o	
 ⺧	o	
-⺮	o	
 ⺷	o	
 ⻍	o	
 〢	o	
@@ -307,11 +329,29 @@
 肀	u	
 虍	u	
 阝	u	
+早	va	zǎo
+爪	va	zhǎo
+正	ve	zhèng
+之	vi	zhī
+子	vi	zǐ
+止	vi	zhǐ
+自	vi	zì
+至	vi	zhì
+豸	vi	zhì
+隹	vi	zhuī
+舟	vo	zhōu
+走	vo	zǒu
+竹	vu	zhú
+足	vu	zú
 亡	wa	wáng
 王	wa	wáng
 瓦	wa	wǎ
+二	we	èr
+儿	we	ér
 文	we	wén
 未	we	wèi
+而	we	ér
+耳	we	ěr
 乌	wu	wū
 兀	wu	wù
 戊	wu	wù
@@ -326,44 +366,3 @@
 心	xi	xīn
 西	xi	xī
 辛	xi	xīn
-夭	ya	yāo
-幺	ya	yāo
-牙	ya	yá
-羊	ya	yáng
-言	ya	yán
-业	ye	yè
-也	ye	yě
-曰	ye	yuē
-月	ye	yuè
-頁	ye	yè
-页	ye	yè
-一	yi	yī
-乂	yi	yì
-乙	yi	yǐ
-亦	yi	yì
-已	yi	yǐ
-弋	yi	yì
-又	yo	yòu
-尤	yo	yóu
-用	yo	yòng
-由	yo	yóu
-酉	yo	yǒu
-予	yu	yǔ
-禺	yu	yú
-雨	yu	yǔ
-魚	yu	yú
-鱼	yu	yú
-早	za	zǎo
-爪	za	zhǎo
-正	ze	zhèng
-之	zi	zhī
-子	zi	zǐ
-止	zi	zhǐ
-自	zi	zì
-至	zi	zhì
-豸	zi	zhì
-隹	zi	zhuī
-舟	zo	zhōu
-走	zo	zǒu
-竹	zu	zhú
-足	zu	zú
