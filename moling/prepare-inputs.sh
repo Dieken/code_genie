@@ -22,7 +22,23 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "chars.txt"; while (<$fh
 
 
 echo '(3) 从宇浩星陈方案的大陆字形拆分表 yustar_chaifen.dict.yaml 生成简繁常用字符集的拆分表 chaifen.txt 和 chaifen-all.txt ...'
-perl -CSDA -Mautodie -lanE 'BEGIN { open my $fh, "freq.txt"; while (<$fh>) { chomp; @a = split; $h{$a[0]} = $a[1] } }
+perl -CSDA -Mautodie -Mutf8 -lanE '
+  BEGIN {
+    open my $fh, "freq.txt";
+    while (<$fh>) {
+      chomp;
+      @a = split;
+      $h{$a[0]} = $a[1];
+    }
+
+    # yustar_chaifen.dict.yaml 里不区分 𧾷 vs 足，⼟旁 vs 土，礻 vs 示，爫 vs 爪，牜 vs 牛，
+    # 因此也不区分 ⺮  vs 竹，以让字根「⺮ 」不被视为无声母字根，提高这类字根的统一性，也
+    # 提高竹字头二根字的编码空间。
+    %root_mapping = qw(
+        ⺮  竹
+    );
+  }
+
   if (! $ok) {
     next unless /^\.\.\./;
     $ok = 1;
@@ -31,12 +47,29 @@ perl -CSDA -Mautodie -lanE 'BEGIN { open my $fh, "freq.txt"; while (<$fh>) { cho
   next unless exists $h{$1};
   $a = $1;
   @a = $2 =~ /\{[^\}]+\}|\S/g;
+  @a = map { $root_mapping{$_} // $_ } @a;
   print "$a\t", join(" ", @a), "\t$h{$a}";
   delete $h{$a};
   END { @a = sort keys %h; die "No chaifen found for @a" if @a > 0}
   ' yustar_chaifen.dict.yaml | LC_ALL=C sort -t $'\t' -s -k3,3nr -k1,1 > chaifen.txt
 
-perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "简体字频表-2.5b.txt"; while (<$fh>) { chomp; @a = split; $h{$a[0]} = $a[1] } }
+perl -CSDA -Mautodie -Mutf8 -lanE '
+  BEGIN {
+    open my $fh, "简体字频表-2.5b.txt";
+    while (<$fh>) {
+      chomp;
+      @a = split;
+      $h{$a[0]} = $a[1];
+    }
+
+    # yustar_chaifen.dict.yaml 里不区分 𧾷 vs 足，⼟旁 vs 土，礻 vs 示，爫 vs 爪，牜 vs 牛，
+    # 因此也不区分 ⺮  vs 竹，以让字根「⺮ 」不被视为无声母字根，提高这类字根的统一性，也
+    # 提高竹字头二根字的编码空间。
+    %root_mapping = qw(
+        ⺮  竹
+    );
+  }
+
   if (! $ok) {
     next unless /^\.\.\./;
     $ok = 1;
@@ -44,6 +77,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "简体字频表-2.5b.tx
   next unless /^(\S)\t\[([^,]+)/;
   $a = $1;
   @a = $2 =~ /\{[^\}]+\}|\S/g;
+  @a = map { $root_mapping{$_} // $_ } @a;
   print "$a\t", join(" ", @a), "\t", $h{$a} // 0;
   ' yustar_chaifen.dict.yaml | LC_ALL=C sort -t $'\t' -s -k3,3nr -k1,1 > chaifen-all.txt
 
