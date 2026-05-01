@@ -170,10 +170,10 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       $a =~ s/[^aeuio]//;
   }
 
-  $a =~ s/^0/j/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
-  $a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
+  $a =~ s/^0/w/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # 首根笔画时，多次退火优化都选择了 w
+  #$a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;    # 默认不映射
   #$a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
-  $a =~ s/^y/d/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 经过多轮优化试探，映射 y 到 d 最好；
+  $a =~ s/^y/k/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 首根笔画时，多次退火优化都选择了 k
   $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
   print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
@@ -380,7 +380,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @z > 0;
 
     # 按拆分里字根首笔使用情况以及字频加权统计，字根首笔折(5)和竖(2)少，横(1)、撇(3)、点(4) 多
-    %stroke_mapping = qw( 1 i 2 u 3 o 4 e 5 a);
+    %stroke_mapping = qw( 1 o 2 u 3 e 4 i 5 a );    # 首根笔画时，退火算法多次选择此映射
     %stroke_constraint = qw(1 eio 2 au 3 eio 4 eio 5 au);
 
     for my $stroke (sort keys %Y) {
