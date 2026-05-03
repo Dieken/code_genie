@@ -207,7 +207,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
   $a =~ s/^0/w/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # 首根笔画时，多次退火优化都选择了 w
   #$a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;    # 默认不映射
   #$a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
-  #$a =~ s/^y/k/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;    # 生成 input-fixed.txt 时根据字根韵码选择 d 或 k；
+  $a =~ s/^y/k/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 首根笔画时，多次退火优化都选择了 k
   $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
   print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
@@ -347,10 +347,6 @@ echo '(9) 添加码灵输入文件 input-fixed.txt, 声码和韵码约束 ...'
 perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   BEGIN {
     if (! $ENV{USE_VOWEL}) {
-      # 按拆分里字根首笔使用情况以及字频加权统计，字根首笔折(5)和竖(2)少，横(1)、撇(3)、点(4) 多
-      %stroke_mapping = qw( 1 o 2 u 3 e 4 i 5 a );    # 首根笔画时，退火算法多次选择此映射
-      %stroke_constraint = qw(1 eio 2 au 3 eio 4 eio 5 au);
-
       # 修正数据错误
       %stroke_overrides = (
         "艹"        => "1",
@@ -392,22 +388,8 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
       push @q, $F[0];
     } elsif ($a eq "r" && $ENV{OPTIMIZE_KEYS} =~ /r/i) {    # 声母 r 不好按，需要映射
       push @r, $F[0];
-    } elsif ($a eq "y"                               ) {    # 声母 y 过于高频，需要映射
-      if ($ENV{OPTIMIZE_KEYS} =~ /y/i) {
-        push @y, $F[0];
-      } else {
-        if ($ENV{OPTIMIZE_KEYS} =~ /[12345]/) {
-          warn "WARN: 优化笔画映射时默认的声母 y 映射逻辑可能不是最优！\n";
-        }
-
-        my $c = $ENV{USE_VOWEL} ? substr($F[1], -1) : $stroke_mapping{ $strokes{$F[0]} };
-        die "Bad code $c for $_\n" unless $c =~ /^[aeuio]$/;
-        if ($c =~ /[ae]/) {
-          print "$F[0].S\tk";
-        } else {
-          print "$F[0].S\td";
-        }
-      }
+    } elsif ($a eq "y" && $ENV{OPTIMIZE_KEYS} =~ /y/i) {    # 声母 y 过于高频，需要映射
+      push @y, $F[0];
     } elsif ($a eq "z" && $ENV{OPTIMIZE_KEYS} =~ /z/i) {    # 25 键方案，z 需要映射
       push @z, $F[0];
     } else {
@@ -430,6 +412,10 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "r sdfghjkl vnm") if @r > 0;
     print join(" ", map { "$_.S" } @y), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @y > 0;
     print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @z > 0;
+
+    # 按拆分里字根首笔使用情况以及字频加权统计，字根首笔折(5)和竖(2)少，横(1)、撇(3)、点(4) 多
+    %stroke_mapping = qw( 1 o 2 u 3 e 4 i 5 a );    # 首根笔画时，退火算法多次选择此映射
+    %stroke_constraint = qw(1 eio 2 au 3 eio 4 eio 5 au);
 
     for my $stroke (sort keys %Y) {
       @a = sort @{ $Y{$stroke} };
