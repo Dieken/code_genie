@@ -60,6 +60,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
           next if $. == 1;
           chomp;
           @a = split /,/;
+          next if $a[1] eq "⺮";    # 用「竹」代替了
           $mapping{ $a[1] } = $a[2];
       }
       undef $fh;
