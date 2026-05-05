@@ -312,9 +312,9 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
       @a = split /\t/, $_, 2;
       @b = sort split /\s+/, $a[0];
       $a = sum(map { $freq{$_} // die "ERROR: Unknown root $_ in roots-cluster.txt" } @b);
-      if ($a >= 1.8) {
+      if ($a >= 2.5) {
         $a[1] ||= "sdfghjkl";
-      } elsif ($a >= 1) {
+      } elsif ($a >= 1.5) {
         $a[1] ||= "wr sdfghjkl vnm";
       } else {
         $a[1] ||= "qwrtyp sdfghjkl xcvbnm";
@@ -331,9 +331,9 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
 
   next if $h{$F[0]};
   $a = $freq{$F[0]};
-  if ($a >= 1.8) {
+  if ($a >= 2.5) {
     $b = "sdfghjkl";
-  } elsif ($a >= 1) {
+  } elsif ($a >= 1.5) {
     $b = "wr sdfghjkl vnm";
   } else {
     $b = "qwrtyp sdfghjkl xcvbnm";
