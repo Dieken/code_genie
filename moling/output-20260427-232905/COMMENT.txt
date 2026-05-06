@@ -1,1 +1,0 @@
-16 小时的 OPTIMIZE_KEYS=012345qryz ./optimize.sh
