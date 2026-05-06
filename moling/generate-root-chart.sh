@@ -111,7 +111,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
       print "的\te";
       print "了\ta";
 
-      open my $fh, "chaifen-all.txt";
+      open my $fh, $ENV{DISABLE_FULL_CHARSET} ? "chaifen.txt" : "chaifen-all.txt";
       while (<$fh>) {
           chomp;
           @a = split /\t/;
@@ -151,9 +151,14 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             $v = $chars{$char};
             next if $i >= length($v->{code});
-            $s = substr($v->{code}, 0, $i - 1) . $v->{y};
+            $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
 
-            next if exists $short_codes{$s};
+            if (exists $short_codes{$s}) {
+                next unless $ENV{ENABLE_SPACE_SHORTCODE};
+                $s = substr($v->{code}, 0, $i - 1) . "_";
+                next if exists $short_codes{$s};
+            }
+
             next if exists $full_codes{$s} && (! exists $roots{ $full_codes{$s} } || length($roots{ $full_codes{$s} }) == 3);
             $short_codes{$s} = 1;
             $short_chars{$char} = 1;
