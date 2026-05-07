@@ -352,6 +352,7 @@ fn run_evaluate(
         weights,
         use_keysoul,
         vec![],
+        vec![],
     );
 
     println!("  编码基数: {}", ctx.code_base);
@@ -808,7 +809,7 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
     }
 
     // ==================== 加载词码数据 ====================
-    let word_infos_for_calib = if cfg.weights.word_code.enabled {
+    let (word_infos_for_calib, word_texts_for_calib) = if cfg.weights.word_code.enabled {
         let word_div_path = cfg.files.word_div.as_deref().unwrap_or("input-worddiv.txt");
         let root_to_group_tmp: std::collections::HashMap<String, usize> = dynamic_groups
             .iter()
@@ -817,7 +818,7 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
             .collect();
         loader::load_word_divisions(word_div_path, &fixed_roots, &root_to_group_tmp, cfg.annealing.max_parts)
     } else {
-        vec![]
+        (vec![], vec![])
     };
 
     // ==================== 初始校准 ====================
@@ -835,8 +836,8 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
         weights,
         use_keysoul,
         word_infos_for_calib.clone(),
+        word_texts_for_calib.clone(),
     );
-
     let initial_assignment = random_init(&temp_ctx);
     let initial_eval = Evaluator::new(&temp_ctx, &initial_assignment);
     let initial_metrics = initial_eval.get_metrics(&temp_ctx);
@@ -986,9 +987,8 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
         weights,
         use_keysoul,
         word_infos_for_calib,
+        word_texts_for_calib,
     );
-
-    println!("\n  - 编码基数: {}", ctx.code_base);
     println!("  - 编码空间: {}", ctx.code_space);
 
     let root_usage = output::count_root_usage(&ctx);
@@ -1277,6 +1277,7 @@ fn run_resume(cfg: &Config, checkpoint_path: &str) {
         simple_config,
         weights,
         ckpt.use_keysoul,
+        vec![],
         vec![],
     );
 

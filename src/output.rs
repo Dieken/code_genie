@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::evaluator::SimpleEvaluator;
 use crate::types::{
     extract_base_name, extract_suffix_num, key_to_char, Metrics, SimpleMetrics, SimpleCodeConfig,
-    try_resolve_rule, LogicalRoot,
+    try_resolve_rule, LogicalRoot, GROUP_MARKER,
 };
 
 /// 统计字根使用频率
@@ -421,6 +421,22 @@ pub fn save_thread_results(
         let code_str: String = code_parts.into_iter().collect();
         code_out.push_str(&format!("{}\t{}\t{}\n", ch, code_str, freq));
     }
+    if ctx.enable_word_code {
+        for (wi, winfo) in ctx.word_infos.iter().enumerate() {
+            let text = ctx.word_texts.get(wi).map(|s| s.as_str()).unwrap_or("");
+            let mut code_parts = Vec::new();
+            for &p in winfo.parts_slice() {
+                let key = if p >= GROUP_MARKER {
+                    assignment[(p - GROUP_MARKER) as usize]
+                } else {
+                    p as u8
+                };
+                code_parts.push(key_to_char(key));
+            }
+            let code_str: String = code_parts.into_iter().collect();
+            code_out.push_str(&format!("{}\t{}\t{}\n", text, code_str, winfo.frequency));
+        }
+    }
     fs::write(format!("{}/output-encode.txt", thread_dir), code_out).unwrap();
 
     save_key_distribution_to_dir(ctx, assignment, &thread_dir);
@@ -581,6 +597,22 @@ pub fn save_results(
         }
         let code_str: String = code_parts.into_iter().collect();
         code_out.push_str(&format!("{}\t{}\t{}\n", ch, code_str, freq));
+    }
+    if ctx.enable_word_code {
+        for (wi, winfo) in ctx.word_infos.iter().enumerate() {
+            let text = ctx.word_texts.get(wi).map(|s| s.as_str()).unwrap_or("");
+            let mut code_parts = Vec::new();
+            for &p in winfo.parts_slice() {
+                let key = if p >= GROUP_MARKER {
+                    assignment[(p - GROUP_MARKER) as usize]
+                } else {
+                    p as u8
+                };
+                code_parts.push(key_to_char(key));
+            }
+            let code_str: String = code_parts.into_iter().collect();
+            code_out.push_str(&format!("{}\t{}\t{}\n", text, code_str, winfo.frequency));
+        }
     }
     fs::write(format!("{}/output-encode.txt", output_dir), code_out).unwrap();
 

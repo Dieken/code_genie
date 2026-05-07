@@ -340,18 +340,18 @@ pub fn load_word_divisions(
     fixed_roots: &HashMap<String, u8>,
     root_to_group: &HashMap<String, usize>,
     max_parts: usize,
-) -> Vec<WordInfo> {
+) -> (Vec<WordInfo>, Vec<String>) {
     use crate::types::extract_base_name;
 
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("⚠️ 无法读取词码拆分文件 {}: {}", path, e);
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
     };
 
-    let mut raw: Vec<(Vec<String>, u64)> = Vec::new();
+    let mut raw: Vec<(String, Vec<String>, u64)> = Vec::new();
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -361,6 +361,7 @@ pub fn load_word_divisions(
         if parts.len() < 2 {
             continue;
         }
+        let word_text = parts[0].to_string();
         let roots: Vec<String> = parts[1].split_whitespace().map(|s| s.to_string()).collect();
         let freq: u64 = if parts.len() >= 3 {
             parts[2].trim().parse().unwrap_or(1)
@@ -368,15 +369,16 @@ pub fn load_word_divisions(
             1
         };
         if !roots.is_empty() {
-            raw.push((roots, freq));
+            raw.push((word_text, roots, freq));
         }
     }
 
     // 按词频降序排列，用于标记 top-2000 / top-10000
-    raw.sort_by(|a, b| b.1.cmp(&a.1));
+    raw.sort_by(|a, b| b.2.cmp(&a.2));
 
     let mut result = Vec::with_capacity(raw.len());
-    for (rank, (roots, freq)) in raw.into_iter().enumerate() {
+    let mut texts = Vec::with_capacity(raw.len());
+    for (rank, (word_text, roots, freq)) in raw.into_iter().enumerate() {
         let mut info = WordInfo {
             parts: [0u16; MAX_PARTS],
             parts_len: 0,
@@ -407,8 +409,9 @@ pub fn load_word_divisions(
 
         if info.parts_len > 0 {
             result.push(info);
+            texts.push(word_text);
         }
     }
 
-    result
+    (result, texts)
 }

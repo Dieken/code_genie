@@ -73,6 +73,8 @@ pub struct OptContext {
     // ── 词码数据 ──
     /// 多字词信息列表（按词频降序）
     pub word_infos: Vec<WordInfo>,
+    /// 多字词原文（与 word_infos 一一对应）
+    pub word_texts: Vec<String>,
     /// 组索引到使用该组的词索引列表（反向索引）
     pub group_to_words: Vec<Vec<usize>>,
     /// 增量编码掩码（CSR 格式，词码）
@@ -110,6 +112,7 @@ impl OptContext {
         weights: WeightConfig,
         use_keysoul: bool,
         word_infos_input: Vec<WordInfo>,
+        word_texts_input: Vec<String>,
     ) -> Self {
         let enable_simple_code = weights.enable_simple_code;
         let enable_word_code = weights.enable_word_code;
@@ -316,6 +319,7 @@ impl OptContext {
 
         // ── 构建词码上下文 ──
         let mut word_infos = word_infos_input;
+        let word_texts = word_texts_input;
         let mut group_to_words = vec![Vec::new(); num_groups];
         let mut word_gcm_tmp: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_groups];
         let mut word_total_frequency = 0u64;
@@ -376,6 +380,7 @@ impl OptContext {
             gcm_data,
             gcm_offsets,
             word_infos,
+            word_texts,
             group_to_words,
             word_gcm_data,
             word_gcm_offsets,
@@ -587,6 +592,7 @@ impl Clone for OptContext {
             gcm_data: self.gcm_data.clone(),
             gcm_offsets: self.gcm_offsets.clone(),
             word_infos: self.word_infos.clone(),
+            word_texts: self.word_texts.clone(),
             group_to_words: self.group_to_words.clone(),
             word_gcm_data: self.word_gcm_data.clone(),
             word_gcm_offsets: self.word_gcm_offsets.clone(),

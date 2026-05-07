@@ -1341,7 +1341,7 @@ impl Evaluator {
         }
 
         // 快速路径：只优化 collision_count，用 V5 风格增量 hash
-        if !ctx.need_bucket_members && !ctx.need_equiv {
+        if !ctx.need_bucket_members && !ctx.need_equiv && !ctx.enable_word_code {
             let key_delta = new_key as isize - old_key as isize;
             let mut delta_collisions: i32 = 0;
 
@@ -1393,6 +1393,19 @@ impl Evaluator {
         for &ci in &ctx.group_to_chars[r] {
             self.update_char(ctx, assignment, ci);
         }
+        if ctx.enable_word_code {
+            if let Some(ref mut we) = self.word_eval {
+                let key_delta = new_key as isize - old_key as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r]..ctx.word_gcm_offsets[r + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+            }
+        }
         self.score_dirty = true;
         let new_score = self.get_score(ctx);
 
@@ -1402,6 +1415,19 @@ impl Evaluator {
         assignment[r] = old_key;
         for &ci in &ctx.group_to_chars[r] {
             self.update_char(ctx, assignment, ci);
+        }
+        if ctx.enable_word_code {
+            if let Some(ref mut we) = self.word_eval {
+                let key_delta = old_key as isize - new_key as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r]..ctx.word_gcm_offsets[r + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+            }
         }
         self.cached_score = old_score;
         self.score_dirty = false;
@@ -1425,7 +1451,7 @@ impl Evaluator {
         }
 
         // 快速路径：只优化 collision_count，用 V5 风格增量 hash
-        if !ctx.need_bucket_members && !ctx.need_equiv {
+        if !ctx.need_bucket_members && !ctx.need_equiv && !ctx.enable_word_code {
             let mut delta_collisions: i32 = 0;
 
             // 第一步：r1 从 k1 变到 k2
@@ -1505,6 +1531,28 @@ impl Evaluator {
         for &ci in &ctx.group_to_chars[r2] {
             self.update_char(ctx, assignment, ci);
         }
+        if ctx.enable_word_code {
+            if let Some(ref mut we) = self.word_eval {
+                let key_delta1 = k2 as isize - k1 as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r1]..ctx.word_gcm_offsets[r1 + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta1) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+                let key_delta2 = k1 as isize - k2 as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r2]..ctx.word_gcm_offsets[r2 + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta2) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+            }
+        }
         self.score_dirty = true;
         let new_score = self.get_score(ctx);
 
@@ -1520,6 +1568,28 @@ impl Evaluator {
         }
         for &ci in &ctx.group_to_chars[r2] {
             self.update_char(ctx, assignment, ci);
+        }
+        if ctx.enable_word_code {
+            if let Some(ref mut we) = self.word_eval {
+                let key_delta1 = k1 as isize - k2 as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r1]..ctx.word_gcm_offsets[r1 + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta1) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+                let key_delta2 = k2 as isize - k1 as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r2]..ctx.word_gcm_offsets[r2 + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta2) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+            }
         }
         self.cached_score = old_score;
         self.score_dirty = false;
@@ -1542,7 +1612,7 @@ impl Evaluator {
         }
 
         // 快速路径
-        if !ctx.need_bucket_members && !ctx.need_equiv {
+        if !ctx.need_bucket_members && !ctx.need_equiv && !ctx.enable_word_code {
             let key_delta = new_key as isize - old_key as isize;
             for &(ci, mask) in &ctx.gcm_data[ctx.gcm_offsets[r]..ctx.gcm_offsets[r + 1]] {
                 let old_code = self.current_codes[ci];
@@ -1574,10 +1644,21 @@ impl Evaluator {
         for &ci in &ctx.group_to_chars[r] {
             self.update_char(ctx, assignment, ci);
         }
+        if ctx.enable_word_code {
+            if let Some(ref mut we) = self.word_eval {
+                let key_delta = new_key as isize - old_key as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r]..ctx.word_gcm_offsets[r + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+            }
+        }
         self.score_dirty = true;
     }
-
-    /// 应用交换（apply）：增量提交变更，不回滚。
     #[inline(always)]
     pub fn apply_swap(
         &mut self,
@@ -1593,7 +1674,7 @@ impl Evaluator {
         }
 
         // 快速路径
-        if !ctx.need_bucket_members && !ctx.need_equiv {
+        if !ctx.need_bucket_members && !ctx.need_equiv && !ctx.enable_word_code {
             let key_delta1 = k2 as isize - k1 as isize;
             for &(ci, mask) in &ctx.gcm_data[ctx.gcm_offsets[r1]..ctx.gcm_offsets[r1 + 1]] {
                 let old_code = self.current_codes[ci];
@@ -1651,6 +1732,28 @@ impl Evaluator {
         }
         for &ci in &ctx.group_to_chars[r2] {
             self.update_char(ctx, assignment, ci);
+        }
+        if ctx.enable_word_code {
+            if let Some(ref mut we) = self.word_eval {
+                let key_delta1 = k2 as isize - k1 as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r1]..ctx.word_gcm_offsets[r1 + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta1) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+                let key_delta2 = k1 as isize - k2 as isize;
+                for &(wi, mask) in &ctx.word_gcm_data[ctx.word_gcm_offsets[r2]..ctx.word_gcm_offsets[r2 + 1]] {
+                    let old_code = we.current_codes[wi];
+                    let new_code = (old_code as isize + mask as isize * key_delta2) as usize;
+                    if old_code != new_code {
+                        we.update_word(ctx, wi, old_code, new_code);
+                        we.update_word_equiv(ctx, wi, assignment);
+                    }
+                }
+            }
         }
         self.score_dirty = true;
     }
