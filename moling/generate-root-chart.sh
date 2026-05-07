@@ -61,12 +61,9 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
           chomp;
           @a = split /,/;
           next if $a[1] eq "⺮";    # 用「竹」代替了
-          $mapping{ $a[1] } = $a[2];
+          $mapping{$a[1]}{$a[2]} = $.;
       }
       undef $fh;
-
-      $mapping{"乙"} = "乙";
-      $mapping{"乚"} = "乚";
 
       open $fh, "roots.txt";
       while (<$fh>) {
@@ -92,7 +89,9 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
 
       print "font,ma,pinyin";
       for $r (sort { $order{$a} <=> $order{$b} } keys %roots) {
-          print $mapping{$r}, ",", $roots{$r}, ",", $pinyin{$r};
+          for (sort { ($a eq $r ? -1 : $b eq $r ? 1 : 0) || $mapping{$r}{$a} <=> $mapping{$r}{$b} } keys %{ $mapping{$r} }) {
+            print $_, ",", $roots{$r}, ",", $pinyin{$r};
+          }
       }
   }
 ' "$1/roots.tsv" > "$1/zigen-moling.csv"
@@ -118,7 +117,11 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
           @b = split /\s+/, $a[1];
           $s = "";
 
-          for (@b) { $s .= substr($roots{$_}, 0, 1); }
+          for (@b) {
+              die "Unknown root: $_ in $_\n" unless exists $roots{$_};
+              $s .= substr($roots{$_}, 0, 1);
+          }
+
           if (@b == 2) {
               $s .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
               $r = $b[0];

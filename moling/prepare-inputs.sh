@@ -112,8 +112,14 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
   }
   for (sort keys %h2) {
     next if "$F[0] $_" eq "車 jū";      # 使用更低频的 chē
+    next if "$F[0] $_" eq "糸 mì";      # 使用更低频的 sī
+    next if "$F[0] $_" =~ /^[長长] zh/; # 使用更低频的 cháng
 
-    print "$F[0]\t$_\t", ($F[-1] =~ /^\d/ ? $F[-1] : "0");
+    if ($F[0] eq "土") {
+      print "土\tdù\t0";    # 使用「杜」dù 音
+    } else {
+      print "$F[0]\t$_\t", ($F[-1] =~ /^\d/ ? $F[-1] : "0");
+    }
   }'  chars.dict.yaml | LC_ALL=C sort -u -k1,1 -k3,3nr -k2,2 > roots-pinyin.txt
 
 

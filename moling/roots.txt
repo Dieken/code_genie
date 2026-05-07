@@ -44,8 +44,8 @@
 不	bu	bù
 厂	ca	chǎng
 川	ca	chuān
-長	ca	zhǎng
-长	ca	zhǎng
+長	ca	cháng
+长	ca	cháng
 冊	ce	cè
 臣	ce	chén
 車	ce	chē
@@ -60,7 +60,7 @@
 电	da	diàn
 丁	di	dīng
 鬥	do	dòu
-土	du	tǔ
+土	du	dù
 {即左}	e	
 {荒下}	e	
 {飞右}	e	
@@ -313,7 +313,7 @@
 矢	si	shǐ
 石	si	shí
 示	si	shì
-糸	si	mì
+糸	si	sī
 豕	si	shǐ
 食	si	shí
 手	so	shǒu
