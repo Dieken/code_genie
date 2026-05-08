@@ -90,7 +90,8 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
       print "font,ma,pinyin";
       for $r (sort { $order{$a} <=> $order{$b} } keys %roots) {
           for (sort { ($a eq $r ? -1 : $b eq $r ? 1 : 0) || $mapping{$r}{$a} <=> $mapping{$r}{$b} } keys %{ $mapping{$r} }) {
-            print $_, ",", $roots{$r}, ",", $pinyin{$r};
+            print $_, ",", $roots{$r}, ",", $pinyin{$r} unless exists $fonts{$_};
+            $fonts{$_} = 1;     # 艹 和 卄 的 font 都用的 艹，去重以避免在字根表中重复
           }
       }
   }
