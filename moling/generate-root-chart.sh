@@ -45,8 +45,8 @@ perl -CSDA -F, -lanE '
     $h{$F[1]} = 1;
     ' 宇浩字根列表.csv | LC_ALL=C sort -u > "$1/roots-mapping.tsv"
 
-echo "Writing $1/zigen-moling.csv ..."
-perl -CSDA -Mautodie -Mutf8 -lanE '
+echo "Writing $1/zigen-moling.csv and $1/zigen-trainer-moling.json ..."
+perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
   $roots{$F[0]} = lc($F[1]);
 
   END {
@@ -87,15 +87,60 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
       $b = scalar keys %mapping;
       die "Inconsistent number of roots: $a vs $b\n" if $a != $b;
 
+      @zigen = ();      # for https://github.com/hch12907/zigen-trainer
+      %strokes = qw(a 折 e 撇 u 竖 i 点 o 横);
+      %classify = ( map({ $_ => "简" } split /\s+/, "乌 {纟上} 纟 钅 长 {鸟上} 鸟"),
+                    map({ $_ => "繁" } split /\s+/, "來 僉 烏 {烏上} 見 貝 頁 車 {專上} 叀 門 風 飛 馬 {馬上} 鬥 魚 鳥 {鳥上} 鹵 齒 {龍右} {亞下} {亜下} {亞中} {黽中} {爲下}")
+                  );
+
       print "font,ma,pinyin";
-      for $r (sort { $order{$a} <=> $order{$b} } keys %roots) {
-          for (sort { ($a eq $r ? -1 : $b eq $r ? 1 : 0) || $mapping{$r}{$a} <=> $mapping{$r}{$b} } keys %{ $mapping{$r} }) {
-            print $_, ",", $roots{$r}, ",", $pinyin{$r} unless exists $fonts{$_};
-            $fonts{$_} = 1;     # 艹 和 卄 的 font 都用的 艹，去重以避免在字根表中重复
+      @a = sort { $order{$a} <=> $order{$b} } keys %roots;
+      for $r (@a) {
+          @b = uniqstr sort { ($a eq $r ? -1 : $b eq $r ? 1 : 0) || $mapping{$r}{$a} <=> $mapping{$r}{$b} } keys %{ $mapping{$r} };
+          for (@b) {
+              next if exists $fonts{$_};
+
+              print $_, ",", $roots{$r}, ",", $pinyin{$r};
+              $fonts{$_} = 1;     # 艹 和 卄 的 font 都用的 艹，去重以避免在字根表中重复
+
+              if ($order{$r} % 1000 == 0 && $_ eq $b[0]) {
+                  push @zigen, {
+                      "type"     => "类",
+                      "groups"   => [{
+                          "zigens"       => [ $_  ],
+                          "code"         => $roots{$r},
+                          "classify"     => $classify{$r} // "通",
+                          "description"  => "$_  拼音：" . ($pinyin{$r} || "无") . "  首笔：" . $strokes{ substr($roots{$r}, -1) } . "(" . substr($roots{$r}, -1) . ")",
+                      }],
+                      "description"  => join(" ", grep { $order{$_} >= int($order{$r} / 1000) * 1000 && $order{$_} < int(($order{$r} + 1000) / 1000) * 1000 } @a),
+                  };
+              } else {
+                  my $last_code = $zigen[-1]{"groups"}[-1]{"code"};
+                  if ($roots{$r} eq $last_code) {
+                      push @{ $zigen[-1]{"groups"}[-1]{"zigens"} }, $_;
+                  } else {
+                      push @{ $zigen[-1]{"groups"} }, {
+                          "zigens"       => [ $_  ],
+                          "code"         => $roots{$r},
+                          "classify"     => "通",
+                          "description"  => "$_  拼音：" . ($pinyin{$r} || "无") . "  首笔：" . $strokes{ substr($roots{$r}, -1) } . "(" . substr($roots{$r}, -1) . ")",
+                      };
+                  }
+              }
           }
       }
+
+      for (qw(门門 幺厶 穴宀 人 口囗 心 火灬 耂土 糸 金 食 长長 鸟鳥 乌烏 鱼魚 马馬 车車 页頁 见見 贝貝 刀 立辛 丬 言 田甲 大夫 七戈 丿 艹卅)) {
+          push @zigen, {
+              "type"        => "混",
+              "zigens"      => [ split //, $_ ],
+              "description" => $_,
+          };
+      }
+
+      print STDERR JSON::PP->new->canonical->pretty->encode(\@zigen);
   }
-' "$1/roots.tsv" > "$1/zigen-moling.csv"
+' "$1/roots.tsv" > "$1/zigen-moling.csv" 2>"$1/zigen-trainer-moling.json"
 
 echo "Writing $1/chaifen.tsv ..."
 perl -CSDA -F'\t' -lanE '$F[1]=~s/\s+//g; print "$F[0]\t$F[1]"' chaifen-all.txt > "$1/chaifen.tsv"
