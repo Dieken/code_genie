@@ -112,7 +112,8 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
                           "classify"     => $classify{$r} // "通",
                           "description"  => "$_  拼音：" . ($pinyin{$r} || "无") . "  首笔：" . $strokes{ substr($roots{$r}, -1) } . "(" . substr($roots{$r}, -1) . ")",
                       }],
-                      "description"  => join(" ", grep { $order{$_} >= int($order{$r} / 1000) * 1000 && $order{$_} < int(($order{$r} + 1000) / 1000) * 1000 } @a),
+                      #"description"  => join(" ", grep { $order{$_} >= int($order{$r} / 1000) * 1000 && $order{$_} < int(($order{$r} + 1000) / 1000) * 1000 } @a),
+                      "description"   => "",
                   };
               } else {
                   my $last_code = $zigen[-1]{"groups"}[-1]{"code"};
