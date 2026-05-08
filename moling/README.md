@@ -78,6 +78,14 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 2. 运行 `./stat-moling-roots.pl --mabiao output-<TIMESTAMP>/output-combined.txt`；
 3. 运行 `./generate-root-chart.sh output-<TIMESTAMP>` 生成字根表和字根图，也可以指定到 `output-<TIMESTAMP>/thread-<NN>` 目录；
 
+## 字根练习
+
+1. https://shurufa.app/ime/moling#%E7%BB%83%E4%B9%A0
+2. https://zigen-trainer.hch12907.dev/
+3. https://chs.hertz.ltd/#practice
+4. https://unyaa-code.github.io/root-practice/
+5. https://github.com/Dieken/typer
+
 ## 文件说明
 
 * 脚本程序
