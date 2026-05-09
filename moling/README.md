@@ -100,10 +100,12 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
                                   评估 roots-cluster.txt 中每一行聚类单独可能带来的重码
     * `analyze-results-of-batch-test-weights.sh`
                                   分析 `batch-test-weights.sh` 的运行结果
+    * `convert-yuling-rime-schema-to-moling.sh`
+                                  转换灵明 RIME 方案为魔灵 RIME 方案
 
 * 第三方文件
-    * `简体字频表-2.5b.txt`       北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm
-    * `宇浩字根列表.csv`          宇浩输入法系列的字根元信息，来自其作者朱宇浩
+    * `简体字频表-2.5b.txt`        北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm
+    * `宇浩字根列表.csv`           宇浩输入法系列的字根元信息，来自其作者朱宇浩
     * `chars.dict.yaml`           万象拼音词典，https://github.com/amzxyz/RIME-LMDG/blob/62f844d0fd6ac0d6ab2cf9bace6ed34b5a3e318c/dicts/chars.dict.yaml
     * `yuhao_charsets.lua`        宇浩 RIME 方案 Lua 脚本, 来自`星陳輸入法_v3.11.0/schema/lua/yuhao/yuhao_charsets.lua`
     * `yustar_chaifen.dict.yaml`  星陳拆分表，来自`星陳輸入法_v3.11.0/schema/yustar_chaifen.dict.yaml`
