@@ -16,6 +16,7 @@ use crate::types::{KeyDistConfig, Metrics, SimpleMetrics, WordMetrics, EQUIV_TAB
 struct SimpleLevelTracker {
     code_num: usize,
     allowed_orig_length: usize,
+    yield_full_code: bool,
     code_to_candidates: HashMap<usize, Vec<(usize, u64)>>,
     covered_freq: u64,
     equiv_weighted: f64,
@@ -55,6 +56,7 @@ impl SimpleEvaluator {
             .map(|l| SimpleLevelTracker {
                 code_num: l.code_num,
                 allowed_orig_length: l.allowed_orig_length,
+                yield_full_code: l.yield_full_code,
                 code_to_candidates: HashMap::new(),
                 covered_freq: 0,
                 equiv_weighted: 0.0,
@@ -110,20 +112,26 @@ impl SimpleEvaluator {
     }
 
     /// 检查简码码位是否被全码占用
-    /// 如果该码位上有任何未出简的全码字，则认为被占用
+    /// yield_full_code=true：已出简的字让出其全码码位，不视为占用
+    /// yield_full_code=false：已出简的字仍占据其全码码位
     #[inline]
     fn is_code_occupied_by_full(
         full_code_to_chars: &[Vec<usize>],
         code: usize,
         excluded: &[bool],
+        yield_full_code: bool,
     ) -> bool {
         if code >= full_code_to_chars.len() {
             return false;
         }
         let chars = &full_code_to_chars[code];
         for &ci in chars {
-            if !excluded[ci] {
-                return true; // 该码位上有未出简的全码字
+            if yield_full_code {
+                if !excluded[ci] {
+                    return true;
+                }
+            } else {
+                return true; // 任何全码字都视为占用
             }
         }
         false
@@ -171,7 +179,7 @@ impl SimpleEvaluator {
             .iter()
             .flat_map(|(&code, candidates)| {
                 // 检查该简码码位是否被全码占用
-                if Self::is_code_occupied_by_full(full_code_to_chars, code, excluded) {
+                if Self::is_code_occupied_by_full(full_code_to_chars, code, excluded, level.yield_full_code) {
                     // 码位被全码字占据，不分配简码
                     return Vec::new();
                 }

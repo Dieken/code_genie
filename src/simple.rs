@@ -99,6 +99,7 @@ pub fn parse_simple_code_config(path: &str) -> SimpleCodeConfig {
             code_num,
             rule_candidates,
             allowed_orig_length: 0,
+            yield_full_code: true,
         });
     }
 

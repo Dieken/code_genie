@@ -233,6 +233,7 @@ level = 1
 code_num = 1
 rules = ["Aa"]
 allowed_orig_length = 0  # 0 = 不限制；设为正整数则只允许该码长的全码出简码
+yield_full_code = true   # 出简让全：true = 已出简的字让出其全码码位，允许其他字出简到该位置
 
 # 二级简码：用 2 个键表示一个汉字
 #   rules=["AaBa"] 表示取第1根第1码 + 第2根第1码
@@ -241,6 +242,7 @@ level = 2
 code_num = 1
 rules = ["AaBa"]
 allowed_orig_length = 0
+yield_full_code = true
 
 # 三级简码：用 3 个键表示一个汉字
 #   rules 支持多个候选规则，系统依次尝试，选择第一个能成功解析的规则
@@ -250,3 +252,4 @@ level = 3
 code_num = 1
 rules = ["AaBaCa"]
 allowed_orig_length = 0
+yield_full_code = true

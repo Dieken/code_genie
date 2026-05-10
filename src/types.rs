@@ -354,6 +354,9 @@ pub struct SimpleCodeLevel {
     pub rule_candidates: Vec<Vec<SimpleCodeStep>>,
     /// 允许出简码的全码码长（0 = 不限制）
     pub allowed_orig_length: usize,
+    /// 出简让全：true = 已出简的字让出其全码码位，允许其他字出简到该位置；
+    /// false = 已出简的字仍占据其全码码位，其他字不得出简到该位置
+    pub yield_full_code: bool,
 }
 
 /// 简码配置

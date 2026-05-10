@@ -183,7 +183,12 @@ pub struct SimpleLevelConfig {
     pub rules: Vec<String>,
     #[serde(default)]
     pub allowed_orig_length: usize,
+    /// 出简让全：已出简的字是否让出其全码码位（默认 true）
+    #[serde(default = "default_yield_full_code")]
+    pub yield_full_code: bool,
 }
+
+fn default_yield_full_code() -> bool { true }
 
 // =========================================================================
 // 📥 配置加载
@@ -236,6 +241,7 @@ impl Config {
                     code_num: l.code_num,
                     rule_candidates,
                     allowed_orig_length: l.allowed_orig_length,
+                    yield_full_code: l.yield_full_code,
                 }
             })
             .filter(|l| !l.rule_candidates.is_empty())
@@ -418,18 +424,21 @@ impl Default for Config {
                     code_num: 0,
                     rules: vec!["Aa".to_string()],
                     allowed_orig_length: 0,
+                    yield_full_code: true,
                 },
                 SimpleLevelConfig {
                     level: 2,
                     code_num: 1,
                     rules: vec!["AaBa".to_string()],
                     allowed_orig_length: 0,
+                    yield_full_code: true,
                 },
                 SimpleLevelConfig {
                     level: 3,
                     code_num: 1,
                     rules: vec!["AaBaCa".to_string()],
                     allowed_orig_length: 0,
+                    yield_full_code: true,
                 },
             ],
         }
