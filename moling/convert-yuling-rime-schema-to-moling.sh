@@ -2,41 +2,42 @@
 
 set -euo pipefail
 
-YU="${1:-靈明輸入法_v3.12.0-beta.20260410.105121}"
-MO="${2:-output-20260506-000635}"
+YULING="${1:-靈明輸入法_v3.12.0-beta.20260410.105121}"
+MOLING="${2:-output-20260506-000635}"
+YUSTAR="${3:-星陳輸入法_v3.11.0}"
 
-echo "使用灵明方案 \"$YU\" 和魔灵码表 \"$MO\""
+echo "使用灵明方案 \"$YULING\"、星陈方案 \"$YUSTAR\" 和魔灵码表 \"$MOLING\""
 
-[ -d "$YU/schema" -a -e "$MO/output-combined.txt" ] || {
+[ -d "$YULING/schema" -a -e "$MOLING/output-combined.txt" ] || {
     echo "ERROR: 指定目录错误！"
     echo
-    echo "Usage: $0 靈明輸入法RIME方案目录 魔灵算码输出目录"
+    echo "Usage: $0 靈明輸入法RIME方案目录 魔灵算码输出目录 [星陳輸入法RIME方案目录]"
     exit 1
 }
 
 echo "(1) 确保魔灵码表存在"
-[ -e "$MO/mabiao.tsv" ] || ./generate-root-chart.sh "$MO"
+[ -e "$MOLING/mabiao.tsv" ] || ./generate-root-chart.sh "$MOLING"
 
 echo "(2) 重命名靈明文件"
-find "$YU" -name 'yuling*' | while read f; do
+find "$YULING" -name 'yuling*' | while read f; do
     f2="$(dirname $f)/$(basename $f | sed -e 's/yuling/moling/g')"
     echo "Renaming $f to $f2 ..."
     mv $f $f2
 done
 
 echo "(3) 替换文件中的「靈明」和「yuling」字样"
-perl -CSDA -Mutf8 -i -pE 's/yuling/moling/g; s/(宇浩.*)?靈明/魔靈/g' $(find "$YU" -name 'moling*') \
-    "$YU"/schema/default.custom.yaml "$YU"/readme.txt
+perl -CSDA -Mutf8 -i -pE 's/yuling/moling/g; s/(宇浩.*)?靈明/魔靈/g' $(find "$YULING" -name 'moling*') \
+    "$YULING"/schema/default.custom.yaml "$YULING"/readme.txt
 
 echo "(4) 删除五灵方案"
-rm -f "$YU"/schema/moling_extreme* "$YU"/schema/yuhao/moling.five*
+rm -f "$YULING"/schema/moling_extreme* "$YULING"/schema/yuhao/moling.five*
 
 echo "(5) 替换拆分表 moling_chaifen*.dict.yaml"
 for s in chaifen chaifen_tw; do
     f="$s-all.txt"
-    [ -f "$f" ] && MO="$MO" CHAIFEN="$f" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
+    [ -f "$f" ] && MOLING="$MOLING" CHAIFEN="$f" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
         BEGIN {
-            open $fh, "$ENV{MO}/roots.tsv";
+            open $fh, "$ENV{MOLING}/roots.tsv";
             while (<$fh>) {
                 chomp;
                 my @a = split;
@@ -89,17 +90,17 @@ for s in chaifen chaifen_tw; do
             $code, ",",
             join("-", map { $roots{$_} } @b), ",",
             join(",", @a[3 .. $#a]), "]";
-    ' "$YU/schema/moling_$s.dict.yaml"
+    ' "$YULING/schema/moling_$s.dict.yaml"
 done
 
 echo "(6) 生成 moling.full.dict.yaml"
-perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YU/schema/yuhao/moling.full.dict.yaml" > "$YU/schema/yuhao/moling.full.dict.yaml.new"
-mv "$YU/schema/yuhao/moling.full.dict.yaml.new" "$YU/schema/yuhao/moling.full.dict.yaml"
+perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.full.dict.yaml" > "$YULING/schema/yuhao/moling.full.dict.yaml.new"
+mv "$YULING/schema/yuhao/moling.full.dict.yaml.new" "$YULING/schema/yuhao/moling.full.dict.yaml"
 chaifens=chaifen-all.txt
 [ -f chaifen_tw-all.txt ] && chaifens="$chaifens chaifen_tw-all.txt"
-MO="$MO" perl -CSDA -Mutf8 -Mautodie -F'\t' -lanE '
+MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -lanE '
     BEGIN {
-        open $fh, "$ENV{MO}/roots.tsv";
+        open $fh, "$ENV{MOLING}/roots.tsv";
         while (<$fh>) {
             chomp;
             my @a = split;
@@ -126,21 +127,21 @@ MO="$MO" perl -CSDA -Mutf8 -Mautodie -F'\t' -lanE '
     $h{"$F[0]$code"} = 1;
 
     print "$F[0]\t$code\t$F[2]";
-' $chaifens | LC_ALL=C sort -s -k3,3nr >> "$YU/schema/yuhao/moling.full.dict.yaml"
+' $chaifens | LC_ALL=C sort -s -k3,3nr >> "$YULING/schema/yuhao/moling.full.dict.yaml"
 
 echo "(7) 生成 moling.pop.dict.yaml"
-perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YU/schema/yuhao/moling.pop.dict.yaml" > "$YU/schema/yuhao/moling.pop.dict.yaml.new"
-mv "$YU/schema/yuhao/moling.pop.dict.yaml.new" "$YU/schema/yuhao/moling.pop.dict.yaml"
+perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.pop.dict.yaml" > "$YULING/schema/yuhao/moling.pop.dict.yaml.new"
+mv "$YULING/schema/yuhao/moling.pop.dict.yaml.new" "$YULING/schema/yuhao/moling.pop.dict.yaml"
 # 假设了「的」的全码四码在全码表开头
-perl -CSDA -Mutf8 -lanE 'exit(0) if length($F[1]) == 4; print if /[aeuio]$/' "$MO/mabiao.tsv" >> "$YU/schema/yuhao/moling.pop.dict.yaml"
+perl -CSDA -Mutf8 -lanE 'exit(0) if length($F[1]) == 4; print if /[aeuio]$/' "$MOLING/mabiao.tsv" >> "$YULING/schema/yuhao/moling.pop.dict.yaml"
 
 echo "(8) 生成 moling.quick.dict.yaml"
-perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YU/schema/yuhao/moling.quick.dict.yaml" > "$YU/schema/yuhao/moling.quick.dict.yaml.new"
-mv "$YU/schema/yuhao/moling.quick.dict.yaml.new" "$YU/schema/yuhao/moling.quick.dict.yaml"
+perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.quick.dict.yaml" > "$YULING/schema/yuhao/moling.quick.dict.yaml.new"
+mv "$YULING/schema/yuhao/moling.quick.dict.yaml.new" "$YULING/schema/yuhao/moling.quick.dict.yaml"
 
 echo "(9) 生成 moling.roots.dict.yaml"
-perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YU/schema/yuhao/moling.roots.dict.yaml" > "$YU/schema/yuhao/moling.roots.dict.yaml.new"
-mv "$YU/schema/yuhao/moling.roots.dict.yaml.new" "$YU/schema/yuhao/moling.roots.dict.yaml"
+perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.roots.dict.yaml" > "$YULING/schema/yuhao/moling.roots.dict.yaml.new"
+mv "$YULING/schema/yuhao/moling.roots.dict.yaml.new" "$YULING/schema/yuhao/moling.roots.dict.yaml"
 perl -CSDA -Mutf8 -F, -lanE '
     next if $. == 1;
     push @{ $h{substr($F[1], 0, 1)} }, $F[0];
@@ -158,12 +159,27 @@ perl -CSDA -Mutf8 -F, -lanE '
             }
         }
     }
-' "$MO/zigen-moling.csv" >> "$YU/schema/yuhao/moling.roots.dict.yaml"
+' "$MOLING/zigen-moling.csv" >> "$YULING/schema/yuhao/moling.roots.dict.yaml"
 
 echo "(10) 替换 moling*words*.dict.yaml"
-MO="$MO" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
+if [ -d "$YUSTAR/schema" ]; then
+    echo "使用星陈方案的词库"
+
+    cp "$YUSTAR/schema/yuhao/yustar.words.dict.yaml" "$YULING/schema/yuhao/moling.words.dict.yaml"
+    cp "$YUSTAR/schema/yuhao/yustar_sc.words.dict.yaml" "$YULING/schema/yuhao/moling_sc.words.dict.yaml"
+    cp "$YUSTAR/schema/yuhao/yustar_tc.words.dict.yaml" "$YULING/schema/yuhao/moling_tc.words.dict.yaml"
+
+    perl -CSDA -i -lpE 's/yustar((?:[st]c_)?\.words)/moling\1/' "$YULING"/schema/yuhao/moling{,_sc,_tc}.words.dict.yaml
+
+    grep -Eq 'yuhao/moling.words\s*$' "$YULING/schema/moling.dict.yaml" ||
+        perl -CSDA -i -lnE 'if (/yuhao\/moling_sc\.words\s*$/) { print "  - yuhao/moling.words" } print' "$YULING/schema/moling.dict.yaml"
+else
+    echo "没有发现星陈方案，只使用灵明方案的词库"
+fi
+
+MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
     BEGIN {
-        open $fh, "$ENV{MO}/roots.tsv";
+        open $fh, "$ENV{MOLING}/roots.tsv";
         while (<$fh>) {
             chomp;
             my @a = split;
@@ -214,15 +230,16 @@ MO="$MO" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
     } elsif (@a >= 4) {
         print "$F[0]\t", substr($codes{$a[0]}, 0, 1), substr($codes{$a[1]}, 0, 1), substr($codes{$a[2]}, 0, 1), substr($codes{$a[-1]}, 0, 1);
     }
-' "$YU"/schema/yuhao/moling*words*.dict.yaml
+' "$YULING"/schema/yuhao/moling*words*.dict.yaml
 
 echo "(11) 生成 mabiao/*/*.txt"
-rm -f "$YU"/mabiao/*/*.txt
+rm -f "$YULING"/mabiao/*/*.txt
 
-grep -h '\t' "$YU"/schema/yuhao/moling.{quick,pop,full}.dict.yaml \
-          "$YU"/schema/yuhao/moling{_sc.words_essence,.words_essence,_sc.words,_tc.words}.dict.yaml \
-          "$YU"/schema/yuhao/yuhao.symbols.dict.yaml > "$YU/mabiao/chartab/魔靈.txt"
+perl -CSDA -lnE 'next unless /\t/; next if exists $h{$_}; $h{$_} = 1; print' \
+    "$YULING"/schema/yuhao/moling.{quick,pop,full}.dict.yaml \
+    "$YULING"/schema/yuhao/moling{_sc.words_essence,.words_essence,.words,_sc.words,_tc.words}.dict.yaml \
+    "$YULING"/schema/yuhao/yuhao.symbols.dict.yaml > "$YULING/mabiao/chartab/魔靈.txt"
 
-perl -CSDA -lanE 'print "$F[1] $F[0]"' "$YU/mabiao/chartab/魔靈.txt" > "$YU/mabiao/baidu/魔靈.txt"
-perl -CSDA -lanE 'print "$F[1]\t$F[0]"' "$YU/mabiao/chartab/魔靈.txt" > "$YU/mabiao/dazhu/魔靈.txt"
-cp "$YU/mabiao/dazhu/魔靈.txt" "$YU/mabiao/duoduo/魔靈.txt"
+perl -CSDA -lanE 'print "$F[1] $F[0]"' "$YULING/mabiao/chartab/魔靈.txt" > "$YULING/mabiao/baidu/魔靈.txt"
+perl -CSDA -lanE 'print "$F[1]\t$F[0]"' "$YULING/mabiao/chartab/魔靈.txt" > "$YULING/mabiao/dazhu/魔靈.txt"
+cp "$YULING/mabiao/dazhu/魔靈.txt" "$YULING/mabiao/duoduo/魔靈.txt"
