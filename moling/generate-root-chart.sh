@@ -200,7 +200,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
             next if exists $short_chars{$char};
 
             $v = $chars{$char};
-            next if $i >= length($v->{code});
+            next if $i >= length($v->{code}) || $v->{freq} < 1;
             $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
 
             if (exists $short_codes{$s}) {
@@ -209,7 +209,8 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
                 next if exists $short_codes{$s};
             }
 
-            next if exists $full_codes{$s} && (! exists $roots{ $full_codes{$s} } || length($roots{ $full_codes{$s} }) == 3);
+            # 抢占低频字的码位
+            next if exists $full_codes{$s} && $chars{ $full_codes{$s} }{seq} < 4000;
             $short_codes{$s} = 1;
             $short_chars{$char} = 1;
             print "$char\t$s";
