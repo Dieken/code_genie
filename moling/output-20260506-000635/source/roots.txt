@@ -1,0 +1,368 @@
+{丄丶}	a	
+{周框}	a	
+{奉下}	a	
+⺶	a	
+リ	a	
+ㄩ	a	
+㐄	a	
+䒑	a	
+丂	a	
+丄	a	
+丆	a	
+丬	a	
+丱	a	
+丶	a	
+丷	a	
+乀	a	
+冎	a	
+刂	a	
+勹	a	
+匚	a	
+卄	a	
+叀	a	
+咼	a	
+宀	a	
+屮	a	
+巛	a	
+巜	a	
+彡	a	
+灬	a	
+犭	a	
+罒	a	
+耂	a	
+艹	a	
+讠	a	
+镸	a	
+髟	a	
+八	ba	bā
+巴	ba	bā
+白	ba	bái
+貝	be	bèi
+贝	be	bèi
+匕	bi	bǐ
+卜	bo	bo
+不	bu	bù
+厂	ca	chǎng
+川	ca	chuān
+長	ca	zhǎng
+长	ca	zhǎng
+冊	ce	cè
+臣	ce	chén
+車	ce	chē
+车	ce	chē
+辰	ce	chén
+齒	ci	chǐ
+丑	co	chǒu
+虫	co	chóng
+寸	cu	cùn
+刀	da	dāo
+大	da	dà
+电	da	diàn
+丁	di	dīng
+鬥	do	dòu
+土	du	tǔ
+{即左}	e	
+{荒下}	e	
+{飞右}	e	
+⺀	e	
+ㄗ	e	
+㔾	e	
+丿	e	
+亻	e	
+冫	e	
+卩	e	
+囗	e	
+疒	e	
+龶	e	
+方	fa	fāng
+丰	fe	fēng
+非	fe	fēi
+風	fe	fēng
+飛	fe	fēi
+缶	fo	fǒu
+夫	fu	fū
+甫	fu	fǔ
+干	ga	gàn
+广	ga	guǎng
+瓜	ga	guā
+高	ga	gāo
+戈	ge	gē
+艮	ge	gèn
+革	ge	gé
+鬼	gi	guǐ
+工	go	gōng
+弓	go	gōng
+古	gu	gǔ
+骨	gu	gǔ
+亥	ha	hài
+合	he	hé
+禾	he	hé
+黑	he	hēi
+火	ho	huǒ
+戶	hu	hù
+户	hu	hù
+戸	hu	hù
+虎	hu	hǔ
+{曾中}	i	
+{横日}	i	
+{眉上}	i	
+{豕下}	i	
+ᅲ	i	
+丅	i	
+丌	i	
+乚	i	
+冖	i	
+厶	i	
+夊	i	
+廴	i	
+彐	i	
+彑	i	
+彳	i	
+忄	i	
+氵	i	
+纟	i	
+衤	i	
+钅	i	
+饣	i	
+𡗗	i	
+甲	ja	jiǎ
+見	ja	jiàn
+见	ja	jiàn
+孑	je	jié
+几	ji	jǐ
+己	ji	jǐ
+巾	ji	jīn
+斤	ji	jīn
+金	ji	jīn
+九	ju	jiǔ
+臼	ju	jiù
+夭	ka	yāo
+幺	ka	yāo
+牙	ka	yá
+羊	ka	yáng
+言	ka	yán
+业	ke	yè
+也	ke	yě
+曰	ke	yuē
+月	ke	yuè
+頁	ke	yè
+页	ke	yè
+一	ki	yī
+乂	ki	yì
+乙	ki	yǐ
+亦	ki	yì
+已	ki	yǐ
+弋	ki	yì
+又	ko	yòu
+口	ko	kǒu
+尤	ko	yóu
+用	ko	yòng
+由	ko	yóu
+酉	ko	yǒu
+予	ku	yǔ
+禺	ku	yú
+雨	ku	yǔ
+魚	ku	yú
+鱼	ku	yú
+來	la	lái
+了	le	le
+〇	li	líng
+力	li	lì
+立	li	lì
+里	li	lǐ
+隶	li	lì
+鹵	lu	lǔ
+鹿	lu	lù
+卯	ma	mǎo
+毛	ma	máo
+面	ma	miàn
+馬	ma	mǎ
+马	ma	mǎ
+麻	ma	má
+乜	me	miē
+門	me	mén
+门	me	mén
+皿	mi	mǐn
+米	mi	mǐ
+末	mo	mò
+木	mu	mù
+母	mu	mǔ
+目	mu	mù
+乃	na	nǎi
+鳥	na	niǎo
+鸟	na	niǎo
+女	nu	nǚ
+牛	nu	niú
+{⺮右}	o	
+{乍下}	o	
+{乐上}	o	
+{乞上}	o	
+{二撇}	o	
+{于下}	o	
+{互中}	o	
+{五下}	o	
+{亜下}	o	
+{亞下}	o	
+{亞中}	o	
+{京上}	o	
+{亮上}	o	
+{介下}	o	
+{僉上}	o	
+{兴上}	o	
+{具上}	o	
+{冂丶}	o	
+{冓上}	o	
+{卑上}	o	
+{南心}	o	
+{卬左}	o	
+{卯左}	o	
+{反彐}	o	
+{发左}	o	
+{向框}	o	
+{囟框}	o	
+{奐上}	o	
+{姬右}	o	
+{專上}	o	
+{弬右}	o	
+{微框}	o	
+{曹上}	o	
+{步下}	o	
+{母框}	o	
+{炙上}	o	
+{烏上}	o	
+{爲下}	o	
+{畏下}	o	
+{祭上}	o	
+{穀框}	o	
+{纟上}	o	
+{華中}	o	
+{虍上}	o	
+{衣下}	o	
+{襄上}	o	
+{贏框}	o	
+{阜上}	o	
+{雋下}	o	
+{馬上}	o	
+{鬯中}	o	
+{鬼左}	o	
+{鳥上}	o	
+{鸟上}	o	
+{鹿上}	o	
+{黽中}	o	
+{鼠下}	o	
+{齊右}	o	
+{龍右}	o	
+{龠上}	o	
+⺁	o	
+⺈	o	
+⺊	o	
+⺌	o	
+⺍	o	
+⺧	o	
+⺷	o	
+⻍	o	
+〢	o	
+〣	o	
+コ	o	
+ス	o	
+ナ	o	
+マ	o	
+ユ	o	
+亠	o	
+冂	o	
+尢	o	
+廾	o	
+扌	o	
+癶	o	
+辶	o	
+龰	o	
+龵	o	
+龷	o	
+龸	o	
+爿	pa	pán
+片	pa	piàn
+皮	pi	pí
+僉	qa	qiān
+千	qa	qiān
+欠	qa	qiàn
+犬	qa	quǎn
+且	qe	qiě
+七	qi	qī
+其	qi	qí
+气	qi	qì
+曲	qu	qǔ
+人	re	rén
+壬	re	rén
+日	ri	rì
+入	ru	rù
+三	sa	sān
+上	sa	shàng
+卅	sa	sà
+尚	sa	shàng
+山	sa	shān
+生	se	shēng
+申	se	shēn
+舌	se	shé
+身	se	shēn
+世	si	shì
+十	si	shí
+士	si	shì
+尸	si	shī
+巳	si	sì
+水	si	shuǐ
+矢	si	shǐ
+石	si	shí
+示	si	shì
+糸	si	mì
+豕	si	shǐ
+食	si	shí
+手	so	shǒu
+殳	su	shū
+田	ta	tián
+⺽	u	
+丨	u	
+丩	u	
+亍	u	
+壴	u	
+朩	u	
+甶	u	
+肀	u	
+虍	u	
+阝	u	
+早	va	zǎo
+爪	va	zhǎo
+正	ve	zhèng
+之	vi	zhī
+子	vi	zǐ
+止	vi	zhǐ
+自	vi	zì
+至	vi	zhì
+豸	vi	zhì
+隹	vi	zhuī
+舟	vo	zhōu
+走	vo	zǒu
+竹	vu	zhú
+足	vu	zú
+亡	wa	wáng
+王	wa	wáng
+瓦	wa	wǎ
+二	we	èr
+儿	we	ér
+文	we	wén
+未	we	wèi
+而	we	ér
+耳	we	ěr
+乌	wu	wū
+兀	wu	wù
+戊	wu	wù
+烏	wu	wū
+下	xa	xià
+向	xa	xiàng
+小	xa	xiǎo
+穴	xe	xué
+习	xi	xí
+卌	xi	xì
+夕	xi	xī
+心	xi	xīn
+西	xi	xī
+辛	xi	xīn
