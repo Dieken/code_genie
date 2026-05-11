@@ -341,6 +341,8 @@ fn run_evaluate(
     // 构建 OptContext
     let scale_config = types::ScaleConfig::default();
     let weights = cfg.get_weight_config();
+    let forbidden_chars: std::collections::HashSet<char> =
+        cfg.simple_forbidden_chars.chars().collect();
     let ctx = OptContext::new(
         &splits,
         &fixed_roots,
@@ -353,6 +355,7 @@ fn run_evaluate(
         use_keysoul,
         vec![],
         vec![],
+        &forbidden_chars,
     );
 
     println!("  编码基数: {}", ctx.code_base);
@@ -825,6 +828,8 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
     println!("\n📐 正在进行初始尺度校准...");
     let temp_scale = types::ScaleConfig::default();
     let weights = cfg.get_weight_config();
+    let forbidden_chars: std::collections::HashSet<char> =
+        cfg.simple_forbidden_chars.chars().collect();
     let temp_ctx = OptContext::new(
         &splits,
         &fixed_roots,
@@ -837,6 +842,7 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
         use_keysoul,
         word_infos_for_calib.clone(),
         word_texts_for_calib.clone(),
+        &forbidden_chars,
     );
     let initial_assignment = random_init(&temp_ctx);
     let initial_eval = Evaluator::new(&temp_ctx, &initial_assignment);
@@ -988,6 +994,7 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
         use_keysoul,
         word_infos_for_calib,
         word_texts_for_calib,
+        &forbidden_chars,
     );
     println!("  - 编码空间: {}", ctx.code_space);
 
@@ -1265,6 +1272,8 @@ fn run_resume(cfg: &Config, checkpoint_path: &str) {
     };
 
     let weights = cfg.get_weight_config();
+    let forbidden_chars: std::collections::HashSet<char> =
+        cfg.simple_forbidden_chars.chars().collect();
 
     // 使用检查点中保存的 ScaleConfig（避免重新校准）
     let ctx = OptContext::new(
@@ -1279,6 +1288,7 @@ fn run_resume(cfg: &Config, checkpoint_path: &str) {
         ckpt.use_keysoul,
         vec![],
         vec![],
+        &forbidden_chars,
     );
 
     println!("\n  数据加载完毕:");

@@ -97,6 +97,8 @@ pub struct OptContext {
     pub need_collision_rate: bool,
     pub need_bucket_members: bool,
     pub use_keysoul: bool,
+    /// 禁止出简码的字标记（按 char_infos 索引，true = 不参与简码分配）
+    pub simple_forbidden: Vec<bool>,
 }
 
 impl OptContext {
@@ -113,6 +115,7 @@ impl OptContext {
         use_keysoul: bool,
         word_infos_input: Vec<WordInfo>,
         word_texts_input: Vec<String>,
+        forbidden_chars: &HashSet<char>,
     ) -> Self {
         let enable_simple_code = weights.enable_simple_code;
         let enable_word_code = weights.enable_word_code;
@@ -391,6 +394,10 @@ impl OptContext {
             need_collision_rate,
             need_bucket_members,
             use_keysoul,
+            simple_forbidden: splits
+                .iter()
+                .map(|(ch, _, _)| forbidden_chars.contains(ch))
+                .collect(),
         }
     }
 
@@ -603,6 +610,7 @@ impl Clone for OptContext {
             need_collision_rate: self.need_collision_rate,
             need_bucket_members: self.need_bucket_members,
             use_keysoul: self.use_keysoul,
+            simple_forbidden: self.simple_forbidden.clone(),
         }
     }
 }

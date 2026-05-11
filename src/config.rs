@@ -16,6 +16,9 @@ pub struct Config {
     pub annealing: AnnealingConfig,
     pub amhb: AmhbConfig,
     pub simple_levels: Vec<SimpleLevelConfig>,
+    /// 禁止出简码的字集（字符串，每个字符均不参与简码分配；空字符串表示不限制）
+    #[serde(default)]
+    pub simple_forbidden_chars: String,
 }
 
 /// 文件路径配置
@@ -441,6 +444,7 @@ impl Default for Config {
                     yield_full_code: true,
                 },
             ],
+            simple_forbidden_chars: String::new(),
         }
     }
 }

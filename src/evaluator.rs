@@ -160,6 +160,9 @@ impl SimpleEvaluator {
             if excluded[ci] {
                 continue;
             }
+            if !ctx.simple_forbidden.is_empty() && ctx.simple_forbidden[ci] {
+                continue;
+            }
             if level.allowed_orig_length != 0
                 && ctx.char_infos[ci].parts_len as usize != level.allowed_orig_length
             {
