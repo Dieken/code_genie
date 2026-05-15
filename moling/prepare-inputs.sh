@@ -319,6 +319,9 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
       next if /^\s*#/ || /^\s*$/;
       chomp;
       @a = split /\t/, $_, 2;
+      die "Invalid line in roots-cluster.txt: $_\n" if $a[0] =~ /[a-z]/ || $a[1] =~ /[^a-z\s]/;
+      $a[0] =~ s/^\s*|\s*$//g;
+      $a[1] =~ s/^\s*|\s*$//g;
       @b = sort split /\s+/, $a[0];
       $a = sum(map { $freq{$_} // die "ERROR: Unknown root $_ in roots-cluster.txt" } @b);
       if ($a >= 2.5) {
