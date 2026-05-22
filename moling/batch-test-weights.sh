@@ -14,7 +14,7 @@ shopt -s failglob
 : ${DRYRUN:=false}
 : ${OUT_DIR:=batch-test-weights}
 
-which caffeinate >/dev/null && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
+which caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
 [ "$DRYRUN" = true ] && DRYRUN=echo || DRYRUN=
 
 mkdir -p "$OUT_DIR"

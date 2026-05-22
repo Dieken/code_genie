@@ -3,7 +3,7 @@
 : ${CODE_GENIE:=../target/release/code_genie}
 : ${DRYRUN:=false}
 
-which caffeinate >/dev/null && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
+which caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
 [ "$DRYRUN" = true ] && DRYRUN=echo || DRYRUN=
 
 
