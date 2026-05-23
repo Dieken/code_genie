@@ -4,11 +4,46 @@ set -euo pipefail
 shopt -s failglob
 
 
+: "${ENABLE_MIXED_FREQ:=0.1}"
+
+
+if [ "$ENABLE_MIXED_FREQ" -a "$ENABLE_MIXED_FREQ" != 0 ]; then
+    echo "(0) 生成简繁混合字频表 full-freq.txt ，繁体字频权重=$ENABLE_MIXED_FREQ ..."
+    [ -f charAbsoluteFrequencySC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencySC.json
+    [ -f charAbsoluteFrequencyTC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencyTC.json
+
+    ENABLE_MIXED_FREQ="$ENABLE_MIXED_FREQ" perl -CSDA -Mautodie -Mutf8 -lE 'use JSON::PP; use POSIX; use List::Util qw/max/;
+        sub read_file($file) {
+            open my $fh, "<", "$file";
+            binmode($fh);
+            local $/;
+            my $data = <$fh>;
+            close $fh;
+            return $data;
+         }
+
+         $r = $ENV{ENABLE_MIXED_FREQ} + 0;
+         $h = decode_json(read_file("charAbsoluteFrequencySC.json"));
+         $h2 = decode_json(read_file("charAbsoluteFrequencyTC.json"));
+
+         # 使用 max 以保持简体高频字顺序和繁体高频字各自的顺序
+         for (keys %$h2) { $h->{$_} = max($h->{$_} // 0, $r * $h2->{$_}) }
+
+         for (sort { $h->{$b} <=> $h->{$a} || $a cmp $b } %$h) {
+             print "$_\t", ceil($h->{$_});
+         }
+    ' > full-freq.txt
+else
+    echo '(0) 生成简体字频表 full-freq.txt ...'
+    perl -CSDA -lanE 'print "$F[0]\t$F[1]"' 简体字频表-2.5b.txt > full-freq.txt
+fi
+
+
 echo '(1) 从 yuhao_charsets.lua 生成简繁常用字符集 chars.txt ...'
 perl -CSDA -lnE 'print if (/\[\[/ .. eof) && /^\p{Han}$/' yuhao_charsets.lua | LC_ALL=C sort -u > chars.txt
 
 
-echo '(2) 从北语字频 简体字频表-2.5b.txt 生成简繁常用字符集的字频表 freq.txt ...'
+echo '(2) 从字频表 full-freq.txt 生成简繁常用字符集的字频表 freq.txt ...'
 perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "chars.txt"; while (<$fh>) {chomp; $h{$_} = 1} }
   next unless defined $F[1] && $F[1] > 0;
   next unless exists $h{$F[0]};
@@ -18,7 +53,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "chars.txt"; while (<$fh
       @a = sort keys %h;
       warn "    WARN: " .  scalar(@a) . " 个字符没有权重!\n" if @a != 0;
       for (@a) { print "$_\t0" }
-  }' 简体字频表-2.5b.txt  > freq.txt
+  }' full-freq.txt  > freq.txt
 
 
 echo '(3) 从宇浩星陈方案的大陆字形拆分表 yustar_chaifen.dict.yaml 生成简繁常用字符集的拆分表 chaifen.txt 和 chaifen-all.txt ...'
@@ -57,11 +92,11 @@ for s in chaifen chaifen_tw; do
     f=yustar_$s.dict.yaml
     [ -f "$f" ] && perl -CSDA -Mautodie -Mutf8 -lanE '
     BEGIN {
-        open my $fh, "简体字频表-2.5b.txt";
+        open my $fh, "full-freq.txt";
         while (<$fh>) {
-        chomp;
-        @a = split;
-        $h{$a[0]} = $a[1];
+            chomp;
+            @a = split;
+            $h{$a[0]} = $a[1];
         }
 
         # yustar_chaifen.dict.yaml 里不区分 𧾷 vs 足，⼟旁 vs 土，礻 vs 示，爫 vs 爪，牜 vs 牛，
@@ -415,7 +450,20 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   } else {
     # 使用首笔作为字根的补码
     die "No stroke found for $F[0]!\n" unless exists $strokes{$F[0]};
-    push @{ $Y{ $strokes{$F[0]} } },  $F[0];
+    die "Can not optimize consonants and left/right strokes at the same time!\n" if
+        $ENV{OPTIMIZE_KEYS} =~ /[0a-z]/i && $ENV{OPTIMIZE_KEYS} =~ /[6789A]/;   # A 是十六进制 10
+
+    # 对五个笔画，考虑声母在左右时使用替代映射以提高手感
+    my $stroke = $strokes{$F[0]};
+    if ($stroke =~ /3/ && $F[1] =~ /[0qwrtsdfgzxcvb]/) {    # 假定零声母映射到键盘左侧
+        $stroke += 5;   # 左声母 + 撇
+    } elsif ($stroke =~ /[124]/ && $F[1] =~ /[yphjklnm]/) {
+        $stroke += 5;   # 右声母 + 横竖点
+    } elsif ($stroke =~ /5/ && $F[1] =~ /[0qwrtsdfgzxcvb]/) {
+        $stroke = "A";  # 左声母 + 折
+    }
+
+    push @{ $Y{$stroke} },  $F[0];
   }
 
   END {
@@ -426,8 +474,8 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @z > 0;
 
     # 按拆分里字根首笔使用情况以及字频加权统计，字根首笔折(5)和竖(2)少，横(1)、撇(3)、点(4) 多
-    %stroke_mapping = qw( 1 o 2 u 3 e 4 i 5 a );    # 首根笔画时，退火算法多次选择此映射
-    %stroke_constraint = qw(1 eio 2 au 3 eio 4 eio 5 au);
+    %stroke_mapping = qw( 1 o 2 u 3 e 4 i 5 a   6 e 7 e 8 i 9 e A u );      # 首根笔画时，退火算法多次选择此映射
+    %stroke_constraint = qw( 1 eio 2 au 3 eio 4 eio 5 au    6 eio 7 eio 8 eio 9 eio A au );
 
     for my $stroke (sort keys %Y) {
       @a = sort @{ $Y{$stroke} };

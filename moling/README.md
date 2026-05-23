@@ -26,6 +26,7 @@
 
 `optimize.sh` 调用了 `prepare-inputs.sh`，后者接受几个环境变量来定制行为：
 
+* `ENABLE_MIXED_FREQ`：非零时表示组合台版繁体字频的权重，默认为 0.1，设置为空或 0 时表示只使用简体字频；
 * `USE_VOWEL`: 设置为 1 表示字根的补码使用字根的韵母，默认是使用字根的首笔笔画；
 * `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
     * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w；
@@ -38,6 +39,11 @@
     * 包含 3 时，使用退火算法决定笔画「撇」的按键，默认使用 e；
     * 包含 4 时，使用退火算法决定笔画「点」的按键，默认使用 i；
     * 包含 5 时，使用退火算法决定笔画「折」的按键，默认使用 a；
+    * 包含 6 时，使用退火算法决定声码在键盘右手侧时笔画「横」的按键，默认使用 e；
+    * 包含 7 时，使用退火算法决定声码在键盘右手侧时笔画「竖」的按键，默认使用 e；
+    * 包含 8 时，使用退火算法决定声码在键盘左手侧时笔画「撇」的按键，默认使用 i；
+    * 包含 9 时，使用退火算法决定声码在键盘右手侧时笔画「点」的按键，默认使用 e；
+    * 包含 A 时，使用退火算法决定声码在键盘左手侧时笔画「折」的按键，默认使用 u；
 
 例如：
 
@@ -105,6 +111,10 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 
 * 第三方文件
     * `简体字频表-2.5b.txt`        北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm
+    * `charAbsoluteFrequencySC.json`
+                                  北语简体字频，来自 https://ceping.shurufa.app/data/charAbsoluteFrequencySC.json
+    * `charAbsoluteFrequencyTC.json`
+                                  台标繁体字频，来自 https://ceping.shurufa.app/data/charAbsoluteFrequencyTC.json
     * `宇浩字根列表.csv`           宇浩输入法系列的字根元信息，来自其作者朱宇浩
     * `chars.dict.yaml`           万象拼音词典，https://github.com/amzxyz/RIME-LMDG/blob/62f844d0fd6ac0d6ab2cf9bace6ed34b5a3e318c/dicts/chars.dict.yaml
     * `yuhao_charsets.lua`        宇浩 RIME 方案 Lua 脚本, 来自`星陳輸入法_v3.11.0/schema/lua/yuhao/yuhao_charsets.lua`
@@ -123,6 +133,7 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
     * `chaifen-all.txt`           生成的全字集拆分表，不参与优化，只用于生成大字集码表
     * `chars.txt`                 生成的常用字表
     * `freq.txt`                  生成的常用字字频文件
+    * `full-freq.txt`             生成的简体字频或者简繁混合字频文件
     * `input-division.txt`        生成的码灵输入文件
     * `input-fixed.txt`           生成的码灵输入文件
     * `input-roots.txt`           生成的码灵输入文件

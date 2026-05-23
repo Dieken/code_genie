@@ -231,7 +231,6 @@ curl -L -z "$1/Yuniversus.woff" -o "$1/Yuniversus.woff" 'https://shurufa.app/fon
 
 VER=$(date +%Y.%m.%d)
 echo "Writing $1/moling-$VER.html ..."
-"$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/moling.js" -t "魔靈輸入法字根表 $VER" -c 简体字频表-2.5b.txt \
+"$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/moling.js" -t "魔靈輸入法字根表 $VER" -c full-freq.txt \
   -f "$1/Yuniversus.woff" -r "$1/roots-mapping.tsv" \
-  "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 6000 简体字频表-2.5b.txt | awk '{print $1}') > "$1/moling-$VER.html"
-
+  "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 8000 full-freq.txt | awk '{print $1}') > "$1/moling-$VER.html"

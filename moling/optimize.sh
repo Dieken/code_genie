@@ -18,9 +18,11 @@ mkdir "$BAK"
 # backup configuration for later review
 cp batch-test-weights.txt \
    chaifen.txt \
+   charAbsoluteFrequency*.json \
    chars.txt \
    config.toml \
    freq.txt \
+   full-freq.txt \
    input-division.txt \
    input-fixed.txt \
    input-roots.txt \
@@ -40,7 +42,7 @@ echo "Running './prepare-input.sh' and 'code_genie optimize', writing log to $LO
     date
 
     echo '检查优化相关环境变量：---->'
-    env | grep -E 'USE_VOWEL|OPTIMIZE_'
+    env | grep -E 'USE_|OPTIMIZE_|ENABLE_|DISABLE_'
     echo '<--------------------------'
 
     [ -e ../.git ] && {
