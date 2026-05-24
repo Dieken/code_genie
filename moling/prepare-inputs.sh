@@ -13,8 +13,8 @@ if [ "$ENABLE_MIXED_FREQ" -a "$ENABLE_MIXED_FREQ" != 0 ]; then
     [ -f charAbsoluteFrequencyTC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencyTC.json
 
     ENABLE_MIXED_FREQ="$ENABLE_MIXED_FREQ" perl -CSDA -Mautodie -Mutf8 -lE 'use JSON::PP; use POSIX; use List::Util qw/max/;
-        sub read_file($file) {
-            open my $fh, "<", "$file";
+        sub read_file {
+            open my $fh, "<", $_[0];
             binmode($fh);
             local $/;
             my $data = <$fh>;

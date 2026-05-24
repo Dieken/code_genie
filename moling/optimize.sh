@@ -7,7 +7,8 @@ which caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
 [ "$DRYRUN" = true ] && DRYRUN=echo || DRYRUN=
 
 
-read -e -i "USE_VOWEL=$USE_VOWEL OPTIMIZE_KEYS=$OPTIMIZE_KEYS $0 $@ " -p "一句话备注： " comment
+read -e -p "一句话备注： " comment
+comment="USE_VOWEL=$USE_VOWEL OPTIMIZE_KEYS=$OPTIMIZE_KEYS $0 $@ : $comment"
 
 
 TS=$(date +%Y%m%d-%H%M%S)
