@@ -38,7 +38,7 @@ cp batch-test-weights.txt \
    "$BAK/"
 
 date
-echo "Running './prepare-input.sh' and 'code_genie optimize', writing log to $LOG ..."
+echo "Running './prepare-inputs.sh' and 'code_genie optimize', writing log to $LOG ..."
 {
     date
 
