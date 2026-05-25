@@ -4,15 +4,15 @@ set -euo pipefail
 shopt -s failglob
 
 
-: "${ENABLE_MIXED_FREQ:=0.1}"
+: "${USE_MIXED_FREQ:=0.1}"
 
 
-if [ "$ENABLE_MIXED_FREQ" -a "$ENABLE_MIXED_FREQ" != 0 ]; then
-    echo "(0) 生成简繁混合字频表 full-freq.txt ，繁体字频权重=$ENABLE_MIXED_FREQ ..."
+if [ "$USE_MIXED_FREQ" -a "$USE_MIXED_FREQ" != 0 ]; then
+    echo "(0) 生成简繁混合字频表 full-freq.txt ，繁体字频权重=$USE_MIXED_FREQ ..."
     [ -f charAbsoluteFrequencySC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencySC.json
     [ -f charAbsoluteFrequencyTC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencyTC.json
 
-    ENABLE_MIXED_FREQ="$ENABLE_MIXED_FREQ" perl -CSDA -Mautodie -Mutf8 -lE 'use JSON::PP; use POSIX; use List::Util qw/max/;
+    USE_MIXED_FREQ="$USE_MIXED_FREQ" perl -CSDA -Mautodie -Mutf8 -lE 'use JSON::PP; use POSIX; use List::Util qw/max/;
         sub read_file {
             open my $fh, "<", $_[0];
             binmode($fh);
@@ -22,7 +22,7 @@ if [ "$ENABLE_MIXED_FREQ" -a "$ENABLE_MIXED_FREQ" != 0 ]; then
             return $data;
          }
 
-         $r = $ENV{ENABLE_MIXED_FREQ} + 0;
+         $r = $ENV{USE_MIXED_FREQ} + 0;
          $h = decode_json(read_file("charAbsoluteFrequencySC.json"));
          $h2 = decode_json(read_file("charAbsoluteFrequencyTC.json"));
 
