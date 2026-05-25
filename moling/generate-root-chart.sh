@@ -43,7 +43,7 @@ perl -CSDA -F, -lanE '
     next if $. == 1 || exists $h{$F[1]};
     print "$F[1]\t$F[2]" if $F[1] ne $F[2] && $F[1] =~ /\{/;
     $h{$F[1]} = 1;
-    ' 宇浩字根列表.csv | LC_ALL=C sort -u > "$1/roots-mapping.tsv"
+    ' yuhao-zigens.csv | LC_ALL=C sort -u > "$1/roots-mapping.tsv"
 
 echo "Writing $1/zigen-moling.csv and $1/zigen-trainer-moling.json ..."
 perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
@@ -55,7 +55,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
           $order{$root} = scalar(keys(%order)) * 1000;
       }
 
-      open my $fh, "宇浩字根列表.csv";
+      open my $fh, "yuhao-zigens.csv";
       while (<$fh>) {
           next if $. == 1;
           chomp;

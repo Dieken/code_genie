@@ -35,7 +35,7 @@ if [ "$ENABLE_MIXED_FREQ" -a "$ENABLE_MIXED_FREQ" != 0 ]; then
     ' > full-freq.txt
 else
     echo '(0) 生成简体字频表 full-freq.txt ...'
-    perl -CSDA -lanE 'print "$F[0]\t$F[1]"' 简体字频表-2.5b.txt > full-freq.txt
+    perl -CSDA -lanE 'print "$F[0]\t$F[1]"' beiyu-char-freq.txt > full-freq.txt
 fi
 
 
@@ -408,7 +408,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
         "乙"        => "5",
       );
 
-      open my $fh, "宇浩字根列表.csv";
+      open my $fh, "yuhao-zigens.csv";
       while (<$fh>) {
         next if $. == 1;
         chomp;

@@ -17,7 +17,7 @@ use Term::ANSIColor;
 use autodie;
 
 my $mabiao_file = "mabiao_sc.tsv";
-my $freq_file = "简体字频表-2.5b.txt";
+my $freq_file = "beiyu-char-freq.txt";
 my $is_color = 1;
 my $is_simplified = 0;
 
