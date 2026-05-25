@@ -21,12 +21,15 @@
 
 ## 算码流程
 
+> 推荐 Windows 用户使用 [MSYS2](https://packages.msys2.org/) 来运行以下工具，在 MSYS2 里使用 `pacman -S git rust perl` 安装 Git、Rust、Perl，参照 [TUNA crates.io 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)配置 Cargo。
+
 1. 在上层目录运行 `cargo build --release` 构建码灵；
 2. 在本目录运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；
 
 `optimize.sh` 调用了 `prepare-inputs.sh`，后者接受几个环境变量来定制行为：
 
 * `ENABLE_MIXED_FREQ`：非零时表示组合台版繁体字频的权重，默认为 0.1，设置为空或 0 时表示只使用简体字频；
+* `USE_YULING_RULE`： 设置为 1 表示使用宇浩灵明的单字编码规则，并从宇浩灵明字根表初始化 `roots.txt`(如果文件不存在)，后续需手动维护此文件，默认是使用魔灵的单字编码规则；
 * `USE_VOWEL`: 设置为 1 表示字根的补码使用字根的韵母，默认是使用字根的首笔笔画；
 * `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
     * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w；
@@ -95,19 +98,19 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 ## 文件说明
 
 * 脚本程序
-    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-inputs.sh` 和 `code_genie optimize`
-    * `prepare-inputs.sh`         准备码灵输入文件所用的脚本
+    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-inputs.sh` 和 `code_genie optimize`，支持环境变量 `USE_YULING_RULE`
+    * `prepare-inputs.sh`         准备码灵输入文件所用的脚本，支持环境变量 `USE_YULING_RULE`
     * `stat-moling-roots.pl`      统计优化出的魔灵码表和字根表
     * `generate-root-chart.sh`    生成字根表和字根图
     * `batch-test-weights.sh`     批处理优化以探测合理的权重参数范围
     * `analyze-duplicates-by-cluster.pl`
-                                  分析字根聚类带来的重码
+                                  分析字根聚类带来的重码，支持环境变量 `USE_YULING_RULE`
     * `analyze-duplicates-by-cluster.sh`
-                                  评估 roots-cluster.txt 中每一行聚类单独可能带来的重码
+                                  评估 roots-cluster.txt 中每一行聚类单独可能带来的重码，支持环境变量 `USE_YULING_RULE`
     * `analyze-results-of-batch-test-weights.sh`
                                   分析 `batch-test-weights.sh` 的运行结果
     * `convert-yuling-rime-schema-to-moling.sh`
-                                  转换灵明 RIME 方案为魔灵 RIME 方案
+                                  转换灵明 RIME 方案为魔灵 RIME 方案，支持环境变量 `USE_YULING_RULE`
 
 * 第三方文件
     * `beiyu-char-freq.txt`       北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm

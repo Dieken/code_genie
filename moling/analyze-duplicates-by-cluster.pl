@@ -120,17 +120,33 @@ sub calculate_dups($chaifens, $roots, $clusters) {
         my $cf = $v->{chaifen};
 
         my @code;
-        for (@$cf) {
-            push @code, exists $clusters->{$_} ? $clusters->{$_} : "$_.A";
-        }
 
-        my $root = $cf->[@$cf - 1];
-        if (@$cf == 2) {
-            # 回头码: A1A2S2S1Y1
-            push @code, substr($roots->{$root}, 0, 1) if length($roots->{$root}) > 1;
-            $root = $cf->[0];
+        if ($ENV{USE_YULING_RULE}) {      # 使用宇浩灵明单字编码规则
+            push @code, exists $clusters->{$cf->[0]} ? $clusters->{$cf->[0]} : "$cf->[0].A";
+            push @code, substr($roots->{$cf->[0]}, 0, 1) if length($roots->{$cf->[0]}) > 1;
+            push @code, substr($roots->{$cf->[0]}, -1) if @$cf == 1;
+
+            if (@$cf > 1) {
+                for (my $i = 1; $i < @$cf; ++$i) {
+                    next if @$cf > 3 && $i == 2 && length($roots->{$cf->[0]}) > 1;
+                    push @code, exists $clusters->{$cf->[$i]} ? $clusters->{$cf->[$i]} : "$cf->[$i].A";
+                }
+
+                push @code, split(//, $roots->{$cf->[-1]});
+            }
+        } else {                          # 使用魔灵单字编码规则
+            for (@$cf) {
+                push @code, exists $clusters->{$_} ? $clusters->{$_} : "$_.A";
+            }
+
+            my $root = $cf->[@$cf - 1];
+            if (@$cf == 2) {
+                # 回头码: A1A2S2S1Y1
+                push @code, substr($roots->{$root}, 0, 1) if length($roots->{$root}) > 1;
+                $root = $cf->[0];
+            }
+            push @code, split(//, $roots->{$root});
         }
-        push @code, split(//, $roots->{$root});
         @code = @code[0..3] if @code > 4;
         push @code, "" if @code == 2;
         push @code, "" if @code == 3;

@@ -164,18 +164,36 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
           @b = split /\s+/, $a[1];
           $s = "";
 
-          for (@b) {
-              die "Unknown root: $_ in $_\n" unless exists $roots{$_};
-              $s .= substr($roots{$_}, 0, 1);
-          }
+          if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+              for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
-          if (@b == 2) {
-              $s .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
-              $r = $b[0];
-          } else {
-              $r = $b[-1];
+              $s .= substr($roots{$b[0]}, 0, 1);
+              $s .= substr($roots{$b[0]}, 1, 1) if length($roots{$b[0]}) > 2;
+              $s .= substr($roots{$b[0]}, -1) if @b == 1;
+
+              if (@b > 1) {
+                  for ($i = 1; $i < @b; ++$i) {
+                      next if @b > 3 && $i == 2 && length($roots{$b[0]}) > 2;
+                      $s .= substr($roots{$b[$i]}, 0, 1);
+                  }
+
+                  $s .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
+                  $s .= substr($roots{$b[-1]}, -1);
+              }
+          } else {                      # 使用魔灵单字编码规则
+              for (@b) {
+                  die "Unknown root: $_ in $_\n" unless exists $roots{$_};
+                  $s .= substr($roots{$_}, 0, 1);
+              }
+
+              if (@b == 2) {
+                  $s .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
+                  $r = $b[0];
+              } else {
+                  $r = $b[-1];
+              }
+              $s .= substr($roots{$r}, 1);
           }
-          $s .= substr($roots{$r}, 1);
           $s = substr($s, 0, 4) if length($s) > 4;
 
           $len = length($s);
@@ -209,8 +227,9 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
                 next if exists $short_codes{$s};
             }
 
-            # 抢占低频字的码位
-            next if exists $full_codes{$s} && $chars{ $full_codes{$s} }{seq} < 4000;
+            # 抢占低频字的码位，有可能增大一点重码率！！！
+            next if exists $full_codes{$s} && $chars{ $full_codes{$s} }{seq} <= 6000;
+
             $short_codes{$s} = 1;
             $short_chars{$char} = 1;
             print "$char\t$s";

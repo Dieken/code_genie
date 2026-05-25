@@ -73,16 +73,35 @@ for s in chaifen chaifen_tw; do
 
         @b = @{ $chaifen{$F[0]} };
         $code = "";
-        for (@b) {
-            die "Unknown root $_\n" unless exists $roots{$_};
-            $code .= substr($roots{$_}, 0, 1);
+
+        if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+            for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
+
+            $code .= substr($roots{$b[0]}, 0, 1);
+            $code .= substr($roots{$b[0]}, 1, 1) if length($roots{$b[0]}) > 2;
+            $code .= substr($roots{$b[0]}, -1) if @b == 1;
+
+            if (@b > 1) {
+                for ($i = 1; $i < @b; ++$i) {
+                    next if @b > 3 && $i == 2 && length($roots{$b[0]}) > 2;
+                    $code .= substr($roots{$b[$i]}, 0, 1);
+                }
+
+                $code .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
+                $code .= substr($roots{$b[-1]}, -1);
+            }
+        } else {                      # 使用魔灵单字编码规则
+            for (@b) {
+                die "Unknown root $_\n" unless exists $roots{$_};
+                $code .= substr($roots{$_}, 0, 1);
+            }
+            $root = $b[-1];
+            if (@b == 2) {
+                $code .= substr($roots{$root}, 1, 1) if length($roots{$root}) > 2;
+                $root = $b[0];
+            }
+            $code .= substr($roots{$root}, 1);
         }
-        $root = $b[-1];
-        if (@b == 2) {
-            $code .= substr($roots{$root}, 1, 1) if length($roots{$root}) > 2;
-            $root = $b[0];
-        }
-        $code .= substr($roots{$root}, 1);
         $code = substr($code, 0, 4) if length($code) > 4;
 
         print "$F[0]\t[",
@@ -111,16 +130,35 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -lanE '
 
     @b = split /\s+/, $F[1];
     $code = "";
-    for (@b) {
-        die "Unknown root $_\n" unless exists $roots{$_};
-        $code .= substr($roots{$_}, 0, 1);
+
+    if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+        for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
+
+        $code .= substr($roots{$b[0]}, 0, 1);
+        $code .= substr($roots{$b[0]}, 1, 1) if length($roots{$b[0]}) > 2;
+        $code .= substr($roots{$b[0]}, -1) if @b == 1;
+
+        if (@b > 1) {
+            for ($i = 1; $i < @b; ++$i) {
+                next if @b > 3 && $i == 2 && length($roots{$b[0]}) > 2;
+                $code .= substr($roots{$b[$i]}, 0, 1);
+            }
+
+            $code .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
+            $code .= substr($roots{$b[-1]}, -1);
+        }
+    } else {                      # 使用魔灵单字编码规则
+        for (@b) {
+            die "Unknown root $_\n" unless exists $roots{$_};
+            $code .= substr($roots{$_}, 0, 1);
+        }
+        $root = $b[-1];
+        if (@b == 2) {
+            $code .= substr($roots{$root}, 1, 1) if length($roots{$root}) > 2;
+            $root = $b[0];
+        }
+        $code .= substr($roots{$root}, 1);
     }
-    $root = $b[-1];
-    if (@b == 2) {
-        $code .= substr($roots{$root}, 1, 1) if length($roots{$root}) > 2;
-        $root = $b[0];
-    }
-    $code .= substr($roots{$root}, 1);
     $code = substr($code, 0, 4) if length($code) > 4;
 
     next if exists $h{"$F[0]$code"};
@@ -192,18 +230,36 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
             chomp;
             my @a = split /\t/;
             my @b = split /\s+/, $a[1];
-
             $code = "";
-            for (@b) {
-                die "Unknown root $_\n" unless exists $roots{$_};
-                $code .= substr($roots{$_}, 0, 1);
+
+            if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+                for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
+
+                $code .= substr($roots{$b[0]}, 0, 1);
+                $code .= substr($roots{$b[0]}, 1, 1) if length($roots{$b[0]}) > 2;
+                $code .= substr($roots{$b[0]}, -1) if @b == 1;
+
+                if (@b > 1) {
+                    for ($i = 1; $i < @b; ++$i) {
+                        next if @b > 3 && $i == 2 && length($roots{$b[0]}) > 2;
+                        $code .= substr($roots{$b[$i]}, 0, 1);
+                    }
+
+                    $code .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
+                    $code .= substr($roots{$b[-1]}, -1);
+                }
+            } else {                      # 使用魔灵单字编码规则
+                for (@b) {
+                    die "Unknown root $_\n" unless exists $roots{$_};
+                    $code .= substr($roots{$_}, 0, 1);
+                }
+                $root = $b[-1];
+                if (@b == 2) {
+                    $code .= substr($roots{$root}, 1, 1) if length($roots{$root}) > 2;
+                    $root = $b[0];
+                }
+                $code .= substr($roots{$root}, 1);
             }
-            $root = $b[-1];
-            if (@b == 2) {
-                $code .= substr($roots{$root}, 1, 1) if length($roots{$root}) > 2;
-                $root = $b[0];
-            }
-            $code .= substr($roots{$root}, 1);
             $code = substr($code, 0, 4) if length($code) > 4;
 
             $codes{$a[0]} = $code;

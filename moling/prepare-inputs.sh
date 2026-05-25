@@ -162,6 +162,31 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
 
 
 echo '(6) 从 roots-pinyin.txt 修正并生成字根声码韵码表 roots.txt ...'
+if [ "${USE_YULING_RULE:-}" = 1 ]; then
+    if [ ! -e roots.txt ]; then
+        echo "    !!! 使用宇浩灵明字根初始化 roots.txt ..."
+        curl -s https://shurufa.app/zigen-ling.csv |
+            perl -CSDA -Mutf8 -F, -lanE '
+            BEGIN {
+                open $fh, "yuhao-zigens.csv";
+                while (<$fh>) {
+                    next if $.==1;
+                    chomp;
+                    @a=split /,/;
+                    $h{$a[2]} = $a[1];
+                }
+
+                $h{"竹"} = "竹";    # 替代 ⺮
+            }
+
+            next if $.==1;
+            print $h{$F[0]}, "\t", substr($F[1], 1), "\t", join(" ", @F[2..$#F]);
+            print "卄\t", substr($F[1], 1), "\t", join(" ", @F[2..$#F]) if $h{$F[0]} eq "艹";
+            ' | LC_ALL=C sort -u -k2,2 -k1,1 > roots.txt
+    else
+        echo "    !!! 已存在 roots.txt，跳过生成，直接使用它（如果需要重新初始化，请先删除它）..."
+    fi
+else
 perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
   BEGIN {
     open my $fh, "roots-pinyin.txt";
@@ -254,7 +279,8 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
   $a =~ s/^y/k/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 首根笔画时，多次退火优化都选择了 k
   $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
   print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
-' roots-freq.txt | LC_ALL=C sort -k2,2 -k1.1 > roots.txt
+' roots-freq.txt | LC_ALL=C sort -k2,2 -k1,1 > roots.txt
+fi
 
 
 echo '(7) 分析首根冲突情况，为选择飞键字根提供参考，写入 roots-fly-candidates.txt ...'
@@ -519,20 +545,41 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
       $h2{$_} = 1;
     }
   }
+
   @a = split /\s+/, $F[1];
   @b = ();
-  for (@a) { push @b, "$_.A" }
-  $b[0] = "$a[0].U" if exists $h2{$a[0]};
-  if (@a == 2) {
-    # 回头码: A1A2S2S1Y1
-    $a = $a[-1];
+
+  for (@a) { die "Bad root $_\n" unless exists $h{$_} || exists $h2{$_}; }
+
+  if ($ENV{USE_YULING_RULE}) {      # 使用宇浩灵明单字编码规则
+    push @b, "$a[0].A";
+    push @b, "$a[0].S" if length($h{$a[0]}) > 1;
+    push @b, "$a[0].Y" if @a == 1;
+
+    if (@a > 1) {
+      for ($i = 1; $i < @a; ++$i) {
+        next if @a > 3 && $i == 2 && length($h{$a[0]}) > 1;
+        push @b, "$a[$i].A";
+      }
+
+      push @b, "$a[-1].S" if length($h{$a[-1]}) > 1;
+      push @b, "$a[-1].Y";
+    }
+  } else {                          # 使用魔灵单字编码规则
+    for (@a) { push @b, "$_.A" }
+    $b[0] = "$a[0].U" if exists $h2{$a[0]};
+    if (@a == 2) {
+      # 回头码: A1A2S2S1Y1
+      $a = $a[-1];
+      push @b, "$a.S" if length($h{$a}) > 1;
+      $a = $a[0];
+    } else {
+      $a = $a[-1];
+    }
     push @b, "$a.S" if length($h{$a}) > 1;
-    $a = $a[0];
-  } else {
-    $a = $a[-1];
+    push @b, "$a.Y";
   }
-  push @b, "$a.S" if length($h{$a}) > 1;
-  push @b, "$a.Y";
+
   @b = @b[0..3] if @b > 4;
   print "$F[0]\t", join(" ", @b), "\t$F[2]";
 ' chaifen.txt > input-division.txt
