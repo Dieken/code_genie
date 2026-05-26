@@ -207,7 +207,7 @@ if [ -d "$YUSTAR/schema" ]; then
     cp "$YUSTAR/schema/yuhao/yustar_sc.words.dict.yaml" "$YULING/schema/yuhao/moling_sc.words.dict.yaml"
     cp "$YUSTAR/schema/yuhao/yustar_tc.words.dict.yaml" "$YULING/schema/yuhao/moling_tc.words.dict.yaml"
 
-    perl -CSDA -i -lpE 's/yustar((?:[st]c_)?\.words)/moling\1/' "$YULING"/schema/yuhao/moling{,_sc,_tc}.words.dict.yaml
+    perl -CSDA -i -lpE 's/yustar((?:_[st]c)?\.words)/moling\1/' "$YULING"/schema/yuhao/moling{,_sc,_tc}.words.dict.yaml
 
     grep -Eq 'yuhao/moling.words\s*$' "$YULING/schema/moling.dict.yaml" ||
         perl -CSDA -i -lnE 'if (/yuhao\/moling_sc\.words\s*$/) { print "  - yuhao/moling.words" } print' "$YULING/schema/moling.dict.yaml"
@@ -291,9 +291,11 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
 echo "(11) 生成 mabiao/*/*.txt"
 rm -f "$YULING"/mabiao/*/*.txt
 
+[ -d "$YUSTAR/schema" ] && EXTRA_WORDS=",.words" || EXTRA_WORDS=""
+
 perl -CSDA -lnE 'next unless /\t/; next if exists $h{$_}; $h{$_} = 1; print' \
     "$YULING"/schema/yuhao/moling.{quick,pop,full}.dict.yaml \
-    "$YULING"/schema/yuhao/moling{_sc.words_essence,.words_essence,.words,_sc.words,_tc.words}.dict.yaml \
+    "$YULING"/schema/yuhao/moling{_sc.words_essence,.words_essence$EXTRA_WORDS,_sc.words,_tc.words}.dict.yaml \
     "$YULING"/schema/yuhao/yuhao.symbols.dict.yaml > "$YULING/mabiao/chartab/魔靈.txt"
 
 perl -CSDA -lanE 'print "$F[1] $F[0]"' "$YULING/mabiao/chartab/魔靈.txt" > "$YULING/mabiao/baidu/魔靈.txt"
