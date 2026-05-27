@@ -209,6 +209,8 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
       %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
 
+      %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
+
       for $i (2 .. 3) {
           while (($k, $v) = each %chars) {
               $v->{score} = ($v->{len} - $i) * $v->{freq};
@@ -220,6 +222,12 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
             $v = $chars{$char};
             next if $i >= length($v->{code}) || $v->{freq} < 1;
             $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
+
+            if ($ENV{ENABLE_SHORTCODE_MAPPING}) {   # 默认不开启，会损害简码效率
+                # 根据魔灵的笔画映射提升手感
+                $s =~ s/([qwrtsdfgzxcvb])([ae])$/$1 . $stroke_mapping{$2}/e;
+                $s =~ s/([yphjklnm])([i])$/$1 . $stroke_mapping{$2}/e;
+            }
 
             if (exists $short_codes{$s}) {
                 next unless $ENV{ENABLE_SPACE_SHORTCODE};
