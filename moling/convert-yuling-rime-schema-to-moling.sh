@@ -173,11 +173,7 @@ mv "$YULING/schema/yuhao/moling.pop.dict.yaml.new" "$YULING/schema/yuhao/moling.
 # 假设了「的」的全码四码在全码表开头
 perl -CSDA -Mutf8 -lanE 'exit(0) if length($F[1]) == 4; print if /[aeuio]$/' "$MOLING/mabiao.tsv" >> "$YULING/schema/yuhao/moling.pop.dict.yaml"
 
-echo "(8) 生成 moling.quick.dict.yaml"
-perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.quick.dict.yaml" > "$YULING/schema/yuhao/moling.quick.dict.yaml.new"
-mv "$YULING/schema/yuhao/moling.quick.dict.yaml.new" "$YULING/schema/yuhao/moling.quick.dict.yaml"
-
-echo "(9) 生成 moling.roots.dict.yaml"
+echo "(8) 生成 moling.roots.dict.yaml"
 perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.roots.dict.yaml" > "$YULING/schema/yuhao/moling.roots.dict.yaml.new"
 mv "$YULING/schema/yuhao/moling.roots.dict.yaml.new" "$YULING/schema/yuhao/moling.roots.dict.yaml"
 perl -CSDA -Mutf8 -F, -lanE '
@@ -199,7 +195,7 @@ perl -CSDA -Mutf8 -F, -lanE '
     }
 ' "$MOLING/zigen-moling.csv" >> "$YULING/schema/yuhao/moling.roots.dict.yaml"
 
-echo "(10) 替换 moling*words*.dict.yaml"
+echo "(9) 替换 moling*words*.dict.yaml"
 if [ -d "$YUSTAR/schema" ]; then
     echo "使用星陈方案的词库"
 
@@ -288,15 +284,27 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
     }
 ' "$YULING"/schema/yuhao/moling*words*.dict.yaml
 
+echo "(10) 生成 moling.quick.dict.yaml"
+perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.quick.dict.yaml" > "$YULING/schema/yuhao/moling.quick.dict.yaml.new"
+mv "$YULING/schema/yuhao/moling.quick.dict.yaml.new" "$YULING/schema/yuhao/moling.quick.dict.yaml"
+
+perl -CSDA -lanE '
+    next unless $F[0] =~ /^\p{Han}{2,}$/ && $F[1] =~ /^[a-z]+$/;
+    $s = substr($F[1], 0, 1);
+    $s = substr($F[1], 0, 2) if $shortcodes{$s};
+    next if $shortcodes{$s};
+    print "$F[0]\t$s";
+    $shortcodes{$s} = 1;
+    ' \
+    $(D="$YULING/schema" perl -lnE 'print "$ENV{D}/$1.dict.yaml" if /^\s+-\s+(yuhao\/(\S*_sc\.words\S*))/ && $2 !~ /private|extended/' "$YULING"/schema/moling.dict.yaml) \
+    | LC_ALL=C sort -k2,2 -k1,1 >> "$YULING/schema/yuhao/moling.quick.dict.yaml"
+
 echo "(11) 生成 mabiao/*/*.txt"
 rm -f "$YULING"/mabiao/*/*.txt
 
-[ -d "$YUSTAR/schema" ] && EXTRA_WORDS=",.words" || EXTRA_WORDS=""
-
 perl -CSDA -lnE 'next unless /\t/; next if exists $h{$_}; $h{$_} = 1; print' \
-    "$YULING"/schema/yuhao/moling.{quick,pop,full}.dict.yaml \
-    "$YULING"/schema/yuhao/moling{_sc.words_essence,.words_essence$EXTRA_WORDS,_sc.words,_tc.words}.dict.yaml \
-    "$YULING"/schema/yuhao/yuhao.symbols.dict.yaml > "$YULING/mabiao/chartab/魔靈.txt"
+    $(D="$YULING/schema" perl -lnE 'print "$ENV{D}/$1.dict.yaml" if /^\s+-\s+(yuhao\/(\S+))/ && $2 !~ /private|extended/' "$YULING"/schema/moling.dict.yaml) \
+    > "$YULING/mabiao/chartab/魔靈.txt"
 
 perl -CSDA -lanE 'print "$F[1] $F[0]"' "$YULING/mabiao/chartab/魔靈.txt" > "$YULING/mabiao/baidu/魔靈.txt"
 perl -CSDA -lanE 'print "$F[1]\t$F[0]"' "$YULING/mabiao/chartab/魔靈.txt" > "$YULING/mabiao/dazhu/魔靈.txt"
