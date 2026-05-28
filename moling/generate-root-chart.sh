@@ -5,6 +5,9 @@ shopt -s failglob
 
 : "${TYPER_ROOT:="$HOME/home/typer"}"
 
+[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=typer
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=../../typer
 [ -d "$TYPER_ROOT/scripts" ] || {

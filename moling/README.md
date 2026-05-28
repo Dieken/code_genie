@@ -29,8 +29,10 @@
 `optimize.sh` 调用了 `prepare-inputs.sh`，后者接受几个环境变量来定制行为：
 
 * `USE_MIXED_FREQ`：非零时表示组合台版繁体字频的权重，默认为 0.1，设置为空或 0 时表示只使用简体字频；
-* `USE_YULING_RULE`： 设置为 1 表示使用宇浩灵明的单字编码规则，并从宇浩灵明字根表初始化 `roots.txt`(如果文件不存在)，后续需手动维护此文件，默认是使用魔灵的单字编码规则；
 * `USE_VOWEL`: 设置为 1 表示字根的补码使用字根的韵母，默认是使用字根的首笔笔画；
+* `USE_YULING_RULE`： 设置为 1 表示使用宇浩灵明的单字编码规则，并从宇浩灵明字根表初始化 `roots.txt`(如果文件不存在)，后续需手动维护此文件，默认是使用魔灵的单字编码规则；
+* `USE_YAOLING_RULE`: 设置为 1 表示使用 @Evildoer 的妖灵规则（大根声码映射且韵码固定），包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
+* `USE_YUELING_RULE`: 设置为 1 表示使用 @枕月 的月灵规则(韵码仿日月映射)，包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
 * `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
     * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w；
     * 包含 q 时，使用退火算法决定声母 q 的按键，默认不映射；
@@ -56,6 +58,14 @@ OPTIMIZE_KEYS=012345qryz ./optimize.sh
 
 # 优化全部五个键映射，使用字根韵母作为韵码
 USE_VOWEL=1 OPTIMIZE_KEYS=0qryz ./optimize.sh
+
+# 计算妖灵
+rm roots.txt # 从灵明字根表初始化
+USE_YAOLING_RULE=1 ./optimize.sh
+
+# 计算月灵
+## !!! 注意提前调整 roots.txt 的字根拼音
+USE_YUELING_RULE=1 ./optimize.sh
 ```
 
 注意，开启按键映射后，`roots.tsv` 中的字根声码不是最终版，关闭 `USE_VOWEL` 使用字根首笔时，

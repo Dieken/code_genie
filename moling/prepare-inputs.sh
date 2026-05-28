@@ -6,6 +6,9 @@ shopt -s failglob
 
 : "${USE_MIXED_FREQ:=0.1}"
 
+[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+
 
 if [ "$USE_MIXED_FREQ" -a "$USE_MIXED_FREQ" != 0 ]; then
     echo "(0) 生成简繁混合字频表 full-freq.txt ，繁体字频权重=$USE_MIXED_FREQ ..."
@@ -417,7 +420,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
 
 
 echo '(9) 添加码灵输入文件 input-fixed.txt, 声码和韵码约束 ...'
-perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
+perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
   BEGIN {
     if (! $ENV{USE_VOWEL}) {
       # 修正数据错误
@@ -455,26 +458,51 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   if (length($F[1]) > 1) {
     $a = substr($F[1], 0, 1);
 
-    if (     $a eq "0" && $ENV{OPTIMIZE_KEYS} =~ /0/ ) {    # 零声母 0 需要映射
-      push @o, $F[0];
-    } elsif ($a eq "q" && $ENV{OPTIMIZE_KEYS} =~ /q/i) {    # 声母 q 不好按，需要映射
-      push @q, $F[0];
-    } elsif ($a eq "r" && $ENV{OPTIMIZE_KEYS} =~ /r/i) {    # 声母 r 不好按，需要映射
-      push @r, $F[0];
-    } elsif ($a eq "y" && $ENV{OPTIMIZE_KEYS} =~ /y/i) {    # 声母 y 过于高频，需要映射
-      push @y, $F[0];
-    } elsif ($a eq "z" && $ENV{OPTIMIZE_KEYS} =~ /z/i) {    # 25 键方案，z 需要映射
-      push @z, $F[0];
+    if ($ENV{USE_YAOLING_RULE}) {
+        push @{ $yaoling_consonants{$a} }, $F[0];    # 妖灵的声母重新映射到声码，并且对应固定的韵码
     } else {
-      print "$F[0].S\t", substr($F[1], 0, 1) if length($F[1]) > 1;
+        if (     $a eq "0" && $ENV{OPTIMIZE_KEYS} =~ /0/ ) {    # 零声母 0 需要映射
+            push @o, $F[0];
+        } elsif ($a eq "q" && $ENV{OPTIMIZE_KEYS} =~ /q/i) {    # 声母 q 不好按，需要映射
+            push @q, $F[0];
+        } elsif ($a eq "r" && $ENV{OPTIMIZE_KEYS} =~ /r/i) {    # 声母 r 不好按，需要映射
+            push @r, $F[0];
+        } elsif ($a eq "y" && $ENV{OPTIMIZE_KEYS} =~ /y/i) {    # 声母 y 过于高频，需要映射
+            push @y, $F[0];
+        } elsif ($a eq "z" && $ENV{OPTIMIZE_KEYS} =~ /z/i) {    # 25 键方案，z 需要映射
+            push @z, $F[0];
+        } else {
+            print "$F[0].S\t", substr($F[1], 0, 1) if length($F[1]) > 1;
+        }
     }
   }
 
-  if ($ENV{USE_VOWEL}) {
-    # 使用韵母作为字根的补码
-    print "$F[0].Y\t", substr($F[1], -1);
-  } else {
-    # 使用首笔作为字根的补码
+  if ($ENV{USE_VOWEL}) {    # 使用韵母作为字根的补码
+    if ($ENV{USE_YAOLING_RULE}) {           # 妖灵的声母重新映射到声码，并且对应固定的韵码
+        if (length($F[1]) > 1) {
+            # 同声母的大根的韵码固定，后面跟声码约束一起输出
+        } else {
+            print "$F[0].Y\t", substr($F[1], -1);   # 小根复用灵明的韵码
+        }
+    } elsif ($ENV{USE_YUELING_RULE}) {      # 月灵的韵码仿日月的映射
+        my $pinyin = $F[2] // "";
+
+        $pinyin =~ s/^\s+//;                # 去掉开头的空白和后面的注释
+        $pinyin =~ s/\s+.*$//;              # 后面的注释
+        $pinyin = NFKD($pinyin);            # 展开音调
+        $pinyin =~ s/\p{M}//g;              # 去掉音调
+        $pinyin =~ s/^[^aeuio]+//;          # 去掉开头的声母
+        $pinyin = "" if $pinyin !~ /^[aeuio][a-z]*$/;   # 检查是不是合法韵母
+
+        if (length($pinyin) > 1) {          # 只映射长度大于 1 的韵母
+            push @{ $yueling_vowels{$pinyin} }, $F[0];
+        } else {
+            print "$F[0].Y\t", substr($F[1], -1);   # 直接用设置好的韵码
+        }
+    } else {
+        print "$F[0].Y\t", substr($F[1], -1);
+    }
+  } else {                  # 使用首笔作为字根的补码
     die "No stroke found for $F[0]!\n" unless exists $strokes{$F[0]};
     die "Can not optimize consonants and left/right strokes at the same time!\n" if
         $ENV{OPTIMIZE_KEYS} =~ /[0a-z]/i && $ENV{OPTIMIZE_KEYS} =~ /[6789A]/;   # A 是十六进制 10
@@ -498,6 +526,17 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "r sdfghjkl vnm") if @r > 0;
     print join(" ", map { "$_.S" } @y), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @y > 0;
     print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @z > 0;
+
+    for (sort keys %yaoling_consonants) {
+        print "# $_";
+        print join(" ", map { "$_.S" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, "qwrt yp sdfg hjkl xcvb nm");
+        print join(" ", map { "$_.Y" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, "aeuio");
+    }
+
+    for (sort keys %yueling_vowels) {
+        print "# $_";
+        print join(" ", map { "$_.Y" } @{ $yueling_vowels{$_} }), "\t", join(" ", split /\s*/, "aeuio");
+    }
 
     # 按拆分里字根首笔使用情况以及字频加权统计，字根首笔折(5)和竖(2)少，横(1)、撇(3)、点(4) 多
     %stroke_mapping = qw( 1 o 2 u 3 e 4 i 5 a   6 e 7 e 8 i 9 e A u );      # 首根笔画时，退火算法多次选择此映射

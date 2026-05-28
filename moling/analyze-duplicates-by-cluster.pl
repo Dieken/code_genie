@@ -15,6 +15,9 @@ use Getopt::Long;
 use List::Util qw/sum/;
 use autodie;
 
+if ($ENV{USE_YAOLING_RULE}) { $ENV{USE_YULING_RULE} = 1; $ENV{USE_VOWEL} = 1; }
+if ($ENV{USE_YUELING_RULE}) { $ENV{USE_YULING_RULE} = 1; $ENV{USE_VOWEL} = 1; }
+
 # 注意这个文件的韵码是字根的韵母，默认 USE_VOWEL 环境变量没定义时，
 # 韵码是用的首笔字根通过退火算法计算得出，应使用 output-xxxx
 # 目录下由 ./generate-root-chart.sh 脚本生成的 roots.tsv 文件

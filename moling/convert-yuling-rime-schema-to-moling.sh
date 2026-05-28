@@ -6,6 +6,9 @@ YULING="${1:-靈明輸入法_v3.12.0-beta.20260410.105121}"
 MOLING="${2:-output-20260506-000635}"
 YUSTAR="${3:-星陳輸入法_v3.11.0}"
 
+[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+
 echo "使用灵明方案 \"$YULING\"、星陈方案 \"$YUSTAR\" 和魔灵码表 \"$MOLING\""
 
 [ -d "$YULING/schema" -a -e "$MOLING/output-combined.txt" ] || {

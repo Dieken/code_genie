@@ -3,12 +3,15 @@
 : ${CODE_GENIE:=../target/release/code_genie}
 : ${DRYRUN:=false}
 
+[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+
 which caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
 [ "$DRYRUN" = true ] && DRYRUN=echo || DRYRUN=
 
 
 read -e -p "一句话备注： " comment
-comment="USE_VOWEL=$USE_VOWEL OPTIMIZE_KEYS=$OPTIMIZE_KEYS $0 $@ : $comment"
+comment="USE_VOWEL=$USE_VOWEL USE_YULING_RULE=$USE_YULING_RULE USE_YAOLING_RULE=$USE_YAOLING_RULE USE_YUELING_RULE=$USE_YUELING_RULE OPTIMIZE_KEYS=$OPTIMIZE_KEYS $0 $@ : $comment"
 
 
 TS=$(date +%Y%m%d-%H%M%S)
