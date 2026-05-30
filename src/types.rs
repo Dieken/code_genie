@@ -179,6 +179,19 @@ pub struct Metrics {
     pub dist_deviation: f64,
 }
 
+/// 全码各指标的分数分量（用于日志输出，避免在日志代码中重复算分公式）
+#[derive(Clone, Copy, Default)]
+pub struct MetricScores {
+    pub collision_count: f64,
+    pub collision_rate: f64,
+    pub equivalence: f64,
+    pub equiv_cv: f64,
+    pub distribution: f64,
+    pub total_full: f64,
+    pub total_simple: f64,
+    pub total: f64,
+}
+
 /// 简码评估指标
 #[derive(Clone, Copy, Default)]
 pub struct SimpleMetrics {

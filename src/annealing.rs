@@ -685,9 +685,15 @@ pub fn simulated_annealing(
 
     if thread_id == 0 {
         let m = &best_metrics;
+        let scores = evaluator.get_metric_scores(ctx);
         println!(
-            "   [T0] 初始化完成 | 得分: {:.4} | 重码: {} 重码率: {:.4}% 当量: {:.4}",
-            best_score, m.collision_count, m.collision_rate * 100.0, m.equiv_mean
+            "   [T0] 初始化完成 | 得分: {:.4} | 重码: {}({:.4}) 重码率: {:.4}%({:.4}) 当量: {:.4}({:.4}) CV: {:.4}({:.4}) 分布: {:.4}({:.4})",
+            best_score,
+            m.collision_count, scores.collision_count,
+            m.collision_rate * 100.0, scores.collision_rate,
+            m.equiv_mean, scores.equivalence,
+            m.equiv_cv, scores.equiv_cv,
+            m.dist_deviation, scores.distribution,
         );
     }
 
@@ -778,10 +784,16 @@ pub fn simulated_annealing(
                 let m = best_metrics;
                 let elapsed = sa_start.elapsed().as_secs_f64();
                 let speed = if elapsed > 0.0 { step as f64 / elapsed } else { 0.0 };
+                let scores = evaluator.get_metric_scores(ctx);
                 println!(
-                    "   [T0] 步数 {}/{} | {:.1} 万步/分钟 | 温度 {:.6} | 重码:{} 重码率:{:.4}% 当量:{:.4} | 得分: {:.4}",
-                    step, steps, speed * 60.0 / 10000.0, temp, m.collision_count, m.collision_rate * 100.0,
-                    m.equiv_mean, best_score
+                    "   [T0] 步数 {}/{} | {:.1} 万步/分钟 | 温度 {:.6} | 重码:{}({:.4}) 重码率:{:.4}%({:.4}) 当量:{:.4}({:.4}) CV:{:.4}({:.4}) 分布:{:.4}({:.4}) | 得分: {:.4}",
+                    step, steps, speed * 60.0 / 10000.0, temp,
+                    m.collision_count, scores.collision_count,
+                    m.collision_rate * 100.0, scores.collision_rate,
+                    m.equiv_mean, scores.equivalence,
+                    m.equiv_cv, scores.equiv_cv,
+                    m.dist_deviation, scores.distribution,
+                    best_score
                 );
                 last_best_score = best_score;
             }
@@ -852,9 +864,15 @@ pub fn simulated_annealing(
             let m = evaluator.get_metrics(ctx);
             let elapsed = sa_start.elapsed().as_secs_f64();
             let speed = if elapsed > 0.0 { step as f64 / elapsed } else { 0.0 };
+            let scores = evaluator.get_metric_scores(ctx);
             println!(
-                "   [T0] 进度: {}% | {:.1} 万步/分钟 | 基温: {:.6} | 重码={} 重码率={:.4}% 当量={:.4} | 当前: {:.4} 🏆最优: {:.4}",
-                pct, speed * 60.0 / 10000.0, base_temp, m.collision_count, m.collision_rate * 100.0, m.equiv_mean,
+                "   [T0] 进度: {}% | {:.1} 万步/分钟 | 基温: {:.6} | 重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) CV={:.4}({:.4}) 分布={:.4}({:.4}) | 当前: {:.4} 🏆最优: {:.4}",
+                pct, speed * 60.0 / 10000.0, base_temp,
+                m.collision_count, scores.collision_count,
+                m.collision_rate * 100.0, scores.collision_rate,
+                m.equiv_mean, scores.equivalence,
+                m.equiv_cv, scores.equiv_cv,
+                m.dist_deviation, scores.distribution,
                 evaluator.get_score(ctx), best_score
             );
         }

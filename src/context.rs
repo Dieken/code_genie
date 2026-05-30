@@ -10,6 +10,7 @@ use crate::types::{
     LogicalRoot, RootGroup, ScaleConfig, SimpleCodeConfig, WeightConfig, KEY_SPACE, EQUIV_TABLE_SIZE,
     GROUP_MARKER,
 };
+use crate::config::TargetsConfig;
 
 /// 等价表类型别名
 pub type EquivTable = [[f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
@@ -60,6 +61,8 @@ pub struct OptContext {
     pub group_freq_sum: Vec<f64>,
     /// code_base 的幂次表（code_base_powers[i] = code_base^i），用于增量编码计算
     pub code_base_powers: Vec<usize>,
+    /// 目标配置（用于目标偏差评分和 _max 硬约束检查）
+    pub targets_config: TargetsConfig,
 }
 
 impl OptContext {
@@ -73,6 +76,7 @@ impl OptContext {
         scale_config: ScaleConfig,
         simple_config: SimpleCodeConfig,
         weights: WeightConfig,
+        targets_config: TargetsConfig,
     ) -> Self {
         let enable_simple_code = weights.enable_simple_code;
         let mut root_to_group: HashMap<String, usize> = HashMap::new();
@@ -204,6 +208,7 @@ impl OptContext {
             root_full_codes,
             group_freq_sum,
             code_base_powers,
+            targets_config,
         }
     }
 

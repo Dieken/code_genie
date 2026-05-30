@@ -6,7 +6,7 @@ use rand::prelude::*;
 use std::collections::HashMap;
 
 use crate::context::OptContext;
-use crate::types::{KeyDistConfig, Metrics, SimpleMetrics, EQUIV_TABLE_SIZE};
+use crate::types::{KeyDistConfig, MetricScores, Metrics, SimpleMetrics, EQUIV_TABLE_SIZE};
 
 // =========================================================================
 // 简码评估器
@@ -263,18 +263,68 @@ impl SimpleEvaluator {
     fn compute_simple_score(&self, ctx: &OptContext) -> f64 {
         let sm = self.get_simple_metrics(ctx);
 
-        let freq_loss = (1.0 - sm.weighted_freq_coverage) * ctx.scale_config.simple_freq;
-        let equiv_loss = sm.equiv_mean * ctx.scale_config.simple_equiv;
-        let dist_loss = sm.dist_deviation * ctx.scale_config.simple_dist;
-        let collision_count_loss =
-            sm.collision_count as f64 * ctx.scale_config.simple_collision_count;
-        let collision_rate_loss = sm.collision_rate * ctx.scale_config.simple_collision_rate;
+        if ctx.targets_config.simple_code.enabled {
+            let t = &ctx.targets_config.simple_code;
+            let lw = t.low_weight;
+            let mut score = 0.0;
 
-        ctx.weights.simple_weight_freq * freq_loss
-            + ctx.weights.simple_weight_equiv * equiv_loss
-            + ctx.weights.simple_weight_dist * dist_loss
-            + ctx.weights.simple_weight_collision_count * collision_count_loss
-            + ctx.weights.simple_weight_collision_rate * collision_rate_loss
+            // freq（频率覆盖损失 = 1 - coverage）
+            {
+                let v = 1.0 - sm.weighted_freq_coverage;
+                let target_v = 1.0 - t.freq;   // 目标损失 = 1 - 目标覆盖率
+                let s = ctx.scale_config.simple_freq;
+                let d = (v - target_v).max(0.0) * s;
+                score += ctx.weights.simple_weight_freq * (d + d * d + lw * (v * s));
+            }
+
+            // equiv
+            {
+                let v = sm.equiv_mean;
+                let s = ctx.scale_config.simple_equiv;
+                let d = (v - t.equiv).max(0.0) * s;
+                score += ctx.weights.simple_weight_equiv * (d + d * d + lw * (v * s));
+            }
+
+            // dist
+            {
+                let v = sm.dist_deviation;
+                let s = ctx.scale_config.simple_dist;
+                let d = (v - t.dist).max(0.0) * s;
+                score += ctx.weights.simple_weight_dist * (d + d * d + lw * (v * s));
+            }
+
+            // collision_count
+            {
+                let v = sm.collision_count as f64;
+                let s = ctx.scale_config.simple_collision_count;
+                let d = (v - t.collision_count).max(0.0) * s;
+                score += ctx.weights.simple_weight_collision_count * (d + d * d + lw * (v * s));
+            }
+
+            // collision_rate
+            {
+                let v = sm.collision_rate;
+                let s = ctx.scale_config.simple_collision_rate;
+                let d = (v - t.collision_rate).max(0.0) * s;
+                score += ctx.weights.simple_weight_collision_rate * (d + d * d + lw * (v * s));
+            }
+
+            score
+        } else {
+            // 原有绝对值最小化模式（保持不变）
+            let freq_loss = (1.0 - sm.weighted_freq_coverage) * ctx.scale_config.simple_freq;
+            let equiv_loss = sm.equiv_mean * ctx.scale_config.simple_equiv;
+            let dist_loss = sm.dist_deviation * ctx.scale_config.simple_dist;
+            let collision_count_loss =
+                sm.collision_count as f64 * ctx.scale_config.simple_collision_count;
+            let collision_rate_loss = sm.collision_rate * ctx.scale_config.simple_collision_rate;
+
+            ctx.weights.simple_weight_freq * freq_loss
+                + ctx.weights.simple_weight_equiv * equiv_loss
+                + ctx.weights.simple_weight_dist * dist_loss
+                + ctx.weights.simple_weight_collision_count * collision_count_loss
+                + ctx.weights.simple_weight_collision_rate * collision_rate_loss
+        }
     }
 
     /// 获取简码得分
@@ -614,42 +664,164 @@ impl Evaluator {
         self.current_codes[ci] = new_code;
     }
 
+    /// 执行全码 _max 硬约束检查
+    /// 返回 true 表示通过（未超限），false 表示超限需回滚
+    #[inline(always)]
+    fn check_full_code_max(&self, ctx: &OptContext) -> bool {
+        let t = &ctx.targets_config.full_code;
+
+        if t.collision_count_max > 0.0
+            && self.total_collisions as f64 > t.collision_count_max
+        {
+            return false;
+        }
+
+        if t.collision_rate_max > 0.0 {
+            let rate = self.collision_frequency as f64 * self.inv_total_frequency;
+            if rate > t.collision_rate_max {
+                return false;
+            }
+        }
+
+        if t.equivalence_max > 0.0 {
+            let equiv = self.total_equiv_weighted * self.inv_total_frequency;
+            if equiv > t.equivalence_max {
+                return false;
+            }
+        }
+
+        if t.equiv_cv_max > 0.0 {
+            let cv = self.calc_equiv_cv();
+            if cv > t.equiv_cv_max {
+                return false;
+            }
+        }
+
+        if t.distribution_max > 0.0 {
+            let dist = self.calc_distribution_deviation(&ctx.key_dist_config);
+            if dist > t.distribution_max {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// 执行简码 _max 硬约束检查
+    /// 返回 true 表示通过（未超限），false 表示超限需回滚
+    #[inline(always)]
+    fn check_simple_code_max(&self, ctx: &OptContext) -> bool {
+        let t = &ctx.targets_config.simple_code;
+        if let Some(ref se) = self.simple_eval {
+            let sm = se.get_simple_metrics(ctx);
+
+            if t.collision_count_max > 0.0
+                && sm.collision_count as f64 > t.collision_count_max
+            {
+                return false;
+            }
+            if t.collision_rate_max > 0.0 && sm.collision_rate > t.collision_rate_max {
+                return false;
+            }
+            // freq_max 是覆盖率下限：覆盖率低于此值时拒绝
+            if t.freq_max > 0.0 && sm.weighted_freq_coverage < t.freq_max {
+                return false;
+            }
+            if t.equiv_max > 0.0 && sm.equiv_mean > t.equiv_max {
+                return false;
+            }
+            if t.dist_max > 0.0 && sm.dist_deviation > t.dist_max {
+                return false;
+            }
+        }
+        true
+    }
+
     /// 计算全码得分
     #[inline(always)]
     pub fn compute_full_score(&self, ctx: &OptContext) -> f64 {
-        let mut score = ctx.weights.weight_collision_count
-            * self.total_collisions as f64
-            * ctx.scale_config.collision_count;
+        if ctx.targets_config.full_code.enabled {
+            let t = &ctx.targets_config.full_code;
+            let lw = t.low_weight;
+            let mut score = 0.0;
 
-        if ctx.weights.weight_collision_rate > 0.0 {
-            let collision_rate = self.collision_frequency as f64 * self.inv_total_frequency;
-            score += ctx.weights.weight_collision_rate
-                * collision_rate
-                * ctx.scale_config.collision_rate;
+            // collision_count
+            {
+                let v = self.total_collisions as f64;
+                let s = ctx.scale_config.collision_count;
+                let d = (v - t.collision_count).max(0.0) * s;
+                score += ctx.weights.weight_collision_count * (d + d * d + lw * (v * s));
+            }
+
+            // collision_rate
+            if ctx.weights.weight_collision_rate > 0.0 {
+                let v = self.collision_frequency as f64 * self.inv_total_frequency;
+                let s = ctx.scale_config.collision_rate;
+                let d = (v - t.collision_rate).max(0.0) * s;
+                score += ctx.weights.weight_collision_rate * (d + d * d + lw * (v * s));
+            }
+
+            // equivalence (equiv_mean)
+            if ctx.weights.weight_equivalence > 0.0 {
+                let v = self.total_equiv_weighted * self.inv_total_frequency;
+                let s = ctx.scale_config.equivalence;
+                let d = (v - t.equivalence).max(0.0) * s;
+                score += ctx.weights.weight_equivalence * (d + d * d + lw * (v * s));
+            }
+
+            // equiv_cv
+            if ctx.weights.weight_equiv_cv > 0.0 {
+                let v = self.calc_equiv_cv();
+                let s = ctx.scale_config.equiv_cv;
+                let d = (v - t.equiv_cv).max(0.0) * s;
+                score += ctx.weights.weight_equiv_cv * (d + d * d + lw * (v * s));
+            }
+
+            // distribution
+            if ctx.weights.weight_distribution > 0.0 {
+                let v = self.calc_distribution_deviation(&ctx.key_dist_config);
+                let s = ctx.scale_config.distribution;
+                let d = (v - t.distribution).max(0.0) * s;
+                score += ctx.weights.weight_distribution * (d + d * d + lw * (v * s));
+            }
+
+            score
+        } else {
+            // 原有绝对值最小化模式（保持不变）
+            let mut score = ctx.weights.weight_collision_count
+                * self.total_collisions as f64
+                * ctx.scale_config.collision_count;
+
+            if ctx.weights.weight_collision_rate > 0.0 {
+                let collision_rate = self.collision_frequency as f64 * self.inv_total_frequency;
+                score += ctx.weights.weight_collision_rate
+                    * collision_rate
+                    * ctx.scale_config.collision_rate;
+            }
+
+            if ctx.weights.weight_equivalence > 0.0 {
+                let weighted_equiv = self.total_equiv_weighted * self.inv_total_frequency;
+                score += ctx.weights.weight_equivalence
+                    * weighted_equiv
+                    * ctx.scale_config.equivalence;
+            }
+
+            if ctx.weights.weight_equiv_cv > 0.0 {
+                let equiv_cv = self.calc_equiv_cv();
+                score += ctx.weights.weight_equiv_cv
+                    * equiv_cv
+                    * ctx.scale_config.equiv_cv;
+            }
+
+            if ctx.weights.weight_distribution > 0.0 {
+                let dist_deviation = self.calc_distribution_deviation(&ctx.key_dist_config);
+                score += ctx.weights.weight_distribution
+                    * dist_deviation
+                    * ctx.scale_config.distribution;
+            }
+
+            score
         }
-
-        if ctx.weights.weight_equivalence > 0.0 {
-            let weighted_equiv = self.total_equiv_weighted * self.inv_total_frequency;
-            score += ctx.weights.weight_equivalence
-                * weighted_equiv
-                * ctx.scale_config.equivalence;
-        }
-
-        if ctx.weights.weight_equiv_cv > 0.0 {
-            let equiv_cv = self.calc_equiv_cv();
-            score += ctx.weights.weight_equiv_cv
-                * equiv_cv
-                * ctx.scale_config.equiv_cv;
-        }
-
-        if ctx.weights.weight_distribution > 0.0 {
-            let dist_deviation = self.calc_distribution_deviation(&ctx.key_dist_config);
-            score += ctx.weights.weight_distribution
-                * dist_deviation
-                * ctx.scale_config.distribution;
-        }
-
-        score
     }
 
     /// 计算综合得分
@@ -725,6 +897,87 @@ impl Evaluator {
         }
     }
 
+    /// 获取各指标的分数分量（用于日志输出，复用算分逻辑，不重复公式）
+    pub fn get_metric_scores(&self, ctx: &OptContext) -> MetricScores {
+        // 复用 compute_full_score 的逻辑，但拆分为各指标分量
+        let score_for = |v: f64, target: f64, scale: f64, weight: f64, lw: f64| -> f64 {
+            if ctx.targets_config.full_code.enabled {
+                let d = (v - target).max(0.0) * scale;
+                weight * (d + d * d + lw * (v * scale))
+            } else {
+                weight * v * scale
+            }
+        };
+
+        let t = &ctx.targets_config.full_code;
+        let lw = t.low_weight;
+
+        let s_collision_count = score_for(
+            self.total_collisions as f64,
+            t.collision_count,
+            ctx.scale_config.collision_count,
+            ctx.weights.weight_collision_count,
+            lw,
+        );
+        let s_collision_rate = score_for(
+            self.collision_frequency as f64 * self.inv_total_frequency,
+            t.collision_rate,
+            ctx.scale_config.collision_rate,
+            ctx.weights.weight_collision_rate,
+            lw,
+        );
+        let s_equivalence = score_for(
+            self.total_equiv_weighted * self.inv_total_frequency,
+            t.equivalence,
+            ctx.scale_config.equivalence,
+            ctx.weights.weight_equivalence,
+            lw,
+        );
+        let s_equiv_cv = score_for(
+            self.calc_equiv_cv(),
+            t.equiv_cv,
+            ctx.scale_config.equiv_cv,
+            ctx.weights.weight_equiv_cv,
+            lw,
+        );
+        let s_distribution = score_for(
+            self.calc_distribution_deviation(&ctx.key_dist_config),
+            t.distribution,
+            ctx.scale_config.distribution,
+            ctx.weights.weight_distribution,
+            lw,
+        );
+
+        let total_full = s_collision_count + s_collision_rate + s_equivalence + s_equiv_cv + s_distribution;
+
+        let total_simple = if ctx.enable_simple_code {
+            if let Some(ref se) = self.simple_eval {
+                se.cached_simple_score
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let total = if ctx.enable_simple_code {
+            ctx.weights.weight_full_code * total_full + ctx.weights.weight_simple_code * total_simple
+        } else {
+            total_full
+        };
+
+        MetricScores {
+            collision_count: s_collision_count,
+            collision_rate: s_collision_rate,
+            equivalence: s_equivalence,
+            equiv_cv: s_equiv_cv,
+            distribution: s_distribution,
+            total_full,
+            total_simple,
+            total,
+        }
+    }
+
     /// 获取简码评估指标
     pub fn get_simple_metrics(&self, ctx: &OptContext) -> SimpleMetrics {
         if let Some(ref se) = self.simple_eval {
@@ -782,6 +1035,36 @@ impl Evaluator {
 
         if needs_simple {
             self.rebuild_simple(ctx, assignment);
+        }
+
+        // _max 硬约束检查：超限则直接回滚，不进入得分计算
+        if !self.check_full_code_max(ctx) {
+            self.key_weighted_usage[new_key as usize] -= gfs;
+            self.key_weighted_usage[old_key as usize] += gfs;
+            assignment[r] = old_key;
+            for &ci in &ctx.group_to_chars[r] {
+                self.update_char(ctx, assignment, ci);
+            }
+            if needs_simple {
+                self.rebuild_simple(ctx, assignment);
+            }
+            self.cached_score = old_score;
+            self.score_dirty = false;
+            return false;
+        }
+        if ctx.enable_simple_code && needs_simple && !self.check_simple_code_max(ctx) {
+            self.key_weighted_usage[new_key as usize] -= gfs;
+            self.key_weighted_usage[old_key as usize] += gfs;
+            assignment[r] = old_key;
+            for &ci in &ctx.group_to_chars[r] {
+                self.update_char(ctx, assignment, ci);
+            }
+            if needs_simple {
+                self.rebuild_simple(ctx, assignment);
+            }
+            self.cached_score = old_score;
+            self.score_dirty = false;
+            return false;
         }
 
         self.score_dirty = true;
@@ -849,6 +1132,48 @@ impl Evaluator {
 
         if needs_simple {
             self.rebuild_simple(ctx, assignment);
+        }
+
+        // _max 硬约束检查：超限则直接回滚，不进入得分计算
+        if !self.check_full_code_max(ctx) {
+            self.key_weighted_usage[k2 as usize] -= gfs1;
+            self.key_weighted_usage[k1 as usize] += gfs1;
+            self.key_weighted_usage[k1 as usize] -= gfs2;
+            self.key_weighted_usage[k2 as usize] += gfs2;
+            assignment[r1] = k1;
+            assignment[r2] = k2;
+            for &ci in &ctx.group_to_chars[r1] {
+                self.update_char(ctx, assignment, ci);
+            }
+            for &ci in &ctx.group_to_chars[r2] {
+                self.update_char(ctx, assignment, ci);
+            }
+            if needs_simple {
+                self.rebuild_simple(ctx, assignment);
+            }
+            self.cached_score = old_score;
+            self.score_dirty = false;
+            return false;
+        }
+        if ctx.enable_simple_code && needs_simple && !self.check_simple_code_max(ctx) {
+            self.key_weighted_usage[k2 as usize] -= gfs1;
+            self.key_weighted_usage[k1 as usize] += gfs1;
+            self.key_weighted_usage[k1 as usize] -= gfs2;
+            self.key_weighted_usage[k2 as usize] += gfs2;
+            assignment[r1] = k1;
+            assignment[r2] = k2;
+            for &ci in &ctx.group_to_chars[r1] {
+                self.update_char(ctx, assignment, ci);
+            }
+            for &ci in &ctx.group_to_chars[r2] {
+                self.update_char(ctx, assignment, ci);
+            }
+            if needs_simple {
+                self.rebuild_simple(ctx, assignment);
+            }
+            self.cached_score = old_score;
+            self.score_dirty = false;
+            return false;
         }
 
         self.score_dirty = true;
