@@ -94,16 +94,18 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 ## 检查结果
 
 1. 使用 https://ceping.shurufa.app 查看 `output-<TIMESTAMP>/output-combined.txt` 码表的指标，注意在「首页」里设置「編碼終止指示符] 为 "aeuio_" (不要引号)；
-2. 运行 `./stat-moling-roots.pl --mabiao output-<TIMESTAMP>/output-combined.txt`；
-3. 运行 `./generate-root-chart.sh output-<TIMESTAMP>` 生成字根表和字根图，也可以指定到 `output-<TIMESTAMP>/thread-<NN>` 目录；
+2. 运行 `./compare-optimization-results.sh | tabulate -f plain` 批量检查 `output-<TIMESTAMP>/thread-<NN>/output-combined.txt`，注意脚本末尾的过滤条件比较严，完整结果见生成的 `all-results.txt`；
+3. 运行 `./stat-moling-roots.pl --mabiao output-<TIMESTAMP>/output-combined.txt`；
+4. 运行 `./generate-root-chart.sh output-<TIMESTAMP>` 生成字根表和字根图，也可以指定到 `output-<TIMESTAMP>/thread-<NN>` 目录；
 
 ## 字根练习
 
 1. https://shurufa.app/ime/moling#%E7%BB%83%E4%B9%A0
 2. https://zigen-trainer.hch12907.dev/
-3. https://chs.hertz.ltd/#practice
-4. https://unyaa-code.github.io/root-practice/
-5. https://github.com/Dieken/typer
+3. https://github.com/mogud/yu_tool
+4. https://chs.hertz.ltd/#practice
+5. https://unyaa-code.github.io/root-practice/
+6. https://github.com/Dieken/typer
 
 ## 文件说明
 
@@ -121,6 +123,8 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
                                   分析 `batch-test-weights.sh` 的运行结果
     * `convert-yuling-rime-schema-to-moling.sh`
                                   转换灵明 RIME 方案为魔灵 RIME 方案，支持环境变量 `USE_YULING_RULE`
+    * `compare-optimization-results.sh`
+                                  比较 `output-<TIMESTAMP>/thread-<NN>` 的优化结果，依赖[命令行版本的宇浩测评](https://github.com/Dieken/yuhao-assess/tree/cli)
 
 * 第三方文件
     * `beiyu-char-freq.txt`       北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm
@@ -140,6 +144,7 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
     * `pair_equivalence.txt`      键对当量表，改自 `../pair_equivalence.txt`
     * `key_distribution.txt`      键位分布目标，改自 `../key_distribution.txt`
     * `config.toml.tmpl`          批处理优化的配置文件模版
+    * `moling.jsonc`              脚本 `compare-optimization-results.sh` 的方案配置文件
 
 * 脚本生成的文件
     * `chaifen.txt`               生成的拆分表
@@ -159,4 +164,5 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
     * `config-c*-r*-e*.toml`      批处理优化的配置文件
     * `batch-test-weights.txt`    批处理优化的结果分析, CSV 版本
     * `batch-test-weights.html`   批处理优化的结果分析, HTML 版本
+    * `all-results.txt`           脚本 `compare-optimization-results.sh` 的运行结果
 
