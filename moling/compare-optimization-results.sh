@@ -3,6 +3,8 @@
 set -euo pipefail
 shopt -s failglob
 
+which tabulate >/dev/null && TABULATE="tabulate -f plain" || TABULATE=cat
+
 : "${YUHAO_ASSESS:=../../yuhao-assess}"
 
 [ -f "$YUHAO_ASSESS/src/cli/index.ts" ] || YUHAO_ASSESS=../../yuhao-assess/src
@@ -20,7 +22,7 @@ for f in */thread*/output-combined.txt; do
     [ -f $d/evaluation.txt ] && continue
     date
     echo $f
-    npm --prefix="$YUHAO_ASSESS" run cli --scheme moling.jsonc $f --format=table --output $d/evaluation.txt
+    npm --prefix="$YUHAO_ASSESS" run cli -- --scheme moling.jsonc $f --format=table --output $d/evaluation.txt
     echo
 done
 
@@ -55,4 +57,4 @@ perl -CSDA -lanE 'print "$F[0] @F[1..4] @F[13..28]" if
      $F[14] <= 0.00031 && $F[16] <= 0.00028 &&
      $F[18] < 0.0020 && $F[20] < 0.0020 &&
      $F[22] < 1.270 && $F[24] < 1.270' all-results.txt |
-    perl -CSDA -lanE 'print "@F[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20]"' | sort -k4,4n
+    perl -CSDA -lanE 'print "@F[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20]"' | sort -k4,4n | $TABULATE

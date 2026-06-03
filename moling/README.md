@@ -68,17 +68,28 @@ USE_YAOLING_RULE=1 ./optimize.sh
 USE_YUELING_RULE=1 ./optimize.sh
 ```
 
-注意，开启按键映射后，`roots.tsv` 中的字根声码不是最终版，关闭 `USE_VOWEL` 使用字根首笔时，
-`roots.tsv` 中的字根韵码不是最终版，最终的字根编码以码灵输出的 `output-TIMESTAMP/output-keymap.txt` 为准。
+注意：开启按键映射后，`roots.txt` 中的字根声码不是最终版，关闭 `USE_VOWEL` 使用字根首笔时，
+`roots.txt` 中的字根韵码不是最终版，最终的字根编码以码灵输出的 `output-TIMESTAMP/output-keymap.txt` 为准。
 
-可以使用 `./batch-test-weights.sh` 来探测合理的权重参数范围：
+
+## 检查结果
+
+1. 使用 https://ceping.shurufa.app 查看 `output-<TIMESTAMP>/output-combined.txt` 码表的指标，注意在「首页」里设置「編碼終止指示符] 为 "aeuio_" (不要引号)；
+2. 运行 `./compare-optimization-results.sh` 批量检查 `output-<TIMESTAMP>/thread-<NN>/output-combined.txt`，注意脚本末尾的过滤条件比较严，完整结果见生成的 `all-results.txt`；
+3. 运行 `./stat-moling-roots.pl --mabiao output-<TIMESTAMP>/output-combined.txt`；
+4. 运行 `./generate-root-chart.sh output-<TIMESTAMP>` 生成字根表和字根图，也可以指定到 `output-<TIMESTAMP>/thread-<NN>` 目录；
+
+
+## 优化指北
+
+1. 可以使用 `./batch-test-weights.sh` 来探测合理的权重参数范围：
 
 ```sh
 ./batch-test-weights.sh
 ./analyze-results-of-batch-test-weights.sh
 ```
 
-可以使用 `./analyze-duplicates-by-cluster.pl` 来检查字根聚类的影响：
+2. 可以使用 `./analyze-duplicates-by-cluster.pl` 来检查字根聚类的影响：
 
 ```sh
 # 使用 roots-cluster.txt 中指定的聚类
@@ -91,12 +102,14 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 ./analyze-duplicates-by-cluster.sh | tabulate -s '\t' -f plain
 ```
 
-## 检查结果
+3. `config.toml` 为魔灵定制，其它方案应注意调整：
 
-1. 使用 https://ceping.shurufa.app 查看 `output-<TIMESTAMP>/output-combined.txt` 码表的指标，注意在「首页」里设置「編碼終止指示符] 为 "aeuio_" (不要引号)；
-2. 运行 `./compare-optimization-results.sh | tabulate -f plain` 批量检查 `output-<TIMESTAMP>/thread-<NN>/output-combined.txt`，注意脚本末尾的过滤条件比较严，完整结果见生成的 `all-results.txt`；
-3. 运行 `./stat-moling-roots.pl --mabiao output-<TIMESTAMP>/output-combined.txt`；
-4. 运行 `./generate-root-chart.sh output-<TIMESTAMP>` 生成字根表和字根图，也可以指定到 `output-<TIMESTAMP>/thread-<NN>` 目录；
+    1. `total_steps` 可取 8000000 用于调整参数时的试验，当调大步数时，观察日志，如果在某一进度百分比后过早停滞，说明已经收敛，更多的步数只是浪费；
+    2. 观察日志里的优化真正有效时起始温度，保留开头的 20~30% 步数用于探索，以及优化进展比较大的温度区间、优化停滞时结束温度，适度调整 temp_start, temp_end, comfort_temp，可以把 `config.toml` 和日志、代码丢给大语言模型分析，让其给出解释和建议；
+    3. 先注释掉 `[scale]` 段，通过自动校正得出合适的值设置上，以保证调整参数时的稳定性；
+    4. 先关掉 `[targets.full_code]` 段，观察多次优化的结果再设置上，目标应比优化的最好结果略微低一点，以提供足够的优化动力；
+    5. 理解[基于目标偏差优化](https://github.com/Dieken/code_genie/commit/ad79690efe454140886ab69bf6341f2a07561307)的设计原理，`[weights.full_code]` 用作指标重要性的度量，总和应为 1，`[scale]` 作为优化动力强度的度量，优化时主要调整这两处，注意修改 `[scale]` 后，优化得分跟之前的轮次再无可比性，只能比较指标数值本身。`[targets.full_code]` 经过多次摸底后应少改，以方便朝既定目标调整参数对比。
+
 
 ## 字根练习
 
@@ -106,6 +119,7 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 4. https://chs.hertz.ltd/#practice
 5. https://unyaa-code.github.io/root-practice/
 6. https://github.com/Dieken/typer
+
 
 ## 文件说明
 
