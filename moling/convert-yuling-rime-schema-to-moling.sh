@@ -234,6 +234,8 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
             if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
                 for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
+                $chaifen{$a[0]} = \@b;
+
                 $code .= substr($roots{$b[0]}, 0, 1);
                 $code .= substr($roots{$b[0]}, 1, 1) if length($roots{$b[0]}) > 2;
                 $code .= substr($roots{$b[0]}, -1) if @b == 1;
@@ -274,12 +276,37 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
     for (@a) { die "Unknown char in $ARGV: $_\n" unless exists $codes{$_}; }
 
     if (@a == 2) {
-        if (length($codes{$a[0]}) == 2) {
-            warn "Ignore word $F[0] because full code of $a[0] is two letters.\n";
-            next;
-        }
+        if ($ENV{USE_YULING_RULE}) {        # 使用宇浩灵明二字词编码规则
+            my $code = "";
+            my $seq = $chaifen{ $a[0] };
+            if (@$seq == 1) {   # 首字是单根字
+                $code .= substr($roots{ $seq->[0] }, 0, length($roots{ $seq->[0] }) - 1 );  # 只取 AS，不要 Y
+            } else {
+                $code .= substr($roots{ $seq->[0] }, 0, 1);     # 首根大码
+                $code .= substr($roots{ $seq->[1] }, 0, 1);     # 次根大码
+            }
 
-        print "$F[0]\t", substr($codes{$a[0]}, 0, 2), substr($codes{$a[1]}, 0, 2);
+            $seq = $chaifen{ $a[1] };
+            $code .= substr($roots{ $seq->[0] }, 0, 1);     # 首根大码
+            $code .= substr($roots{ $seq->[1] }, 0, 1) if @$seq > 1;    # 次根大码
+
+            if (@$seq == 3) {       # 三根字
+                $code .= substr($roots{ $seq->[2] }, 0, 1); # 三根大码
+            } elsif (@$seq > 3) {   # 四根及以上根字，首根是小根，取三根大码，否则取末根大码
+                $code .= length($roots{ $seq->[0] }) < 3 ? substr($roots{ $seq->[2] }, 0, 1) : substr($roots{ $seq->[-1] }, 0, 1);
+            }
+
+            $code .= substr($roots{ $seq->[-1] }, 1);       # 末根 SY
+
+            print "$F[0]\t", substr($code, 0, 4);
+        } else {                            # 使用魔灵二字词编码规则
+            if (length($codes{$a[0]}) == 2) {
+                warn "Ignore word $F[0] because full code of $a[0] is two letters.\n";
+                next;
+            }
+
+            print "$F[0]\t", substr($codes{$a[0]}, 0, 2), substr($codes{$a[1]}, 0, 2);
+        }
     } elsif (@a == 3) {
         print "$F[0]\t", substr($codes{$a[0]}, 0, 1), substr($codes{$a[1]}, 0, 1), substr($codes{$a[2]}, 0, 2);
     } elsif (@a >= 4) {
