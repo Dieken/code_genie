@@ -1,0 +1,1 @@
+USE_VOWEL= OPTIMIZE_KEYS= ./optimize.sh  : 从当量和分布偏差权重各取 0.01 到重码率权重
