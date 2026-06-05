@@ -13,6 +13,24 @@ use crate::types::{
     try_resolve_rule, LogicalRoot, GROUP_MARKER,
 };
 
+/// 容错写文件：失败时打印警告而非 panic。
+///
+/// release 构建启用了 `panic = "abort"`，若用 `unwrap()` 则任何一次写盘失败
+/// （磁盘满、权限、Ctrl-C 中断保存时的竞态等）都会直接 SIGABRT 崩溃，
+/// 并丢失已算出的结果。改为容错可保证尽可能多地落盘。
+fn write_file_lenient<P: AsRef<std::path::Path>>(path: P, contents: &str) {
+    if let Err(e) = fs::write(path.as_ref(), contents) {
+        eprintln!("⚠️ 警告：写入文件失败 {}: {}", path.as_ref().display(), e);
+    }
+}
+
+/// 容错创建目录：失败时打印警告而非 panic。
+fn create_dir_lenient<P: AsRef<std::path::Path>>(path: P) {
+    if let Err(e) = fs::create_dir_all(path.as_ref()) {
+        eprintln!("⚠️ 警告：创建目录失败 {}: {}", path.as_ref().display(), e);
+    }
+}
+
 /// 统计字根使用频率
 pub fn count_root_usage(ctx: &OptContext) -> HashMap<String, u64> {
     let mut usage: HashMap<String, u64> = HashMap::new();
@@ -232,7 +250,7 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
         out.push_str(&format!("{}\t{}\n", ch, code_str));
     }
 
-    fs::write(format!("{}/output-combined.txt", dir), out).unwrap();
+    write_file_lenient(format!("{}/output-combined.txt", dir), &out);
 }
 
 /// 保存简码输出
@@ -357,7 +375,7 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         out.push_str(&format!("# 该级简码覆盖 {} 字\n", level_winners.len()));
     }
 
-    fs::write(format!("{}/output-simple-codes.txt", dir), out).unwrap();
+    write_file_lenient(format!("{}/output-simple-codes.txt", dir), &out);
 }
 
 /// 保存线程结果
@@ -372,7 +390,7 @@ pub fn save_thread_results(
     root_usage: &HashMap<String, u64>,
 ) {
     let thread_dir = format!("{}/thread-{:02}", output_dir, thread_id);
-    fs::create_dir_all(&thread_dir).expect("无法创建线程输出目录");
+    create_dir_lenient(&thread_dir);
 
     let mut root_out = String::new();
     root_out.push_str(&format!("# 线程: {}\n", thread_id));
@@ -402,7 +420,7 @@ pub fn save_thread_results(
         assignment,
         root_usage,
     );
-    fs::write(format!("{}/output-keymap.txt", thread_dir), &root_out).unwrap();
+    write_file_lenient(format!("{}/output-keymap.txt", thread_dir), &root_out);
 
     // 保存编码结果
     let mut root_to_key: HashMap<String, u8> = HashMap::new();
@@ -443,7 +461,7 @@ pub fn save_thread_results(
             code_out.push_str(&format!("{}\t{}\t{}\n", text, code_str, winfo.frequency));
         }
     }
-    fs::write(format!("{}/output-encode.txt", thread_dir), code_out).unwrap();
+    write_file_lenient(format!("{}/output-encode.txt", thread_dir), &code_out);
 
     save_key_distribution_to_dir(ctx, assignment, &thread_dir);
     save_equiv_distribution_to_dir(ctx, assignment, &thread_dir);
@@ -501,7 +519,7 @@ pub fn save_key_distribution_to_dir(ctx: &OptContext, assignment: &[u8], dir: &s
         }
     }
 
-    fs::write(format!("{}/output-distribution.txt", dir), out).unwrap();
+    write_file_lenient(format!("{}/output-distribution.txt", dir), &out);
 }
 
 /// 保存当量分布到目录
@@ -539,7 +557,7 @@ pub fn save_equiv_distribution_to_dir(ctx: &OptContext, assignment: &[u8], dir: 
         out.push_str(&format!("{}\t{:.4}\t{}\n", ch, eq, freq));
     }
 
-    fs::write(format!("{}/output-equiv-dist.txt", dir), out).unwrap();
+    write_file_lenient(format!("{}/output-equiv-dist.txt", dir), &out);
 }
 
 /// 保存结果到输出目录
@@ -579,7 +597,7 @@ pub fn save_results(
         assignment,
         root_usage,
     );
-    fs::write(format!("{}/output-keymap.txt", output_dir), &root_out).unwrap();
+    write_file_lenient(format!("{}/output-keymap.txt", output_dir), &root_out);
 
     // 保存编码结果
     let mut root_to_key: HashMap<String, u8> = HashMap::new();
@@ -620,7 +638,7 @@ pub fn save_results(
             code_out.push_str(&format!("{}\t{}\t{}\n", text, code_str, winfo.frequency));
         }
     }
-    fs::write(format!("{}/output-encode.txt", output_dir), code_out).unwrap();
+    write_file_lenient(format!("{}/output-encode.txt", output_dir), &code_out);
 
     save_key_distribution_to_dir(ctx, assignment, output_dir);
     save_equiv_distribution_to_dir(ctx, assignment, output_dir);
@@ -672,7 +690,7 @@ pub fn save_summary(
         ));
     }
 
-    fs::write(format!("{}/summary.txt", output_dir), summary).unwrap();
+    write_file_lenient(format!("{}/summary.txt", output_dir), &summary);
 }
 
 // =========================================================================

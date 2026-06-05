@@ -394,6 +394,18 @@ impl AmhbOptimizer {
             }
 
             // 9. 终止 workers
+            // 在拆解 scope（join 线程）前，确保所有 worker 已静止：
+            // 不论上面因温度终止、达到 max_iterations 还是收到停止信号而退出循环，
+            // 此刻 global_allow_run 都应为 false（每轮结束时已置位），workers 正阻塞在
+            // 等待指令的自旋中。先把任务计数清零并确认 used==done，再发终止信号，
+            // 避免在 worker 仍通过裸指针访问共享 evaluator/assignment 时 join 造成竞态。
+            global_allow_run.store(false, Ordering::Release);
+            global_total_task.store(0, Ordering::Release);
+            while global_used_worker.load(Ordering::Acquire)
+                != global_worker_done.load(Ordering::Acquire)
+            {
+                cpu_pause();
+            }
             global_all_task_complete.store(true, Ordering::Release);
 
         }); // scope 结束 — 所有 worker 线程在此 join
