@@ -1,0 +1,1 @@
+USE_VOWEL= OPTIMIZE_KEYS= ./optimize.sh  提高静重权重到 0.12

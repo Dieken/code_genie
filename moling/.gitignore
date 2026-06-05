@@ -1,0 +1,14 @@
+*~
+.DS_Store
+
+checkpoint.json
+output*/
+
+Unihan_Readings.txt
+Unihan_Variants.txt
+Unihan.zip
+
+done-*
+config-c*-r*-e*.toml
+test-*.log
+batch-test-weights.html
