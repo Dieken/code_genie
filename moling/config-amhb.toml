@@ -45,12 +45,12 @@ word = 0.2       # 多字词全码权重（需同时启用 word_code.enabled）
 
 # 单字全码子权重（calibrate_scales 已将各指标归一化到初始值≈1.0，子权重直接表达各指标的相对重要性，无需归一化）
 [weights.full_code]
-top_n = 1500                  # 字频前 N 重码数的 N 值
-top_n_collision_count = 1.0   # 前 N 重码数权重
-collision_count = 1.0         # 总重码数权重
-collision_rate = 1.0          # 重码率权重
-equivalence = 1.0             # 当量权重
-distribution = 1.0            # 键位分布偏差权重
+top_n = 0                     # 字频前 N 重码数的 N 值
+top_n_collision_count = 0     # 前 N 重码数权重
+collision_count = 13          # 总重码数权重
+collision_rate = 47           # 重码率权重
+equivalence = 36              # 当量权重
+distribution = 4              # 键位分布偏差权重
 
 # 单字简码子权重（同上，无需归一化）
 [weights.simple_code]
@@ -72,36 +72,38 @@ equivalence = 1.0               # 当量权重
 distribution = 1.0              # 键位分布偏差权重
 
 [amhb]
-total_neighbors = 240      # EXP3 算子池大小（总邻居数）
+total_neighbors = 80       # EXP3 算子池大小（总邻居数）；每线程 10 个候选，足够。
+                           # 调大（如默认 240）不会更快，只会让 10h 内步数变少、每步更重。
 steal_threshold = 0        # 工作窃取阈值
-total_steps = 1000000000     # 最大迭代步数
-temp_start = 40.0          # AMHB 初始温度
+total_steps = 1000000000     # 仅作安全上限，实际由降温/Ctrl-C 结束
+temp_start = 5.0           # AMHB 初始温度（原 40.0）。温度归一化后有效区间是 O(1)，
+                           # 由 40 降到 5 可避免开头约 1M 步的随机游走浪费。
 
 # 分段降温参数（piecewise exponential cooling）
 # 每段定义 threshold 和 factor：当 temp > threshold 时，每步 temp *= factor
 # 按 threshold 从高到低排列，第一个满足的段生效
 # 若温度低于所有阈值，优化终止
+#
+# 按 2万步/分 重算：~12.2M 步 ≈ 10.2h；重心放在临界区 temp 1→0.2。
+# 8h(9.6M 步) 时温度 ≈ 0.12（强贪心、接近收敛），满 10h 温度 ≈ 0.06 充分收敛。
+# 原值见行尾注释（threshold 7.5/1.75/1.25/0.15，factor 0.99999/0.999999/0.9999995/0.9999999625）。
 [[amhb.cooling_segments]]
-threshold = 7.5            # 高温区
-factor = 0.99999
+threshold = 1.0            # 热区  5 → 1（探索）
+factor = 0.9999984
 
 [[amhb.cooling_segments]]
-threshold = 1.75           # 中高温区
-factor = 0.999999
+threshold = 0.2            # 临界区  1 → 0.2（结构形成，预算重心）
+factor = 0.99999975
 
 [[amhb.cooling_segments]]
-threshold = 1.25           # 中低温区
-factor = 0.9999995
-
-[[amhb.cooling_segments]]
-threshold = 0.15           # 低温区
-factor = 0.9999999625
+threshold = 0.06           # 冷区  0.2 → 0.06（精修收敛），之后终止
+factor = 0.99999975
 
 # -------------------------------------------------------------------------
 # 🌡️ 模拟退火参数
 # -------------------------------------------------------------------------
 [annealing]
-threads = 12             # 并行线程数
+threads = 8              # 并行线程数
 total_steps = 2000000     # 单线程迭代步数
 temp_start = 100.0         # 初始温度 (0=自动校准，推荐)
 temp_end = 0.000001      # 结束温度
