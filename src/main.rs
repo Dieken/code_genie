@@ -1046,8 +1046,15 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
         );
         optimizer.solve(&ctx, param, next_temp, &stop_flag);
 
-        // 从 optimizer 获取最佳结果
-        let amhb_result = vec![(optimizer.best_assignment.clone(), optimizer.best_score, types::Metrics::default(), SimpleMetrics::default(), WordMetrics::default())];
+        // 从 optimizer 获取最佳结果（需基于最佳赋值重新评估指标，
+        // 否则 summary.txt 会输出全零指标）
+        let amhb_result = {
+            let eval = Evaluator::new(&ctx, &optimizer.best_assignment);
+            let m = eval.get_metrics(&ctx);
+            let sm = eval.get_simple_metrics(&ctx);
+            let wm = eval.get_word_metrics(&ctx);
+            vec![(optimizer.best_assignment.clone(), optimizer.best_score, m, sm, wm)]
+        };
 
         // 若被中断，直接输出当前最优并退出（AMHB 暂不支持断点续算）
         if stop_flag.load(Ordering::Relaxed) {
