@@ -154,11 +154,20 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
   $roots{$F[0]} = lc($F[1]);
 
   END {
-      print "不\tu";
-      print "是\ti";
-      print "我\to";
-      print "的\te";
-      print "了\ta";
+      if ($ENV{USE_XIAOMING_RULE}) {
+          print "的\td";
+          print "是\tj";
+          print "不\tk";
+          print "了\te";
+          print "在\tf";
+          print "我\ti";
+      } else {
+          print "不\tu";
+          print "是\ti";
+          print "我\to";
+          print "的\te";
+          print "了\ta";
+      }
 
       open my $fh, $ENV{DISABLE_FULL_CHARSET} ? "chaifen.txt" : "chaifen-all.txt";
       while (<$fh>) {
@@ -183,6 +192,19 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
                   $s .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
                   $s .= substr($roots{$b[-1]}, -1);
               }
+          } elsif ($ENV{USE_XIAOMING_RULE}) {   # 使用潇明单字编码规则
+              for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
+
+              $s = substr($roots{$b[0]}, 0, 2);
+              if (@b == 1) {
+                  $s = $roots{$b[0]};
+              } elsif (@b == 2) {
+                  $s .= substr($roots{$b[1]}, 0, 2);
+              } elsif (@b == 3) {
+                  $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[2]}, 0, 2);
+              } else {
+                  $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[2]}, 0, 1) . substr($roots{$b[-1]}, 0, 1);
+              }
           } else {                      # 使用魔灵单字编码规则
               for (@b) {
                   die "Unknown root: $_ in $_\n" unless exists $roots{$_};
@@ -197,7 +219,12 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
               }
               $s .= substr($roots{$r}, 1);
           }
-          $s = substr($s, 0, 4) if length($s) > 4;
+
+          if ($ENV{USE_XIAOMING_RULE}) {
+            $s = substr($s, 0, 5) if length($s) > 5;
+          } else {
+            $s = substr($s, 0, 4) if length($s) > 4;
+          }
 
           $len = length($s);
           if (exists $full_codes{$s}) {
@@ -208,9 +235,12 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
           $chars{$a[0]} = { code => $s, len => $len, freq => $a[2],
                             y => substr($roots{$b[-1]}, -1), seq => $. };
+
+          $chars{$a[0]}{y} = substr($roots{$b[-1]}, 1, 1) if $ENV{USE_XIAOMING_RULE};
       }
 
       %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
+      $short_chars{"在"} = 1 if $ENV{USE_XIAOMING_RULE};
 
       %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
 
@@ -224,7 +254,22 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             $v = $chars{$char};
             next if $i >= length($v->{code}) || $v->{freq} < 1;
-            $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
+
+            if ($ENV{USE_XIAOMING_RULE}) {
+                if (length($v->{code}) == 3) {                  # 字根字
+                    $s = substr($v->{code}, 0, 1) . "_";        # 只可能是二简 A_
+                } else {                                        # 二根及以上根字，全码长一定 >= 4
+                    if ($i == 2) {                              # 二简 AA
+                        $s = substr($v->{code}, 0, 1) . substr($v->{code}, 2, 1);
+                    } elsif ($i == 3) {                         # 三简 ABB
+                        $s = substr($v->{code}, 0, 2) . $v->{y};
+                    } else {                                    # 只出到三简
+                        next;
+                    }
+                }
+            } else {
+                $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
+            }
 
             if ($ENV{ENABLE_SHORTCODE_MAPPING}) {   # 默认不开启，会损害简码效率
                 # 根据魔灵的笔画映射提升手感
@@ -234,6 +279,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             if (exists $short_codes{$s}) {
                 next unless $ENV{ENABLE_SPACE_SHORTCODE};
+                next if $ENV{USE_XIAOMING_RULE} && $i > 2;      # 潇明只有 A_ 空格简
                 $s = substr($v->{code}, 0, $i - 1) . "_";
                 next if exists $short_codes{$s};
             }
