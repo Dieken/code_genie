@@ -389,11 +389,11 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
       @b = sort split /\s+/, $a[0];
       $a = sum(map { $freq{$_} // die "ERROR: Unknown root $_ in roots-cluster.txt" } @b);
       if ($a >= 2.5) {
-        $a[1] ||= "sdfghjkl";
+        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "asghl" : "sdfghjkl";
       } elsif ($a >= 1.5) {
-        $a[1] ||= "wr sdfghjkl vnm";
+        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "wr uo asghl vnm" : "wr sdfghjkl vnm";
       } else {
-        $a[1] ||= "qwrtyp sdfghjkl xcvbnm";
+        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "qwrt yuop asghl xcvb nm" : "qwrtyp sdfghjkl xcvbnm";
       }
       $a[1] = join(" ", split /\s*/, $a[1]);
       printf "# freq=%.8f\n", $a;
@@ -408,11 +408,11 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
   next if $h{$F[0]};
   $a = $freq{$F[0]};
   if ($a >= 2.5) {
-    $b = "sdfghjkl";
+    $b = $ENV{USE_XIAOMING_RULE} ? "asghl" : "sdfghjkl";
   } elsif ($a >= 1.5) {
-    $b = "wr sdfghjkl vnm";
+    $b = $ENV{USE_XIAOMING_RULE} ? "wr uo asghl vnm" : "wr sdfghjkl vnm";
   } else {
-    $b = "qwrtyp sdfghjkl xcvbnm";
+    $b = $ENV{USE_XIAOMING_RULE} ? "qwrt yuop asghl xcvb nm" : "qwrtyp sdfghjkl xcvbnm";
   }
   printf "# freq=%.8f\n", $a;
   print "$F[0].A\t", join(" ", split /\s*/, $b);
@@ -443,7 +443,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
         chomp;
         @a = split /,/;
         $b = substr($a[4], 0, 1);
-        $b = "5" if $b eq "6";
+        $b = "5" if $b eq "6" && ! $ENV{USE_XIAOMING_RULE};
         die "Conflict strokes: $_ vs. previously $strokes{$a[1]}\n" if exists $strokes{$a[1]} && $strokes{$a[1]} ne $b;
         $strokes{$a[1]} = $b unless exists $strokes{$a[1]} || exists $stroke_overrides{$a[1]};
       }
@@ -453,6 +453,13 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
         $strokes{$k} = $v;
       }
     }
+  }
+
+  if ($ENV{USE_XIAOMING_RULE}) {
+    %stroke_mapping = qw( 1 d 2 k 3 f 4 j 5 i 6 e );
+    print "$F[0].S\t", join(" ", split /\s*/, "dfjkei");
+    print "$F[0].Y\t", $stroke_mapping{ $strokes{ $F[0] } };
+    next;
   }
 
   if (length($F[1]) > 1) {
@@ -604,6 +611,17 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
       push @b, "$a[-1].S" if length($h{$a[-1]}) > 1;
       push @b, "$a[-1].Y";
     }
+  } elsif ($ENV{USE_XIAOMING_RULE}) {   # 使用潇明单字编码规则
+    push @b, "$a[0].A", "$a[0].S";
+    if (@a == 1) {
+        push @b, "$a[0].Y";
+    } elsif (@a == 2) {
+        push @b, "$a[1].A", "$a[1].S";
+    } elsif (@a == 3) {
+        push @b, "$a[1].A", "$a[2].A", "$a[2].S";
+    } else {
+        push @b, "$a[1].A", "$a[2].A", "$a[-1].A";
+    }
   } else {                          # 使用魔灵单字编码规则
     for (@a) { push @b, "$_.A" }
     $b[0] = "$a[0].U" if exists $h2{$a[0]};
@@ -619,7 +637,11 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     push @b, "$a.Y";
   }
 
-  @b = @b[0..3] if @b > 4;
+  if ($ENV{USE_XIAOMING_RULE}) {
+      @b = @b[0..4] if @b > 5;
+  } else {
+      @b = @b[0..3] if @b > 4;
+  }
   print "$F[0]\t", join(" ", @b), "\t$F[2]";
 ' chaifen.txt > input-division.txt
 
