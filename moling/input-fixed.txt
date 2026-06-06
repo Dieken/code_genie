@@ -180,6 +180,10 @@
 自.A 身.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.16039760
 {爲下}.A 乃.A 廴.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.67923914
+儿.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.18008175
+耳.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.11472173
 丂.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.13352076
@@ -276,32 +280,6 @@
 金.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.08501821
 九.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.10373927
-夭.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.12742245
-幺.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.05233418
-牙.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.18801617
-言.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.10793674
-业.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.03346655
-頁.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.14321652
-页.A	q w r t y u o p a s g h l x c v b n m
-# freq=4.60107672
-一.A	a s g h l
-# freq=0.05547157
-亦.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.21082818
-用.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.11858237
-雨.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.00463707
-魚.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.02382662
-鱼.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.69808902
 力.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.52371940
@@ -368,6 +346,48 @@
 壴.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.82041170
 阝.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.68892894
+王.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.00702554
+瓦.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.52063057
+文.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.14110323
+穴.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.08807809
+习.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.57550943
+夕.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.88760594
+心.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.04641188
+辛.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.10373927
+夭.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.12742245
+幺.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.05233418
+牙.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.18801617
+言.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.10793674
+业.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.03346655
+頁.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.14321652
+页.A	q w r t y u o p a s g h l x c v b n m
+# freq=4.60107672
+一.A	a s g h l
+# freq=0.05547157
+亦.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.21082818
+用.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.11858237
+雨.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.00463707
+魚.A	q w r t y u o p a s g h l x c v b n m
+# freq=0.02382662
+鱼.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.10372247
 早.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.11989626
@@ -384,759 +404,580 @@
 走.A	q w r t y u o p a s g h l x c v b n m
 # freq=0.16623782
 足.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.68892894
-王.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.00702554
-瓦.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.67923914
-儿.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.52063057
-文.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.18008175
-耳.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.14110323
-穴.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.08807809
-习.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.57550943
-夕.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.88760594
-心.A	q w r t y u o p a s g h l x c v b n m
-# freq=0.04641188
-辛.A	q w r t y u o p a s g h l x c v b n m
-{丄丶}.S	d f j k e i
-{丄丶}.Y	k
-{周框}.S	d f j k e i
-{周框}.Y	f
-{奉下}.S	d f j k e i
-{奉下}.Y	d
-⺶.S	d f j k e i
-⺶.Y	j
-リ.S	d f j k e i
-リ.Y	k
-ㄩ.S	d f j k e i
-ㄩ.Y	e
-㐄.S	d f j k e i
-㐄.Y	d
-䒑.S	d f j k e i
-䒑.Y	j
-丂.S	d f j k e i
-丂.Y	d
-丄.S	d f j k e i
-丄.Y	k
-丆.S	d f j k e i
-丆.Y	d
-丬.S	d f j k e i
-丬.Y	j
-丱.S	d f j k e i
-丱.Y	e
-丶.S	d f j k e i
-丶.Y	j
-丷.S	d f j k e i
-丷.Y	j
-乀.S	d f j k e i
-乀.Y	j
-冎.S	d f j k e i
-冎.Y	k
-刂.S	d f j k e i
-刂.Y	k
-勹.S	d f j k e i
-勹.Y	f
-匚.S	d f j k e i
-匚.Y	d
-卄.S	d f j k e i
-卄.Y	d
-叀.S	d f j k e i
-叀.Y	d
-咼.S	d f j k e i
-咼.Y	k
-宀.S	d f j k e i
-宀.Y	j
-屮.S	d f j k e i
-屮.Y	e
-巛.S	d f j k e i
-巛.Y	e
-巜.S	d f j k e i
-巜.Y	e
-彡.S	d f j k e i
-彡.Y	f
-灬.S	d f j k e i
-灬.Y	j
-犭.S	d f j k e i
-犭.Y	f
-罒.S	d f j k e i
-罒.Y	k
-耂.S	d f j k e i
-耂.Y	d
-艹.S	d f j k e i
-艹.Y	d
-讠.S	d f j k e i
-讠.Y	j
-镸.S	d f j k e i
-镸.Y	d
-髟.S	d f j k e i
-髟.Y	d
-八.S	d f j k e i
-八.Y	f
-巴.S	d f j k e i
-巴.Y	i
-白.S	d f j k e i
-白.Y	f
-貝.S	d f j k e i
-貝.Y	k
-贝.S	d f j k e i
-贝.Y	k
-匕.S	d f j k e i
-匕.Y	f
-卜.S	d f j k e i
-卜.Y	k
-不.S	d f j k e i
-不.Y	d
-厂.S	d f j k e i
-厂.Y	d
-川.S	d f j k e i
-川.Y	f
-長.S	d f j k e i
-長.Y	d
-长.S	d f j k e i
-长.Y	f
-冊.S	d f j k e i
-冊.Y	k
-臣.S	d f j k e i
-臣.Y	d
-車.S	d f j k e i
-車.Y	d
-车.S	d f j k e i
-车.Y	d
-辰.S	d f j k e i
-辰.Y	d
-齒.S	d f j k e i
-齒.Y	k
-丑.S	d f j k e i
-丑.Y	i
-虫.S	d f j k e i
-虫.Y	k
-寸.S	d f j k e i
-寸.Y	d
-刀.S	d f j k e i
-刀.Y	i
-大.S	d f j k e i
-大.Y	d
-电.S	d f j k e i
-电.Y	k
-丁.S	d f j k e i
-丁.Y	d
-鬥.S	d f j k e i
-鬥.Y	k
-土.S	d f j k e i
-土.Y	d
-{即左}.S	d f j k e i
-{即左}.Y	i
-{荒下}.S	d f j k e i
-{荒下}.Y	f
-{飞右}.S	d f j k e i
-{飞右}.Y	f
-⺀.S	d f j k e i
-⺀.Y	j
-ㄗ.S	d f j k e i
-ㄗ.Y	i
-㔾.S	d f j k e i
-㔾.Y	i
-丿.S	d f j k e i
-丿.Y	f
-亻.S	d f j k e i
-亻.Y	f
-冫.S	d f j k e i
-冫.Y	j
-卩.S	d f j k e i
-卩.Y	i
-囗.S	d f j k e i
-囗.Y	k
-疒.S	d f j k e i
-疒.Y	j
-龶.S	d f j k e i
-龶.Y	d
-方.S	d f j k e i
-方.Y	j
-丰.S	d f j k e i
-丰.Y	d
-非.S	d f j k e i
-非.Y	k
-風.S	d f j k e i
-風.Y	f
-飛.S	d f j k e i
-飛.Y	i
-缶.S	d f j k e i
-缶.Y	f
-夫.S	d f j k e i
-夫.Y	d
-甫.S	d f j k e i
-甫.Y	d
-干.S	d f j k e i
-干.Y	d
-广.S	d f j k e i
-广.Y	j
-瓜.S	d f j k e i
-瓜.Y	f
-高.S	d f j k e i
-高.Y	j
-戈.S	d f j k e i
-戈.Y	d
-艮.S	d f j k e i
-艮.Y	i
-革.S	d f j k e i
-革.Y	d
-鬼.S	d f j k e i
-鬼.Y	f
-工.S	d f j k e i
-工.Y	d
-弓.S	d f j k e i
-弓.Y	i
-古.S	d f j k e i
-古.Y	d
-骨.S	d f j k e i
-骨.Y	k
-亥.S	d f j k e i
-亥.Y	j
-合.S	d f j k e i
-合.Y	f
-禾.S	d f j k e i
-禾.Y	f
-黑.S	d f j k e i
-黑.Y	k
-火.S	d f j k e i
-火.Y	j
-戶.S	d f j k e i
-戶.Y	f
-户.S	d f j k e i
-户.Y	j
-戸.S	d f j k e i
-戸.Y	d
-虎.S	d f j k e i
-虎.Y	k
-{曾中}.S	d f j k e i
-{曾中}.Y	k
-{横日}.S	d f j k e i
-{横日}.Y	k
-{眉上}.S	d f j k e i
-{眉上}.Y	i
-{豕下}.S	d f j k e i
-{豕下}.Y	f
-ᅲ.S	d f j k e i
-ᅲ.Y	d
-丅.S	d f j k e i
-丅.Y	d
-丌.S	d f j k e i
-丌.Y	d
-乚.S	d f j k e i
-乚.Y	e
-冖.S	d f j k e i
-冖.Y	j
-厶.S	d f j k e i
-厶.Y	e
-夊.S	d f j k e i
-夊.Y	f
-廴.S	d f j k e i
-廴.Y	i
-彐.S	d f j k e i
-彐.Y	i
-彑.S	d f j k e i
-彑.Y	e
-彳.S	d f j k e i
-彳.Y	f
-忄.S	d f j k e i
-忄.Y	j
-氵.S	d f j k e i
-氵.Y	j
-纟.S	d f j k e i
-纟.Y	e
-衤.S	d f j k e i
-衤.Y	j
-钅.S	d f j k e i
-钅.Y	f
-饣.S	d f j k e i
-饣.Y	f
-𡗗.S	d f j k e i
-𡗗.Y	d
-甲.S	d f j k e i
-甲.Y	k
-見.S	d f j k e i
-見.Y	k
-见.S	d f j k e i
-见.Y	k
-孑.S	d f j k e i
-孑.Y	i
-几.S	d f j k e i
-几.Y	f
-己.S	d f j k e i
-己.Y	i
-巾.S	d f j k e i
-巾.Y	k
-斤.S	d f j k e i
-斤.Y	f
-金.S	d f j k e i
-金.Y	f
-九.S	d f j k e i
-九.Y	f
-臼.S	d f j k e i
-臼.Y	f
-夭.S	d f j k e i
-夭.Y	f
-幺.S	d f j k e i
-幺.Y	e
-牙.S	d f j k e i
-牙.Y	d
-羊.S	d f j k e i
-羊.Y	j
-言.S	d f j k e i
-言.Y	j
-业.S	d f j k e i
-业.Y	k
-也.S	d f j k e i
-也.Y	i
-曰.S	d f j k e i
-曰.Y	k
-月.S	d f j k e i
-月.Y	f
-頁.S	d f j k e i
-頁.Y	d
-页.S	d f j k e i
-页.Y	d
-一.S	d f j k e i
-一.Y	d
-乂.S	d f j k e i
-乂.Y	f
-乙.S	d f j k e i
-乙.Y	i
-亦.S	d f j k e i
-亦.Y	j
-已.S	d f j k e i
-已.Y	i
-弋.S	d f j k e i
-弋.Y	d
-又.S	d f j k e i
-又.Y	i
-口.S	d f j k e i
-口.Y	k
-尤.S	d f j k e i
-尤.Y	d
-用.S	d f j k e i
-用.Y	f
-由.S	d f j k e i
-由.Y	k
-酉.S	d f j k e i
-酉.Y	d
-予.S	d f j k e i
-予.Y	i
-禺.S	d f j k e i
-禺.Y	k
-雨.S	d f j k e i
-雨.Y	d
-魚.S	d f j k e i
-魚.Y	f
-鱼.S	d f j k e i
-鱼.Y	f
-來.S	d f j k e i
-來.Y	d
-了.S	d f j k e i
-了.Y	i
-〇.S	d f j k e i
-〇.Y	i
-力.S	d f j k e i
-力.Y	i
-立.S	d f j k e i
-立.Y	j
-里.S	d f j k e i
-里.Y	k
-隶.S	d f j k e i
-隶.Y	i
-鹵.S	d f j k e i
-鹵.Y	k
-鹿.S	d f j k e i
-鹿.Y	j
-卯.S	d f j k e i
-卯.Y	f
-毛.S	d f j k e i
-毛.Y	f
-面.S	d f j k e i
-面.Y	d
-馬.S	d f j k e i
-馬.Y	d
-马.S	d f j k e i
-马.Y	i
-麻.S	d f j k e i
-麻.Y	j
-乜.S	d f j k e i
-乜.Y	i
-門.S	d f j k e i
-門.Y	k
-门.S	d f j k e i
-门.Y	j
-皿.S	d f j k e i
-皿.Y	k
-米.S	d f j k e i
-米.Y	j
-末.S	d f j k e i
-末.Y	d
-木.S	d f j k e i
-木.Y	d
-母.S	d f j k e i
-母.Y	e
-目.S	d f j k e i
-目.Y	k
-乃.S	d f j k e i
-乃.Y	i
-鳥.S	d f j k e i
-鳥.Y	f
-鸟.S	d f j k e i
-鸟.Y	f
-女.S	d f j k e i
-女.Y	e
-牛.S	d f j k e i
-牛.Y	f
-{⺮右}.S	d f j k e i
-{⺮右}.Y	f
-{乍下}.S	d f j k e i
-{乍下}.Y	k
-{乐上}.S	d f j k e i
-{乐上}.Y	f
-{乞上}.S	d f j k e i
-{乞上}.Y	f
-{二撇}.S	d f j k e i
-{二撇}.Y	f
-{于下}.S	d f j k e i
-{于下}.Y	d
-{互中}.S	d f j k e i
-{互中}.Y	e
-{五下}.S	d f j k e i
-{五下}.Y	k
-{亜下}.S	d f j k e i
-{亜下}.Y	k
-{亞下}.S	d f j k e i
-{亞下}.Y	k
-{亞中}.S	d f j k e i
-{亞中}.Y	k
-{京上}.S	d f j k e i
-{京上}.Y	j
-{亮上}.S	d f j k e i
-{亮上}.Y	j
-{介下}.S	d f j k e i
-{介下}.Y	f
-{僉上}.S	d f j k e i
-{僉上}.Y	f
-{兴上}.S	d f j k e i
-{兴上}.Y	j
-{具上}.S	d f j k e i
-{具上}.Y	k
-{冂丶}.S	d f j k e i
-{冂丶}.Y	k
-{冓上}.S	d f j k e i
-{冓上}.Y	d
-{卑上}.S	d f j k e i
-{卑上}.Y	f
-{南心}.S	d f j k e i
-{南心}.Y	j
-{卬左}.S	d f j k e i
-{卬左}.Y	f
-{卯左}.S	d f j k e i
-{卯左}.Y	f
-{反彐}.S	d f j k e i
-{反彐}.Y	d
-{发左}.S	d f j k e i
-{发左}.Y	e
-{向框}.S	d f j k e i
-{向框}.Y	f
-{囟框}.S	d f j k e i
-{囟框}.Y	f
-{奐上}.S	d f j k e i
-{奐上}.Y	f
-{姬右}.S	d f j k e i
-{姬右}.Y	d
-{專上}.S	d f j k e i
-{專上}.Y	d
-{弬右}.S	d f j k e i
-{弬右}.Y	d
-{微框}.S	d f j k e i
-{微框}.Y	f
-{曹上}.S	d f j k e i
-{曹上}.Y	d
-{步下}.S	d f j k e i
-{步下}.Y	k
-{母框}.S	d f j k e i
-{母框}.Y	e
-{炙上}.S	d f j k e i
-{炙上}.Y	f
-{烏上}.S	d f j k e i
-{烏上}.Y	f
-{爲下}.S	d f j k e i
-{爲下}.Y	f
-{畏下}.S	d f j k e i
-{畏下}.Y	d
-{祭上}.S	d f j k e i
-{祭上}.Y	f
-{穀框}.S	d f j k e i
-{穀框}.Y	d
-{纟上}.S	d f j k e i
-{纟上}.Y	i
-{華中}.S	d f j k e i
-{華中}.Y	d
-{虍上}.S	d f j k e i
-{虍上}.Y	k
-{衣下}.S	d f j k e i
-{衣下}.Y	f
-{襄上}.S	d f j k e i
-{襄上}.Y	j
-{贏框}.S	d f j k e i
-{贏框}.Y	j
-{阜上}.S	d f j k e i
-{阜上}.Y	f
-{雋下}.S	d f j k e i
-{雋下}.Y	k
-{馬上}.S	d f j k e i
-{馬上}.Y	d
-{鬯中}.S	d f j k e i
-{鬯中}.Y	f
-{鬼左}.S	d f j k e i
-{鬼左}.Y	f
-{鳥上}.S	d f j k e i
-{鳥上}.Y	f
-{鸟上}.S	d f j k e i
-{鸟上}.Y	f
-{鹿上}.S	d f j k e i
-{鹿上}.Y	j
-{黽中}.S	d f j k e i
-{黽中}.Y	k
-{鼠下}.S	d f j k e i
-{鼠下}.Y	e
-{齊右}.S	d f j k e i
-{齊右}.Y	f
-{龍右}.S	d f j k e i
-{龍右}.Y	d
-{龠上}.S	d f j k e i
-{龠上}.Y	f
-⺁.S	d f j k e i
-⺁.Y	f
-⺈.S	d f j k e i
-⺈.Y	f
-⺊.S	d f j k e i
-⺊.Y	k
-⺌.S	d f j k e i
-⺌.Y	k
-⺍.S	d f j k e i
-⺍.Y	j
-⺧.S	d f j k e i
-⺧.Y	f
-⺷.S	d f j k e i
-⺷.Y	j
-⻍.S	d f j k e i
-⻍.Y	j
-〢.S	d f j k e i
-〢.Y	k
-〣.S	d f j k e i
-〣.Y	k
-コ.S	d f j k e i
-コ.Y	i
-ス.S	d f j k e i
-ス.Y	i
-ナ.S	d f j k e i
-ナ.Y	d
-マ.S	d f j k e i
-マ.Y	i
-ユ.S	d f j k e i
-ユ.Y	i
-亠.S	d f j k e i
-亠.Y	j
-冂.S	d f j k e i
-冂.Y	k
-尢.S	d f j k e i
-尢.Y	d
-廾.S	d f j k e i
-廾.Y	d
-扌.S	d f j k e i
-扌.Y	d
-癶.S	d f j k e i
-癶.Y	i
-辶.S	d f j k e i
-辶.Y	j
-龰.S	d f j k e i
-龰.Y	k
-龵.S	d f j k e i
-龵.Y	f
-龷.S	d f j k e i
-龷.Y	d
-龸.S	d f j k e i
-龸.Y	k
-爿.S	d f j k e i
-爿.Y	e
-片.S	d f j k e i
-片.Y	f
-皮.S	d f j k e i
-皮.Y	i
-僉.S	d f j k e i
-僉.Y	f
-千.S	d f j k e i
-千.Y	f
-欠.S	d f j k e i
-欠.Y	f
-犬.S	d f j k e i
-犬.Y	d
-且.S	d f j k e i
-且.Y	k
-七.S	d f j k e i
-七.Y	d
-其.S	d f j k e i
-其.Y	d
-气.S	d f j k e i
-气.Y	f
-曲.S	d f j k e i
-曲.Y	k
-人.S	d f j k e i
-人.Y	f
-壬.S	d f j k e i
-壬.Y	f
-日.S	d f j k e i
-日.Y	k
-入.S	d f j k e i
-入.Y	f
-三.S	d f j k e i
-三.Y	d
-上.S	d f j k e i
-上.Y	k
-卅.S	d f j k e i
-卅.Y	d
-尚.S	d f j k e i
-尚.Y	k
-山.S	d f j k e i
-山.Y	k
-生.S	d f j k e i
-生.Y	f
-申.S	d f j k e i
-申.Y	k
-舌.S	d f j k e i
-舌.Y	f
-身.S	d f j k e i
-身.Y	f
-世.S	d f j k e i
-世.Y	d
-十.S	d f j k e i
-十.Y	d
-士.S	d f j k e i
-士.Y	d
-尸.S	d f j k e i
-尸.Y	i
-巳.S	d f j k e i
-巳.Y	i
-水.S	d f j k e i
-水.Y	k
-矢.S	d f j k e i
-矢.Y	f
-石.S	d f j k e i
-石.Y	d
-示.S	d f j k e i
-示.Y	d
-糸.S	d f j k e i
-糸.Y	e
-豕.S	d f j k e i
-豕.Y	d
-食.S	d f j k e i
-食.Y	f
-手.S	d f j k e i
-手.Y	f
-殳.S	d f j k e i
-殳.Y	f
-田.S	d f j k e i
-田.Y	k
-⺽.S	d f j k e i
-⺽.Y	f
-丨.S	d f j k e i
-丨.Y	k
-丩.S	d f j k e i
-丩.Y	e
-亍.S	d f j k e i
-亍.Y	d
-壴.S	d f j k e i
-壴.Y	d
-朩.S	d f j k e i
-朩.Y	d
-甶.S	d f j k e i
-甶.Y	f
-肀.S	d f j k e i
-肀.Y	i
-虍.S	d f j k e i
-虍.Y	k
-阝.S	d f j k e i
-阝.Y	i
-早.S	d f j k e i
-早.Y	k
-爪.S	d f j k e i
-爪.Y	f
-正.S	d f j k e i
-正.Y	d
-之.S	d f j k e i
-之.Y	j
-子.S	d f j k e i
-子.Y	i
-止.S	d f j k e i
-止.Y	k
-自.S	d f j k e i
-自.Y	f
-至.S	d f j k e i
-至.Y	d
-豸.S	d f j k e i
-豸.Y	f
-隹.S	d f j k e i
-隹.Y	f
-舟.S	d f j k e i
-舟.Y	f
-走.S	d f j k e i
-走.Y	d
-竹.S	d f j k e i
-竹.Y	f
-足.S	d f j k e i
-足.Y	k
-亡.S	d f j k e i
-亡.Y	j
-王.S	d f j k e i
-王.Y	d
-瓦.S	d f j k e i
-瓦.Y	d
-二.S	d f j k e i
 二.Y	d
-儿.S	d f j k e i
 儿.Y	f
-文.S	d f j k e i
-文.Y	j
-未.S	d f j k e i
-未.Y	d
-而.S	d f j k e i
 而.Y	d
-耳.S	d f j k e i
 耳.Y	d
-乌.S	d f j k e i
+{丄丶}.S	k
+{丄丶}.Y	k
+{周框}.S	f
+{周框}.Y	f
+{奉下}.S	d
+{奉下}.Y	d
+{荒下}.S	f
+{荒下}.Y	f
+⺶.S	j
+⺶.Y	j
+リ.S	k
+リ.Y	k
+ㄩ.S	e
+ㄩ.Y	e
+㐄.S	d
+㐄.Y	d
+䒑.S	j
+䒑.Y	j
+丂.S	d
+丂.Y	d
+丄.S	k
+丄.Y	k
+丆.S	d
+丆.Y	d
+丬.S	j
+丬.Y	j
+丱.S	e
+丱.Y	e
+丶.S	j
+丶.Y	j
+丷.S	j
+丷.Y	j
+乀.S	j
+乀.Y	j
+冎.S	k
+冎.Y	k
+刂.S	k
+刂.Y	k
+勹.S	f
+勹.Y	f
+匚.S	d
+匚.Y	d
+卄.S	d
+卄.Y	d
+叀.S	d
+叀.Y	d
+咼.S	k
+咼.Y	k
+宀.S	j
+宀.Y	j
+屮.S	e
+屮.Y	e
+巛.S	e
+巛.Y	e
+巜.S	e
+巜.Y	e
+彡.S	f
+彡.Y	f
+灬.S	j
+灬.Y	j
+犭.S	f
+犭.Y	f
+罒.S	k
+罒.Y	k
+耂.S	d
+耂.Y	d
+艹.S	d
+艹.Y	d
+讠.S	j
+讠.Y	j
+镸.S	d
+镸.Y	d
+髟.S	d
+髟.Y	d
+八.Y	f
+巴.Y	i
+白.Y	f
+貝.Y	k
+贝.Y	k
+匕.Y	f
+卜.Y	k
+不.Y	d
+厂.Y	d
+川.Y	f
+長.Y	d
+长.Y	f
+冊.Y	k
+臣.Y	d
+車.Y	d
+车.Y	d
+辰.Y	d
+齒.Y	k
+丑.Y	i
+虫.Y	k
+寸.Y	d
+刀.Y	i
+大.Y	d
+电.Y	k
+丁.Y	d
+鬥.Y	k
+{即左}.S	i
+{即左}.Y	i
+{飞右}.S	f
+{飞右}.Y	f
+⺀.S	j
+⺀.Y	j
+ㄗ.S	i
+ㄗ.Y	i
+㔾.S	i
+㔾.Y	i
+丿.S	f
+丿.Y	f
+亻.S	f
+亻.Y	f
+冫.S	j
+冫.Y	j
+卩.S	i
+卩.Y	i
+囗.S	k
+囗.Y	k
+疒.S	j
+疒.Y	j
+龶.S	d
+龶.Y	d
+方.Y	j
+丰.Y	d
+非.Y	k
+風.Y	f
+飛.Y	i
+缶.Y	f
+夫.Y	d
+甫.Y	d
+干.Y	d
+广.Y	j
+瓜.Y	f
+高.Y	j
+戈.Y	d
+艮.Y	i
+革.Y	d
+鬼.Y	f
+工.Y	d
+弓.Y	i
+古.Y	d
+骨.Y	k
+亥.Y	j
+合.Y	f
+禾.Y	f
+黑.Y	k
+火.Y	j
+戶.Y	f
+户.Y	j
+戸.Y	d
+虎.Y	k
+{曾中}.S	k
+{曾中}.Y	k
+{横日}.S	k
+{横日}.Y	k
+{眉上}.S	i
+{眉上}.Y	i
+{豕下}.S	f
+{豕下}.Y	f
+ᅲ.S	d
+ᅲ.Y	d
+丅.S	d
+丅.Y	d
+丌.S	d
+丌.Y	d
+乚.S	e
+乚.Y	e
+冖.S	j
+冖.Y	j
+厶.S	e
+厶.Y	e
+夊.S	f
+夊.Y	f
+廴.S	i
+廴.Y	i
+彐.S	i
+彐.Y	i
+彑.S	e
+彑.Y	e
+彳.S	f
+彳.Y	f
+忄.S	j
+忄.Y	j
+氵.S	j
+氵.Y	j
+纟.S	e
+纟.Y	e
+衤.S	j
+衤.Y	j
+钅.S	f
+钅.Y	f
+饣.S	f
+饣.Y	f
+𡗗.S	d
+𡗗.Y	d
+甲.Y	k
+見.Y	k
+见.Y	k
+孑.Y	i
+几.Y	f
+己.Y	i
+巾.Y	k
+斤.Y	f
+金.Y	f
+九.Y	f
+臼.Y	f
+口.Y	k
+來.Y	d
+了.Y	i
+〇.Y	i
+力.Y	i
+立.Y	j
+里.Y	k
+隶.Y	i
+鹵.Y	k
+鹿.Y	j
+卯.Y	f
+毛.Y	f
+面.Y	d
+馬.Y	d
+马.Y	i
+麻.Y	j
+乜.Y	i
+門.Y	k
+门.Y	j
+皿.Y	k
+米.Y	j
+末.Y	d
+木.Y	d
+母.Y	e
+目.Y	k
+乃.Y	i
+鳥.Y	f
+鸟.Y	f
+女.Y	e
+牛.Y	f
+{⺮右}.S	f
+{⺮右}.Y	f
+{乍下}.S	k
+{乍下}.Y	k
+{乐上}.S	f
+{乐上}.Y	f
+{乞上}.S	f
+{乞上}.Y	f
+{二撇}.S	f
+{二撇}.Y	f
+{于下}.S	d
+{于下}.Y	d
+{互中}.S	e
+{互中}.Y	e
+{五下}.S	k
+{五下}.Y	k
+{亜下}.S	k
+{亜下}.Y	k
+{亞下}.S	k
+{亞下}.Y	k
+{亞中}.S	k
+{亞中}.Y	k
+{京上}.S	j
+{京上}.Y	j
+{亮上}.S	j
+{亮上}.Y	j
+{介下}.S	f
+{介下}.Y	f
+{僉上}.S	f
+{僉上}.Y	f
+{兴上}.S	j
+{兴上}.Y	j
+{具上}.S	k
+{具上}.Y	k
+{冂丶}.S	k
+{冂丶}.Y	k
+{冓上}.S	d
+{冓上}.Y	d
+{卑上}.S	f
+{卑上}.Y	f
+{南心}.S	j
+{南心}.Y	j
+{卬左}.S	f
+{卬左}.Y	f
+{卯左}.S	f
+{卯左}.Y	f
+{反彐}.S	d
+{反彐}.Y	d
+{发左}.S	e
+{发左}.Y	e
+{向框}.S	f
+{向框}.Y	f
+{囟框}.S	f
+{囟框}.Y	f
+{奐上}.S	f
+{奐上}.Y	f
+{姬右}.S	d
+{姬右}.Y	d
+{專上}.S	d
+{專上}.Y	d
+{弬右}.S	d
+{弬右}.Y	d
+{微框}.S	f
+{微框}.Y	f
+{曹上}.S	d
+{曹上}.Y	d
+{步下}.S	k
+{步下}.Y	k
+{母框}.S	e
+{母框}.Y	e
+{炙上}.S	f
+{炙上}.Y	f
+{烏上}.S	f
+{烏上}.Y	f
+{爲下}.S	f
+{爲下}.Y	f
+{畏下}.S	d
+{畏下}.Y	d
+{祭上}.S	f
+{祭上}.Y	f
+{穀框}.S	d
+{穀框}.Y	d
+{纟上}.S	i
+{纟上}.Y	i
+{華中}.S	d
+{華中}.Y	d
+{虍上}.S	k
+{虍上}.Y	k
+{衣下}.S	f
+{衣下}.Y	f
+{襄上}.S	j
+{襄上}.Y	j
+{贏框}.S	j
+{贏框}.Y	j
+{阜上}.S	f
+{阜上}.Y	f
+{雋下}.S	k
+{雋下}.Y	k
+{馬上}.S	d
+{馬上}.Y	d
+{鬯中}.S	f
+{鬯中}.Y	f
+{鬼左}.S	f
+{鬼左}.Y	f
+{鳥上}.S	f
+{鳥上}.Y	f
+{鸟上}.S	f
+{鸟上}.Y	f
+{鹿上}.S	j
+{鹿上}.Y	j
+{黽中}.S	k
+{黽中}.Y	k
+{鼠下}.S	e
+{鼠下}.Y	e
+{齊右}.S	f
+{齊右}.Y	f
+{龍右}.S	d
+{龍右}.Y	d
+{龠上}.S	f
+{龠上}.Y	f
+⺁.S	f
+⺁.Y	f
+⺈.S	f
+⺈.Y	f
+⺊.S	k
+⺊.Y	k
+⺌.S	k
+⺌.Y	k
+⺍.S	j
+⺍.Y	j
+⺧.S	f
+⺧.Y	f
+⺷.S	j
+⺷.Y	j
+⻍.S	j
+⻍.Y	j
+〢.S	k
+〢.Y	k
+〣.S	k
+〣.Y	k
+コ.S	i
+コ.Y	i
+ス.S	i
+ス.Y	i
+ナ.S	d
+ナ.Y	d
+マ.S	i
+マ.Y	i
+ユ.S	i
+ユ.Y	i
+亠.S	j
+亠.Y	j
+冂.S	k
+冂.Y	k
+尢.S	d
+尢.Y	d
+廾.S	d
+廾.Y	d
+扌.S	d
+扌.Y	d
+癶.S	i
+癶.Y	i
+辶.S	j
+辶.Y	j
+龰.S	k
+龰.Y	k
+龵.S	f
+龵.Y	f
+龷.S	d
+龷.Y	d
+龸.S	k
+龸.Y	k
+爿.Y	e
+片.Y	f
+皮.Y	i
+僉.Y	f
+千.Y	f
+欠.Y	f
+犬.Y	d
+且.Y	k
+七.Y	d
+其.Y	d
+气.Y	f
+曲.Y	k
+人.Y	f
+壬.Y	f
+日.Y	k
+入.Y	f
+三.Y	d
+上.Y	k
+卅.Y	d
+尚.Y	k
+山.Y	k
+生.Y	f
+申.Y	k
+舌.Y	f
+身.Y	f
+世.Y	d
+十.Y	d
+士.Y	d
+尸.Y	i
+巳.Y	i
+水.Y	k
+矢.Y	f
+石.Y	d
+示.Y	d
+糸.Y	e
+豕.Y	d
+食.Y	f
+手.Y	f
+殳.Y	f
+田.Y	k
+土.Y	d
+⺽.S	f
+⺽.Y	f
+丨.S	k
+丨.Y	k
+丩.S	e
+丩.Y	e
+亍.S	d
+亍.Y	d
+壴.S	d
+壴.Y	d
+朩.S	d
+朩.Y	d
+甶.S	f
+甶.Y	f
+肀.S	i
+肀.Y	i
+虍.S	k
+虍.Y	k
+阝.S	i
+阝.Y	i
+亡.Y	j
+王.Y	d
+瓦.Y	d
+文.Y	j
+未.Y	d
 乌.Y	f
-兀.S	d f j k e i
 兀.Y	d
-戊.S	d f j k e i
 戊.Y	d
-烏.S	d f j k e i
 烏.Y	f
-下.S	d f j k e i
 下.Y	d
-向.S	d f j k e i
 向.Y	f
-小.S	d f j k e i
 小.Y	k
-穴.S	d f j k e i
 穴.Y	j
-习.S	d f j k e i
 习.Y	i
-卌.S	d f j k e i
 卌.Y	d
-夕.S	d f j k e i
 夕.Y	f
-心.S	d f j k e i
 心.Y	j
-西.S	d f j k e i
 西.Y	d
-辛.S	d f j k e i
 辛.Y	j
+夭.Y	f
+幺.Y	e
+牙.Y	d
+羊.Y	j
+言.Y	j
+业.Y	k
+也.Y	i
+曰.Y	k
+月.Y	f
+頁.Y	d
+页.Y	d
+一.Y	d
+乂.Y	f
+乙.Y	i
+亦.Y	j
+已.Y	i
+弋.Y	d
+又.Y	i
+尤.Y	d
+用.Y	f
+由.Y	k
+酉.Y	d
+予.Y	i
+禺.Y	k
+雨.Y	d
+魚.Y	f
+鱼.Y	f
+早.Y	k
+爪.Y	f
+正.Y	d
+之.Y	j
+子.Y	i
+止.Y	k
+自.Y	f
+至.Y	d
+豸.Y	f
+隹.Y	f
+舟.Y	f
+走.Y	d
+竹.Y	f
+足.Y	k
+# 0
+二.S 儿.S 而.S 耳.S	d f j k e i
+# b
+八.S 巴.S 白.S 貝.S 贝.S 匕.S 卜.S 不.S	d f j k e i
+# c
+厂.S 川.S 長.S 长.S 冊.S 臣.S 車.S 车.S 辰.S 齒.S 丑.S 虫.S 寸.S	d f j k e i
+# d
+刀.S 大.S 电.S 丁.S 鬥.S	d f j k e i
+# f
+方.S 丰.S 非.S 風.S 飛.S 缶.S 夫.S 甫.S	d f j k e i
+# g
+干.S 广.S 瓜.S 高.S 戈.S 艮.S 革.S 鬼.S 工.S 弓.S 古.S 骨.S	d f j k e i
+# h
+亥.S 合.S 禾.S 黑.S 火.S 戶.S 户.S 戸.S 虎.S	d f j k e i
+# j
+甲.S 見.S 见.S 孑.S 几.S 己.S 巾.S 斤.S 金.S 九.S 臼.S	d f j k e i
+# k
+口.S	d f j k e i
+# l
+來.S 了.S 〇.S 力.S 立.S 里.S 隶.S 鹵.S 鹿.S	d f j k e i
+# m
+卯.S 毛.S 面.S 馬.S 马.S 麻.S 乜.S 門.S 门.S 皿.S 米.S 末.S 木.S 母.S 目.S	d f j k e i
+# n
+乃.S 鳥.S 鸟.S 女.S 牛.S	d f j k e i
+# p
+爿.S 片.S 皮.S	d f j k e i
+# q
+僉.S 千.S 欠.S 犬.S 且.S 七.S 其.S 气.S 曲.S	d f j k e i
+# r
+人.S 壬.S 日.S 入.S	d f j k e i
+# s
+三.S 上.S 卅.S 尚.S 山.S 生.S 申.S 舌.S 身.S 世.S 十.S 士.S 尸.S 巳.S 水.S 矢.S 石.S 示.S 糸.S 豕.S 食.S 手.S 殳.S	d f j k e i
+# t
+田.S 土.S	d f j k e i
+# w
+亡.S 王.S 瓦.S 文.S 未.S 乌.S 兀.S 戊.S 烏.S	d f j k e i
+# x
+下.S 向.S 小.S 穴.S 习.S 卌.S 夕.S 心.S 西.S 辛.S	d f j k e i
+# y
+夭.S 幺.S 牙.S 羊.S 言.S 业.S 也.S 曰.S 月.S 頁.S 页.S 一.S 乂.S 乙.S 亦.S 已.S 弋.S 又.S 尤.S 用.S 由.S 酉.S 予.S 禺.S 雨.S 魚.S 鱼.S	d f j k e i
+# z
+早.S 爪.S 正.S 之.S 子.S 止.S 自.S 至.S 豸.S 隹.S 舟.S 走.S 竹.S 足.S	d f j k e i

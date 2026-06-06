@@ -224,7 +224,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       "屮"     => "ca",  # ce，取 cao
       "丶"     => "da",  # zu, 取 dian
       "乀"     => "da",  # fu, 与 丶 归并
-      "土"     => "du",  # tu, 取 du
+      "土"     => $ENV{USE_XIAOMING_RULE} ? "tu" : "du",    # tu, 音托时取 du，潇明会重新映射声母
       "朩"     => "mu",  # de, 与 木 归并
       "丨"     => "su",  # gu, 取 shu
       "丆"     => "ca",  # ha, 与 厂 归并
@@ -237,7 +237,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       "{周框}" => "ba",  # o, 与 勹 归并
       "⺊"     => "bo",  # o, 与 卜 归并
       "{即左}" => "ge",  # o, 与 艮 归并
-      "{荒下}" => "0e",  # o, 与 儿 归并
+      "{荒下}" => "ca",  # o, 与 川 归并
       "ᅲ"       => "ji",  # o, 与 丌 归并
       "⺽"     => "ju",  # o, 与 臼 归并
       "{奉下}" => "ka",  # o，与 㐄 归并
@@ -276,11 +276,13 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       $a =~ s/[^aeuio]//;
   }
 
-  $a =~ s/^0/w/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # 首根笔画时，多次退火优化都选择了 w
-  #$a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;    # 默认不映射
-  #$a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g；
-  $a =~ s/^y/k/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 首根笔画时，多次退火优化都选择了 k
-  $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+  unless ($ENV{USE_XIAOMING_RULE}) {                        # 潇明会重新映射所有声母
+      $a =~ s/^0/w/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # 首根笔画时，多次退火优化都选择了 w
+      #$a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;    # 默认不映射
+      #$a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g
+      $a =~ s/^y/k/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 首根笔画时，多次退火优化都选择了 k
+      $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+  }
   print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1,1 > roots.txt
 fi
@@ -381,6 +383,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
     open $fh, "roots-cluster.txt";
     while (<$fh>) {
       next if /^\s*#/ || /^\s*$/;
+      next if /^\s*一\s+f/i && $ENV{USE_XIAOMING_RULE};     # 潇明的 F 属于 B 区，不能用作大码，跳过这个宇码惯例
       chomp;
       @a = split /\t/, $_, 2;
       die "Invalid line in roots-cluster.txt: $_\n" if $a[0] =~ /[a-z]/ || $a[1] =~ /[^a-z\s]/;
@@ -457,9 +460,20 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
 
   if ($ENV{USE_XIAOMING_RULE}) {
     %stroke_mapping = qw( 1 d 2 k 3 f 4 j 5 i 6 e );
-    print "$F[0].S\t", join(" ", split /\s*/, "dfjkei");
+    if (length($F[1]) > 1) {
+        push @{ $xiaoming_consonants{ substr($F[1], 0, 1) } }, $F[0];
+    } else {
+        print "$F[0].S\t", $stroke_mapping{ $strokes{ $F[0] } };
+    }
     print "$F[0].Y\t", $stroke_mapping{ $strokes{ $F[0] } };
     next;
+
+    END {
+        for (sort keys %xiaoming_consonants) {
+            print "# $_";
+            print join(" ", map { "$_.S" } @{ $xiaoming_consonants{$_} }), "\t", join(" ", split /\s*/, "dfjkei");
+        }
+    }
   }
 
   if (length($F[1]) > 1) {

@@ -33,6 +33,7 @@
 * `USE_YULING_RULE`： 设置为 1 表示使用宇浩灵明的单字编码规则，并从宇浩灵明字根表初始化 `roots.txt`(如果文件不存在)，后续需手动维护此文件，默认是使用魔灵的单字编码规则；
 * `USE_YAOLING_RULE`: 设置为 1 表示使用 @Evildoer 的妖灵规则（大根声码映射且韵码固定），包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
 * `USE_YUELING_RULE`: 设置为 1 表示使用 @枕月 的月灵规则(韵码仿日月映射)，包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
+* `USE_XIAOMING_RULE`: 设置为 1 表示使用 @恷子 的潇明规则([仿潇湘的五码方案](https://github.com/Dieken/code_genie/commit/741a1571b37505806e4058c2c6952935f6aa57a5))，默认关闭，使用魔灵规则；
 * `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
     * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w；
     * 包含 q 时，使用退火算法决定声母 q 的按键，默认不映射；
@@ -61,11 +62,18 @@ USE_VOWEL=1 OPTIMIZE_KEYS=0qryz ./optimize.sh
 
 # 计算妖灵
 rm roots.txt # 从灵明字根表初始化
+## !!! 初次计算时注释掉 [scale] 段，设置 [targets.full_code] 里 enabled = false，参考下面的「优化指北」
 USE_YAOLING_RULE=1 ./optimize.sh
 
 # 计算月灵
 ## !!! 注意提前调整 roots.txt 的字根拼音
+## !!! 初次计算时注释掉 [scale] 段，设置 [targets.full_code] 里 enabled = false，参考下面的「优化指北」
 USE_YUELING_RULE=1 ./optimize.sh
+
+# 计算潇明
+## !!! 修改 config.toml 中的 max_parts = 5，
+## !!! 初次计算时注释掉 [scale] 段，设置 [targets.full_code] 里 enabled = false，参考下面的「优化指北」
+USE_XIAOMING_RULE=1 ./optimize.sh
 ```
 
 注意：开启按键映射后，`roots.txt` 中的字根声码不是最终版，关闭 `USE_VOWEL` 使用字根首笔时，
