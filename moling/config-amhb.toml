@@ -39,17 +39,17 @@ key_dist = "key_distribution.txt"
 # -------------------------------------------------------------------------
 # 顶层权重：三组目标的相对重要性（建议总和为 1.0）
 [weights]
-full = 0.5       # 单字全码权重
-simple = 0.3     # 单字简码权重
-word = 0.2       # 多字词全码权重（需同时启用 word_code.enabled）
+full = 1.0       # 单字全码权重
+simple = 0.0     # 单字简码权重
+word = 0.0       # 多字词全码权重（需同时启用 word_code.enabled）
 
 # 单字全码子权重（calibrate_scales 已将各指标归一化到初始值≈1.0，子权重直接表达各指标的相对重要性，无需归一化）
 [weights.full_code]
 top_n = 0                     # 字频前 N 重码数的 N 值
 top_n_collision_count = 0     # 前 N 重码数权重
-collision_count = 13          # 总重码数权重
+collision_count = 25          # 总重码数权重
 collision_rate = 47           # 重码率权重
-equivalence = 36              # 当量权重
+equivalence = 24              # 当量权重
 distribution = 4              # 键位分布偏差权重
 
 # 单字简码子权重（同上，无需归一化）
@@ -73,31 +73,33 @@ distribution = 1.0              # 键位分布偏差权重
 
 [amhb]
 total_neighbors = 80       # EXP3 算子池大小（总邻居数）；每线程 10 个候选，足够。
-                           # 调大（如默认 240）不会更快，只会让 10h 内步数变少、每步更重。
+                           # 调大（如默认 240）不会更快，只会让相同时间内步数变少、每步更重。
 steal_threshold = 0        # 工作窃取阈值
-total_steps = 1000000000     # 仅作安全上限，实际由降温/Ctrl-C 结束
+total_steps = 15000000     # 降温总步数：steps_ratio 模式下作为各段步数分配的基数，同时仍是硬上限
 temp_start = 5.0           # AMHB 初始温度（原 40.0）。温度归一化后有效区间是 O(1)，
                            # 由 40 降到 5 可避免开头约 1M 步的随机游走浪费。
 
 # 分段降温参数（piecewise exponential cooling）
-# 每段定义 threshold 和 factor：当 temp > threshold 时，每步 temp *= factor
-# 按 threshold 从高到低排列，第一个满足的段生效
-# 若温度低于所有阈值，优化终止
+# 每段定义 threshold 和 steps_ratio：本段分配 total_steps × steps_ratio 步，
+#   从段初温度（首段=temp_start，否则上一段 threshold）指数降到本段 threshold，
+#   factor 由程序反推：factor = (threshold / 段初温度)^(1 / 段步数)。
+# 按 threshold 从高到低排列，第一个满足的段生效；温度低于所有阈值则终止。
+# （也兼容旧写法：段内直接写 factor 即按固定系数降温。）
 #
-# 按 2万步/分 重算：~12.2M 步 ≈ 10.2h；重心放在临界区 temp 1→0.2。
-# 8h(9.6M 步) 时温度 ≈ 0.12（强贪心、接近收敛），满 10h 温度 ≈ 0.06 充分收敛。
+# 按实测 2.7万步/分 计算：total_steps=15M ≈ 9.2h；重心放在临界区 temp 1→0.2。
+# steps_ratio 之和应为 1.0；想整体缩放时长只改 total_steps，调各段权重只改 steps_ratio。
 # 原值见行尾注释（threshold 7.5/1.75/1.25/0.15，factor 0.99999/0.999999/0.9999995/0.9999999625）。
 [[amhb.cooling_segments]]
 threshold = 1.0            # 热区  5 → 1（探索）
-factor = 0.9999984
+steps_ratio = 0.067
 
 [[amhb.cooling_segments]]
 threshold = 0.2            # 临界区  1 → 0.2（结构形成，预算重心）
-factor = 0.99999975
+steps_ratio = 0.428
 
 [[amhb.cooling_segments]]
-threshold = 0.06           # 冷区  0.2 → 0.06（精修收敛），之后终止
-factor = 0.99999975
+threshold = 0.03           # 冷区  0.2 → 0.03（精修收敛），之后终止
+steps_ratio = 0.505
 
 # -------------------------------------------------------------------------
 # 🌡️ 模拟退火参数

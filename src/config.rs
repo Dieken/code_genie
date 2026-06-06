@@ -159,7 +159,13 @@ pub struct CoolingSegment {
     /// 温度阈值：当 temp > threshold 时使用此段的 factor
     pub threshold: f64,
     /// 冷却系数：每步 temp *= factor（应略小于 1.0）
-    pub factor: f64,
+    /// 旧字段，直接指定冷却系数；与 steps_ratio 二选一
+    #[serde(default)]
+    pub factor: Option<f64>,
+    /// 步数占比：本段分配 total_steps × steps_ratio 步，由此反推 factor
+    /// 与 factor 二选一；同时存在时优先用 factor
+    #[serde(default)]
+    pub steps_ratio: Option<f64>,
 }
 
 /// AMHB 算法参数配置
@@ -170,12 +176,101 @@ pub struct AmhbConfig {
     /// 工作窃取阈值
     pub steal_threshold: i32,
     /// 最大迭代步数（达到后终止，即使温度未降完）
+    /// 在 steps_ratio 模式下同时作为各段步数分配的基数
     #[serde(default)]
     pub total_steps: Option<usize>,
     /// 初始温度
     pub temp_start: f64,
     /// 分段降温参数（按 threshold 从高到低排列）
     pub cooling_segments: Vec<CoolingSegment>,
+}
+
+impl AmhbConfig {
+    /// 将各降温段解析为具体的 (threshold, factor)，供降温闭包使用。
+    ///
+    /// - 段显式指定了 `factor` → 直接使用（旧行为）。
+    /// - 段只给了 `steps_ratio` → 按 total_steps × ratio 反推 factor：
+    ///   factor = (threshold / 段初温度)^(1 / 段步数)，
+    ///   段初温度为第一段的 temp_start，或上一段的 threshold。
+    ///
+    /// 同时进行校验：steps_ratio 之和、threshold 单调性、缺失字段等。
+    /// 校验失败返回 Err(描述信息)，由调用方决定如何处理。
+    pub fn resolve_cooling_factors(&self) -> Result<Vec<(f64, f64)>, String> {
+        let mut resolved = Vec::with_capacity(self.cooling_segments.len());
+        let mut start_temp = self.temp_start;
+        let mut ratio_sum = 0.0;
+        let mut uses_ratio = false;
+
+        for (i, seg) in self.cooling_segments.iter().enumerate() {
+            // 温度区间单调性校验：段初温度必须高于阈值，否则温度降不下去
+            if seg.threshold >= start_temp {
+                return Err(format!(
+                    "降温段 #{} 的 threshold ({}) >= 段初温度 ({})，温度无法下降；\
+                     请确保 cooling_segments 按 threshold 从高到低排列且低于 temp_start",
+                    i, seg.threshold, start_temp
+                ));
+            }
+
+            let factor = match (seg.factor, seg.steps_ratio) {
+                // 显式 factor 优先（旧行为，向后兼容）
+                (Some(f), _) => f,
+                // 仅给 steps_ratio：反推 factor
+                (None, Some(r)) => {
+                    uses_ratio = true;
+                    ratio_sum += r;
+                    if r <= 0.0 {
+                        return Err(format!(
+                            "降温段 #{} 的 steps_ratio ({}) 必须为正数", i, r
+                        ));
+                    }
+                    let total = self.total_steps.ok_or_else(|| {
+                        format!(
+                            "降温段 #{} 使用了 steps_ratio，但未设置 amhb.total_steps", i
+                        )
+                    })?;
+                    let steps = (total as f64 * r).max(1.0);
+                    let factor = (seg.threshold / start_temp).powf(1.0 / steps);
+                    // 启动时打印反推结果，便于核对
+                    println!(
+                        "  降温段 #{}: 温度 {:.4} → {:.4}, 占比 {:.3}, 步数 ≈ {}, factor = {:.10}",
+                        i, start_temp, seg.threshold, r, steps as u64, factor
+                    );
+                    factor
+                }
+                (None, None) => {
+                    return Err(format!(
+                        "降温段 #{} 必须指定 factor 或 steps_ratio 之一", i
+                    ));
+                }
+            };
+
+            resolved.push((seg.threshold, factor));
+            start_temp = seg.threshold;
+        }
+
+        // steps_ratio 之和告警（不强制，方便只缩放总步数）
+        if uses_ratio && (ratio_sum - 1.0).abs() > 1e-6 {
+            eprintln!(
+                "⚠️ 警告：cooling_segments 的 steps_ratio 之和为 {:.4}（≠ 1.0），\
+                 实际降温总步数将为 total_steps × {:.4}",
+                ratio_sum, ratio_sum
+            );
+        }
+        // 反推总步数超过硬上限告警
+        if uses_ratio {
+            if let Some(total) = self.total_steps {
+                let used = (total as f64 * ratio_sum) as u64;
+                if used > total as u64 {
+                    eprintln!(
+                        "⚠️ 警告：降温所需步数 ≈ {} 超过 total_steps 上限 {}，降温可能被提前截断",
+                        used, total
+                    );
+                }
+            }
+        }
+
+        Ok(resolved)
+    }
 }
 
 /// 简码级别配置（TOML 格式）
@@ -415,10 +510,10 @@ impl Default for Config {
                 total_steps: None,
                 temp_start: 40.0,
                 cooling_segments: vec![
-                    CoolingSegment { threshold: 7.5, factor: 0.99999 },
-                    CoolingSegment { threshold: 1.75, factor: 0.999999 },
-                    CoolingSegment { threshold: 1.25, factor: 0.9999995 },
-                    CoolingSegment { threshold: 0.15, factor: 0.9999999625 },
+                    CoolingSegment { threshold: 7.5, factor: Some(0.99999), steps_ratio: None },
+                    CoolingSegment { threshold: 1.75, factor: Some(0.999999), steps_ratio: None },
+                    CoolingSegment { threshold: 1.25, factor: Some(0.9999995), steps_ratio: None },
+                    CoolingSegment { threshold: 0.15, factor: Some(0.9999999625), steps_ratio: None },
                 ],
             },
             simple_levels: vec![

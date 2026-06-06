@@ -1020,11 +1020,18 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
 
     let results: Vec<(Vec<u8>, f64, types::Metrics, SimpleMetrics, WordMetrics)> = if use_amhb {
         // AMHB 模式 — 分段指数降温（piecewise exponential cooling）
-        let segments = cfg.amhb.cooling_segments.clone();
+        // 将各段解析为具体的 (threshold, factor)，支持 factor / steps_ratio 两种写法
+        let segments = match cfg.amhb.resolve_cooling_factors() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("❌ 降温参数配置错误: {}", e);
+                std::process::exit(1);
+            }
+        };
         let next_temp = move |t: f64, _iter: usize, _score: f64| -> f64 {
-            for seg in &segments {
-                if t > seg.threshold {
-                    return t * seg.factor;
+            for &(threshold, factor) in &segments {
+                if t > threshold {
+                    return t * factor;
                 }
             }
             -1.0 // 低于所有阈值，终止
