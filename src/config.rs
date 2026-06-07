@@ -86,7 +86,25 @@ pub struct AnnealingConfig {
     pub perturb_strength: f64,
     pub reheat_factor: f64,
     pub max_parts: usize,
+
+    /// 冲突导向移动的执行概率（0.0~1.0），0.0 表示关闭本特性
+    #[serde(default = "default_conflict_probability")]
+    pub conflict_probability: f64,
+    /// 每隔多少步重建一次冲突缓存；0 表示初始化后不再重建
+    #[serde(default = "default_conflict_refresh_interval")]
+    pub conflict_refresh_interval: usize,
+    /// 在排序后冲突列表的前 N 个元素中采样
+    #[serde(default = "default_conflict_sample_window")]
+    pub conflict_sample_window: usize,
+    /// 冲突组排序是否按频率加权（true=按字频之和，false=按汉字数量）
+    #[serde(default = "default_conflict_weight_by_freq")]
+    pub conflict_weight_by_freq: bool,
 }
+
+fn default_conflict_probability() -> f64 { 0.0 }
+fn default_conflict_refresh_interval() -> usize { 1000 }
+fn default_conflict_sample_window() -> usize { 20 }
+fn default_conflict_weight_by_freq() -> bool { false }
 
 /// 全码目标配置（对应 [targets.full_code] 段）
 #[derive(Debug, Clone, Deserialize)]
@@ -393,6 +411,10 @@ impl Default for Config {
                 perturb_strength: 0.15,
                 reheat_factor: 1.25,
                 max_parts: 3,
+                conflict_probability: 0.0,
+                conflict_refresh_interval: 1000,
+                conflict_sample_window: 20,
+                conflict_weight_by_freq: false,
             },
             simple_levels: vec![
                 SimpleLevelConfig {
@@ -697,5 +719,44 @@ dist_max = 8.0
         assert_eq!(targets.simple_code.freq, 0.0);
         assert_eq!(targets.simple_code.low_weight, 0.01);
         assert_eq!(targets.simple_code.freq_max, 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // 冲突导向配置项：默认值与向后兼容解析测试
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_conflict_fields_default_when_absent() {
+        // 不含任何冲突导向字段的 [annealing] 应解析成功且四字段取默认值
+        let cfg: Config = toml::from_str(minimal_config_prefix()).expect("解析失败");
+        let a = &cfg.annealing;
+        assert_eq!(a.conflict_probability, 0.0);
+        assert_eq!(a.conflict_refresh_interval, 1000);
+        assert_eq!(a.conflict_sample_window, 20);
+        assert!(!a.conflict_weight_by_freq);
+    }
+
+    #[test]
+    fn test_conflict_fields_partial_present() {
+        // 仅含部分冲突导向字段：已存在字段取显式值，缺失字段取默认值
+        let toml_str = format!(
+            "{}\nconflict_probability = 0.25\nconflict_weight_by_freq = true\n",
+            minimal_config_prefix()
+        );
+        let cfg: Config = toml::from_str(&toml_str).expect("解析失败");
+        let a = &cfg.annealing;
+        assert_eq!(a.conflict_probability, 0.25); // 显式
+        assert!(a.conflict_weight_by_freq); // 显式
+        assert_eq!(a.conflict_refresh_interval, 1000); // 默认
+        assert_eq!(a.conflict_sample_window, 20); // 默认
+    }
+
+    #[test]
+    fn test_conflict_fields_default_impl() {
+        let a = &Config::default().annealing;
+        assert_eq!(a.conflict_probability, 0.0);
+        assert_eq!(a.conflict_refresh_interval, 1000);
+        assert_eq!(a.conflict_sample_window, 20);
+        assert!(!a.conflict_weight_by_freq);
     }
 }

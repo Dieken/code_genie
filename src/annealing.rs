@@ -159,9 +159,16 @@ fn build_code_to_chars(ctx: &OptContext, assignment: &[u8]) -> HashMap<usize, Ve
 }
 
 /// 找出所有重码冲突的字根组对
+///
+/// `weight_by_freq` 控制排序权重（元组第三字段）：
+/// - false：权重为参与该冲突编码的汉字数量（优化 collision_count，保持现有行为）
+/// - true ：权重为这些汉字的字频之和（优化 collision_rate）
+///
+/// 排序：主键 weight 降序；次键 (g1, g2) 升序裁决，保证结果可复现、不依赖 HashMap 遍历顺序。
 fn find_collision_groups(
     ctx: &OptContext,
     assignment: &[u8],
+    weight_by_freq: bool,
 ) -> Vec<(usize, usize, usize)> {
     let code_to_chars = build_code_to_chars(ctx, assignment);
     let mut collisions: Vec<(usize, usize, usize)> = Vec::new();
@@ -170,6 +177,16 @@ fn find_collision_groups(
         if chars.len() < 2 {
             continue;
         }
+        // 冲突权重：count 策略用 chars.len()；freq 策略用共享该编码的汉字字频之和
+        let weight: usize = if weight_by_freq {
+            chars
+                .iter()
+                .map(|&ci| ctx.char_infos[ci].frequency as usize)
+                .sum()
+        } else {
+            chars.len()
+        };
+
         let mut groups_in_conflict: HashSet<usize> = HashSet::new();
         for &ci in chars {
             let info = &ctx.char_infos[ci];
@@ -184,12 +201,19 @@ fn find_collision_groups(
         let groups: Vec<usize> = groups_in_conflict.into_iter().collect();
         for i in 0..groups.len() {
             for j in (i + 1)..groups.len() {
-                collisions.push((groups[i], groups[j], chars.len()));
+                // 规范化为 (min, max)，保证 g1 < g2，使排序次键稳定、配对去歧义
+                let (lo, hi) = if groups[i] <= groups[j] {
+                    (groups[i], groups[j])
+                } else {
+                    (groups[j], groups[i])
+                };
+                collisions.push((lo, hi, weight));
             }
         }
     }
 
-    collisions.sort_by(|a, b| b.2.cmp(&a.2));
+    // 主键：第三字段（weight）降序；次键（稳定裁决）：(g1, g2) 升序
+    collisions.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
     collisions
 }
 
@@ -210,14 +234,17 @@ fn try_resolve_conflict(
     assignment: &mut [u8],
     evaluator: &mut Evaluator,
     collisions: &[(usize, usize, usize)],
+    sample_window: usize,
     temp: f64,
     rng: &mut ThreadRng,
 ) -> bool {
-    if collisions.is_empty() {
+    if collisions.is_empty() || sample_window == 0 {
         return false;
     }
 
-    let idx = rng.gen_range(0..collisions.len().min(20));
+    // 有效窗口 = min(sample_window, 列表长度)
+    let window = sample_window.min(collisions.len());
+    let idx = rng.gen_range(0..window);
     let (g1, g2, _) = collisions[idx];
 
     let groups_to_try = if rng.gen_bool(0.5) { vec![g1, g2] } else { vec![g2, g1] };
@@ -418,7 +445,7 @@ fn enhanced_hill_climb(
 
     let zero_temp = 1e-15;
     let mut no_improve_count = 0usize;
-    let mut collisions = find_collision_groups(ctx, &assignment);
+    let mut collisions = find_collision_groups(ctx, &assignment, false);
 
     for step in 0..max_steps {
         let op_type = step % 10;
@@ -426,7 +453,7 @@ fn enhanced_hill_climb(
         let success = match op_type {
             0..=3 => {
                 if !collisions.is_empty() {
-                    try_resolve_conflict(ctx, &mut assignment, &mut evaluator, &collisions, zero_temp, rng)
+                    try_resolve_conflict(ctx, &mut assignment, &mut evaluator, &collisions, 20, zero_temp, rng)
                 } else {
                     false
                 }
@@ -463,7 +490,7 @@ fn enhanced_hill_climb(
         if success {
             no_improve_count = 0;
             if step % 200 == 0 {
-                collisions = find_collision_groups(ctx, &assignment);
+                collisions = find_collision_groups(ctx, &assignment, false);
             }
         } else {
             no_improve_count += 1;
@@ -731,6 +758,19 @@ pub fn simulated_annealing(
 
     let swap_prob_base = cfg.annealing.swap_probability;
 
+    // 冲突导向算子状态（仅在启用时维护；关闭时零开销且不消耗额外随机数，保持 RNG 序列与原实现一致）
+    let conflict_prob = cfg.annealing.conflict_probability;
+    let conflict_refresh = cfg.annealing.conflict_refresh_interval;
+    let conflict_window = cfg.annealing.conflict_sample_window;
+    let conflict_weight_by_freq = cfg.annealing.conflict_weight_by_freq;
+    let conflict_enabled = conflict_prob > 0.0;
+    let mut collisions: Vec<(usize, usize, usize)> = if conflict_enabled {
+        find_collision_groups(ctx, &assignment, conflict_weight_by_freq)
+    } else {
+        Vec::new()
+    };
+    let mut steps_since_refresh = 0usize;
+
     let sa_start = Instant::now();
 
     // 主循环
@@ -745,31 +785,65 @@ pub fn simulated_annealing(
             temp_multiplier = 1.0;
         }
 
-        let swap_prob = swap_prob_base + (1.0 - swap_prob_base) * (step as f64 / steps as f64) * 0.3;
-
-        if rng.gen::<f64>() < swap_prob && n_groups >= 2 {
-            let r1 = rng.gen_range(0..n_groups);
-            let r2 = rng.gen_range(0..n_groups - 1);
-            let r2 = if r2 >= r1 { r2 + 1 } else { r2 };
-
-            let k1 = assignment[r1];
-            let k2 = assignment[r2];
-            if k1 != k2
-                && ctx.groups[r1].allowed_keys.contains(&k2)
-                && ctx.groups[r2].allowed_keys.contains(&k1)
-            {
-                evaluator.try_swap(ctx, &mut assignment, r1, r2, temp, &mut rng);
+        // 冲突缓存刷新（仅启用时；interval=0 表示初始化后不再重建）
+        if conflict_enabled {
+            if conflict_refresh > 0 && steps_since_refresh >= conflict_refresh {
+                collisions = find_collision_groups(ctx, &assignment, conflict_weight_by_freq);
+                steps_since_refresh = 0;
             } else {
-                let r = r1;
+                steps_since_refresh += 1;
+            }
+        }
+
+        // 邻域分发：启用时每步抽取一次 r 决定走冲突路径还是既有 swap/move；
+        // 关闭时跳过抽样，直接走既有分发，保持 RNG 消耗序列与原实现一致。
+        let did_conflict = if conflict_enabled {
+            let r = rng.gen::<f64>();
+            if r < conflict_prob && !collisions.is_empty() {
+                try_resolve_conflict(
+                    ctx,
+                    &mut assignment,
+                    &mut evaluator,
+                    &collisions,
+                    conflict_window,
+                    temp,
+                    &mut rng,
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !did_conflict {
+            let swap_prob = swap_prob_base + (1.0 - swap_prob_base) * (step as f64 / steps as f64) * 0.3;
+
+            if rng.gen::<f64>() < swap_prob && n_groups >= 2 {
+                let r1 = rng.gen_range(0..n_groups);
+                let r2 = rng.gen_range(0..n_groups - 1);
+                let r2 = if r2 >= r1 { r2 + 1 } else { r2 };
+
+                let k1 = assignment[r1];
+                let k2 = assignment[r2];
+                if k1 != k2
+                    && ctx.groups[r1].allowed_keys.contains(&k2)
+                    && ctx.groups[r2].allowed_keys.contains(&k1)
+                {
+                    evaluator.try_swap(ctx, &mut assignment, r1, r2, temp, &mut rng);
+                } else {
+                    let r = r1;
+                    let allowed = &ctx.groups[r].allowed_keys;
+                    let new_k = allowed[rng.gen_range(0..allowed.len())];
+                    evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
+                }
+            } else {
+                let r = rng.gen_range(0..n_groups);
                 let allowed = &ctx.groups[r].allowed_keys;
                 let new_k = allowed[rng.gen_range(0..allowed.len())];
                 evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
             }
-        } else {
-            let r = rng.gen_range(0..n_groups);
-            let allowed = &ctx.groups[r].allowed_keys;
-            let new_k = allowed[rng.gen_range(0..allowed.len())];
-            evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
         }
 
         let current_score = evaluator.get_score(ctx);
@@ -817,7 +891,7 @@ pub fn simulated_annealing(
 
         // 智能低温扰动
         if perturb_interval > 0 && step > 0 && step % perturb_interval == 0 && base_temp < cfg.annealing.comfort_temp * 0.01 {
-            let collisions = find_collision_groups(ctx, &assignment);
+            let collisions = find_collision_groups(ctx, &assignment, false);
             let n_perturb = (n_groups as f64 * cfg.annealing.perturb_strength) as usize;
             
             if !collisions.is_empty() {
@@ -920,4 +994,159 @@ pub fn simulated_annealing(
     }
 
     (best_assignment, best_score, best_metrics, best_simple_metrics)
+}
+
+// =========================================================================
+// 🧪 冲突导向算子测试（sa-conflict-operators）
+// =========================================================================
+#[cfg(test)]
+mod conflict_tests {
+    use super::*;
+    use crate::config::{Config, TargetsConfig};
+    use crate::context::OptContext;
+    use crate::types::{KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, EQUIV_TABLE_SIZE};
+    use proptest::prelude::*;
+    use rand::thread_rng;
+    use std::collections::HashMap;
+
+    /// 构建最小 OptContext：每个频率对应一个动态组，每组含 1 个字根、1 个单部件汉字。
+    /// 不同组的汉字被分到同一键位时即产生重码（用于驱动 find_collision_groups）。
+    fn make_ctx(freqs: &[u64], allowed: &[u8]) -> OptContext {
+        let n = freqs.len();
+        let mut groups = Vec::with_capacity(n);
+        let mut splits = Vec::with_capacity(n);
+        for (i, &f) in freqs.iter().enumerate() {
+            let root = format!("r{i}");
+            groups.push(RootGroup {
+                roots: vec![root.clone()],
+                allowed_keys: allowed.to_vec(),
+            });
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, vec![root], f));
+        }
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut cfg = Config::default();
+        cfg.weights.simple_code.enabled = false; // 关闭简码，简化上下文构造
+        let weights = cfg.get_weight_config();
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels: vec![] },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    const FREQS: [u64; 5] = [100, 90, 80, 70, 60];
+    const ALLOWED: [u8; 3] = [0, 1, 2];
+
+    proptest! {
+        // Feature: sa-conflict-operators, Property 1: 采样窗口落在有效范围内
+        // 空列表或 window=0 时返回 false 且不修改 assignment；任意 window（含大于列表长度）不 panic。
+        #[test]
+        fn prop1_sampling_window_bounds(window in 0usize..12) {
+            let ctx = make_ctx(&FREQS, &ALLOWED);
+            let mut rng = thread_rng();
+
+            // 空冲突列表 + 任意 window → false 且 assignment 不变
+            let mut a = vec![0u8; FREQS.len()];
+            let before = a.clone();
+            let mut ev = Evaluator::new(&ctx, &a);
+            let r_empty = try_resolve_conflict(&ctx, &mut a, &mut ev, &[], window, 1.0, &mut rng);
+            prop_assert!(!r_empty);
+            prop_assert_eq!(&a, &before);
+
+            // 非空列表（assignment 全 0 → 所有组同键，必有冲突对）
+            let cols = find_collision_groups(&ctx, &a, false);
+            prop_assert!(!cols.is_empty());
+
+            // window=0 → false 且不变
+            let mut a0 = a.clone();
+            let mut ev0 = Evaluator::new(&ctx, &a0);
+            let r0 = try_resolve_conflict(&ctx, &mut a0, &mut ev0, &cols, 0, 1.0, &mut rng);
+            prop_assert!(!r0);
+            prop_assert_eq!(&a0, &a);
+
+            // 任意 window（包含 > len）不 panic：window+1 ∈ [1,12]，覆盖大于 len 的情形
+            let mut a1 = a.clone();
+            let mut ev1 = Evaluator::new(&ctx, &a1);
+            let _ = try_resolve_conflict(&ctx, &mut a1, &mut ev1, &cols, window + 1, 1.0, &mut rng);
+        }
+
+        // Feature: sa-conflict-operators, Property 2: 排序按所选权重降序
+        #[test]
+        fn prop2_descending_sort(asg in prop::collection::vec(0u8..3, FREQS.len())) {
+            let ctx = make_ctx(&FREQS, &ALLOWED);
+            for wbf in [false, true] {
+                let cols = find_collision_groups(&ctx, &asg, wbf);
+                for w in cols.windows(2) {
+                    prop_assert!(w[0].2 >= w[1].2);
+                }
+            }
+        }
+
+        // Feature: sa-conflict-operators, Property 3: 排序结果可复现（裁决确定性）
+        #[test]
+        fn prop3_reproducible(asg in prop::collection::vec(0u8..3, FREQS.len())) {
+            let ctx = make_ctx(&FREQS, &ALLOWED);
+            for wbf in [false, true] {
+                let c1 = find_collision_groups(&ctx, &asg, wbf);
+                let c2 = find_collision_groups(&ctx, &asg, wbf);
+                prop_assert_eq!(c1, c2);
+            }
+        }
+
+        // Feature: sa-conflict-operators, Property 4: 两种排序策略产出相同冲突组集合
+        #[test]
+        fn prop4_same_set(asg in prop::collection::vec(0u8..3, FREQS.len())) {
+            let ctx = make_ctx(&FREQS, &ALLOWED);
+            let cf = find_collision_groups(&ctx, &asg, false);
+            let ct = find_collision_groups(&ctx, &asg, true);
+            let mut sf: Vec<(usize, usize)> = cf.iter().map(|t| (t.0, t.1)).collect();
+            let mut st: Vec<(usize, usize)> = ct.iter().map(|t| (t.0, t.1)).collect();
+            sf.sort_unstable();
+            st.sort_unstable();
+            prop_assert_eq!(sf, st);
+        }
+    }
+
+    // 采样窗口边界（需求 4.3 / 4.4）显式单元用例
+    #[test]
+    fn test_window_zero_and_empty_return_false() {
+        let ctx = make_ctx(&FREQS, &ALLOWED);
+        let mut rng = thread_rng();
+        let mut a = vec![0u8; FREQS.len()];
+        let before = a.clone();
+        let mut ev = Evaluator::new(&ctx, &a);
+
+        // 空列表
+        assert!(!try_resolve_conflict(&ctx, &mut a, &mut ev, &[], 5, 1.0, &mut rng));
+        assert_eq!(a, before);
+
+        // window = 0
+        let cols = find_collision_groups(&ctx, &a, false);
+        assert!(!cols.is_empty());
+        assert!(!try_resolve_conflict(&ctx, &mut a, &mut ev, &cols, 0, 1.0, &mut rng));
+        assert_eq!(a, before);
+    }
+
+    // 两种排序策略权重含义（需求 5.1 / 5.2）：全 0 分配下，count 权重为组数、freq 权重为字频之和
+    #[test]
+    fn test_weight_semantics_all_same_key() {
+        let ctx = make_ctx(&FREQS, &ALLOWED);
+        let a = vec![0u8; FREQS.len()]; // 所有组同键，单一冲突编码，所有组互相冲突
+        let cnt = find_collision_groups(&ctx, &a, false);
+        let frq = find_collision_groups(&ctx, &a, true);
+        // count 策略：每个冲突对权重 = 共享该编码的汉字数 = 5
+        assert!(cnt.iter().all(|t| t.2 == FREQS.len()));
+        // freq 策略：权重 = 字频之和 = 100+90+80+70+60 = 400
+        let sum: usize = FREQS.iter().map(|&f| f as usize).sum();
+        assert!(frq.iter().all(|t| t.2 == sum));
+    }
 }
