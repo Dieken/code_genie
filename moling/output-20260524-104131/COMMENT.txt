@@ -1,1 +1,0 @@
-USE_VOWEL= OPTIMIZE_KEYS= ./optimize.sh  10 小时最终版，繁体字频权重 10%，声母区分左右手使用不同的字根首笔映射

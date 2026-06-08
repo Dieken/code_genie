@@ -1,1 +1,0 @@
-USE_VOWEL= OPTIMIZE_KEYS= ./optimize.sh  : 降低分布偏差权重，增加动重权重

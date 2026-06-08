@@ -1,1 +1,0 @@
-USE_VOWEL= OPTIMIZE_KEYS= ./optimize.sh  混合繁体字频 * 0.05 以增强繁体动重，左右手声母使用不同笔画映射以提升手感
