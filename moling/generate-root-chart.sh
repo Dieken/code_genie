@@ -21,7 +21,7 @@ shopt -s failglob
 }
 
 echo "Writing $1/roots.tsv ..."
-perl -CSDA -lanE '
+true || perl -CSDA -lanE '
   next unless /^(\S+)\.([UASY])/;
   $h{$1}{$2} = lc($F[1]);
   END {
@@ -39,6 +39,12 @@ perl -CSDA -lanE '
 
     for (@roots) { print "$_->[0]\t", ucfirst($_->[1]); }
   }
+  ' "$1/output-keymap.txt" > "$1/roots.tsv"
+
+# prepare-inputs.sh 里已经将字根后缀从 ASY 改成 012
+perl -CSDA -lanE '
+  next if /^\s*#/;
+  print "$F[0]\t$F[1]";
   ' "$1/output-keymap.txt" > "$1/roots.tsv"
 
 echo "Writing $1/roots-mapping.tsv ..."
