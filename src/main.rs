@@ -265,7 +265,7 @@ fn run_evaluate(
     // 构建 OptContext
     let scale_config = types::ScaleConfig::default();
     let weights = cfg.get_weight_config();
-    let ctx = OptContext::new(
+    let ctx = OptContext::new_with_fixed(
         &splits,
         &fixed_roots,
         &groups,
@@ -275,6 +275,7 @@ fn run_evaluate(
         simple_config,
         weights,
         TargetsConfig::default(),
+        &cfg.get_fixed_simple_codes(),
     );
 
     println!("  编码基数: {}", ctx.code_base);
@@ -801,7 +802,7 @@ fn run_optimize(cfg: &Config) {
     } else {
         println!("\n📐 正在进行初始尺度校准...");
         let temp_scale = types::ScaleConfig::default();
-        let temp_ctx = OptContext::new(
+        let temp_ctx = OptContext::new_with_fixed(
             &splits,
             &fixed_roots,
             &dynamic_groups,
@@ -811,6 +812,7 @@ fn run_optimize(cfg: &Config) {
             simple_config.clone(),
             weights,
             TargetsConfig::default(),
+            &cfg.get_fixed_simple_codes(),
         );
 
         let initial_assignment = annealing::smart_init(&temp_ctx, cfg);
@@ -953,7 +955,7 @@ fn run_optimize(cfg: &Config) {
     let key_dist_config_2 = loader::load_key_distribution(&cfg.files.key_dist);
 
     let targets_config = cfg.get_targets_config();
-    let ctx = OptContext::new(
+    let ctx = OptContext::new_with_fixed(
         &splits,
         &fixed_roots,
         &dynamic_groups,
@@ -963,6 +965,7 @@ fn run_optimize(cfg: &Config) {
         simple_config,
         weights,
         targets_config,
+        &cfg.get_fixed_simple_codes(),
     );
 
     println!("\n  - 编码基数: {}", ctx.code_base);

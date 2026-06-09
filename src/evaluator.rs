@@ -3,22 +3,49 @@
 // =========================================================================
 
 use rand::prelude::*;
-use std::collections::HashMap;
+
+use std::cmp::Ordering;
 
 use crate::context::OptContext;
-use crate::types::{KeyDistConfig, MetricScores, Metrics, SimpleMetrics, EQUIV_TABLE_SIZE};
+use crate::types::{
+    KeyDistConfig, MetricScores, Metrics, SimpleAssignMode, SimpleMetrics, EQUIV_TABLE_SIZE,
+    KEY_SPACE,
+};
 
 // =========================================================================
 // 简码评估器
 // =========================================================================
 
-/// 简码级别跟踪器
+/// 单个简码指令的最大键位数上界（用于无堆分配地存储「选中字出简贡献」的键位列表）。
+///
+/// 简码桶容量为 `code_base^L`（`code_base = EQUIV_TABLE_SIZE + 1 = 32`），故现实配置中
+/// 单级简码指令长度 `L` 极少超过 4（`32^4` 已达百万级桶）。取 12 留足冗余；`add_contrib`
+/// 中以 `debug_assert!` 校验不越界。这样每个「选中字」的键位贡献可存于定长数组，回滚时
+/// 整存整取，warmup 后热路径不再产生新的堆分配（需求 3.1）。
+const SIMPLE_KEYS_CAP: usize = 12;
+
+/// 简码桶：映射到同一简码编码的候选字集合（局部排序对象）
+#[derive(Clone, Default)]
+struct SimpleBucket {
+    /// 映射到该简码编码的候选字 ci 列表
+    members: Vec<usize>,
+    /// 桶频率和
+    freq_sum: u64,
+}
+
+/// 简码级别跟踪器（增量化）
 struct SimpleLevelTracker {
     /// 该级别的编码数
     code_num: usize,
-    /// 编码到候选汉字的映射 (编码 -> [(汉字索引, 频率)])
-    code_to_candidates: HashMap<usize, Vec<(usize, u64)>>,
-    /// 已覆盖的频率
+    /// 简码桶向量容量 = ctx.simple_level_capacity[li]
+    capacity: usize,
+    /// 按简码编码直接索引的桶向量（替代 HashMap）
+    buckets: Vec<SimpleBucket>,
+    /// current_simple_code[ci]：该字当前所在桶编码，-1 表示无
+    current_simple_code: Vec<i64>,
+    /// 该级出简标记，按 ci 索引
+    selected: Vec<bool>,
+    /// 已覆盖的频率（级别聚合，增量维护）
     covered_freq: u64,
     /// 加权等价值
     equiv_weighted: f64,
@@ -28,8 +55,91 @@ struct SimpleLevelTracker {
     key_usage: [f64; EQUIV_TABLE_SIZE],
     /// 键击次数
     key_presses: f64,
-    /// 已分配的汉字列表
-    assigned_chars: Vec<usize>,
+    /// 出简贡献缓存（按 ci 索引，仅当 `selected[ci]` 时有效）：选中时刻该字的简码当量值。
+    ///
+    /// 用于在「取消选中 / 刷新」时精确扣除该字曾累加进 `equiv_weighted` 的贡献
+    /// （`sel_equiv[ci] * freq`）。因增量更新发生在 `assignment` 已更新之后，无法再由
+    /// 当前 `assignment` 复原旧贡献，故在选中时刻就地存储，保证逐字段与全量一致（需求 1.4）。
+    sel_equiv: Vec<f64>,
+    /// 出简贡献缓存（按 ci 索引，仅当 `selected[ci]` 时有效）：选中时刻该字的简码键位列表。
+    /// 配合 `sel_keys_len` 使用，避免存储变长 `Vec` 带来的每步堆分配（需求 3.1）。
+    sel_keys: Vec<[u8; SIMPLE_KEYS_CAP]>,
+    /// `sel_keys[ci]` 的有效长度（按 ci 索引）。
+    sel_keys_len: Vec<u8>,
+}
+
+/// 级别聚合标量快照（用于回滚整存整取）
+#[derive(Clone)]
+struct LevelAggregateSnapshot {
+    covered_freq: u64,
+    equiv_weighted: f64,
+    equiv_freq_sum: u64,
+    key_usage: [f64; EQUIV_TABLE_SIZE],
+    key_presses: f64,
+}
+
+/// 触碰桶的成员快照（移动前状态，复用缓冲）。
+///
+/// 阶段 2 改为「仅对脏桶做局部重排 + pending 跨级排除传播」的精确增量后，回滚不再整级
+/// 覆盖，而是对「本次移动真正触碰过的桶」做一次性成员快照（首次触碰时记录），回滚时整存
+/// 整取还原成员顺序与 `freq_sum`。`members` 用 `clear` + `extend_from_slice` 就地填充，
+/// warmup 后不再产生新的堆分配（需求 3.1）。
+#[derive(Clone, Default)]
+struct BucketSnap {
+    li: usize,
+    code: usize,
+    members: Vec<usize>,
+    freq_sum: u64,
+}
+
+/// 选中贡献撤销项（移动前 `sel_equiv` / `sel_keys` / `sel_keys_len`，定长可 Copy）。
+#[derive(Clone, Copy)]
+struct ContribUndo {
+    li: usize,
+    ci: usize,
+    old_equiv: f64,
+    old_keys: [u8; SIMPLE_KEYS_CAP],
+    old_len: u8,
+}
+
+/// 简码快照（复用预分配缓冲，供 commit/rollback 使用）
+///
+/// 阶段 2 精确增量化（Backlog B1）后的回滚策略 —— 细粒度撤销（option b）：
+/// - 桶成员：`bucket_snaps` 在「首次触碰某桶」时记录其移动前成员与 `freq_sum`
+///   （由 `cur_gen` 代际标记去重，保证每桶仅快照一次），回滚整存整取还原；
+/// - 级别聚合：标量较小，移动起始对全部级别整存一次（`aggregates`），回滚整体写回；
+/// - `current_simple_code` / `selected` / `sel_*` 贡献：以撤销日志（记录每次修改前值）
+///   逆序回放，最早的旧值最终生效，精确还原到移动前；
+/// - `all_assigned_flags`：由 `assigned_start_flag` + `assigned_touched_list` 记录移动起始
+///   值并按需还原（同一结构亦用于阶段 3 的「出简翻转」检测，复用以避免 O(候选字集) 扫描）。
+///
+/// 该策略不再整级快照/重置（避免 O(级别容量) 退化），回滚成本为 O(受影响项)。
+#[derive(Default)]
+struct SimpleSnapshot {
+    /// 本次快照是否包含出简选择状态（`selection_may_change` 为真时为 true）。
+    /// 仅影响全码桶成员（出简选择不变）的移动只需回滚简码重码标量与贡献缓存。
+    has_selection: bool,
+    /// 触碰桶成员快照池（复用：用 `bucket_snaps_len` 标记有效前缀，不收缩底层容量）。
+    bucket_snaps: Vec<BucketSnap>,
+    /// `bucket_snaps` 有效前缀长度。
+    bucket_snaps_len: usize,
+    /// 移动起始的全部级别聚合标量快照（回滚整体写回）。
+    aggregates: Vec<LevelAggregateSnapshot>,
+    /// `current_simple_code` 撤销日志：(li, ci, 修改前 code)，逆序回放。
+    undo_code: Vec<(usize, usize, i64)>,
+    /// `selected` 撤销日志：(li, ci, 修改前 selected)，逆序回放。
+    undo_selected: Vec<(usize, usize, bool)>,
+    /// 选中贡献撤销日志（`sel_equiv` / `sel_keys` / `sel_keys_len`），逆序回放。
+    undo_contrib: Vec<ContribUndo>,
+    /// 触碰的全码桶简码重码贡献快照：(code, 修改前 count, 修改前 freq)
+    collision_buckets: Vec<(usize, usize, u64)>,
+    /// 触碰的 last_full_codes 条目：(ci, 修改前 full_code)
+    last_full_codes: Vec<(usize, usize)>,
+    /// 简码重码标量快照
+    old_collision_count: usize,
+    old_collision_freq: u64,
+    old_collision_rate: f64,
+    old_cached_simple_score: f64,
 }
 
 /// 简码评估器
@@ -40,223 +150,1092 @@ pub struct SimpleEvaluator {
     all_assigned_flags: Vec<bool>,
     /// 简码重码数：全码桶去掉出简字后仍有重码的数量
     simple_collision_count: usize,
+    /// 简码重码频率（重码率分子，增量维护）
+    simple_collision_freq: u64,
     /// 简码重码率：全码桶去掉出简字后仍被重码的字频 / 总频
     simple_collision_rate: f64,
+    /// 各全码桶对简码重码的当前贡献缓存：bucket_collision_contrib[code] = (count, freq)
+    ///
+    /// 用于增量更新简码重码：对受影响的少数全码桶用「减旧贡献、加新贡献」做差量维护，
+    /// 从而避免每步全量扫描整个编码空间（需求 14.3）。在全量重建时一次性填满。
+    bucket_collision_contrib: Vec<(usize, u64)>,
+    /// 每个汉字「上次同步时」的全码编码缓存（按 ci 索引）。
+    ///
+    /// 用于在增量更新时检测移动组所触碰的全码桶（旧编码 ∪ 新编码），定位需要重算
+    /// 简码重码的全码桶（需求 14.2/14.3）。全量重建时从当前分配重新填充。
+    last_full_codes: Vec<usize>,
     /// 缓存的简码得分
     cached_simple_score: f64,
     /// 得分是否需要重新计算
     simple_score_dirty: bool,
-    /// 按频率降序排列的汉字索引（缓存，频率不变所以排序不变）
-    sorted_chars: Vec<usize>,
+    /// get_simple_keys 复用缓冲区（去堆分配）
+    key_buf: Vec<u8>,
+    /// 快照回滚复用缓冲
+    snapshot: SimpleSnapshot,
+    /// 桶触碰代际标记：`bucket_gen[li][code] == cur_gen` 表示该桶在本次移动中已被触碰
+    /// （已快照成员、已加入 `dirty_per_level`）。用代际计数实现 O(1) 去重与 O(1) 整体复位。
+    bucket_gen: Vec<Vec<u32>>,
+    /// 当前移动代际计数（每次增量选择开始时自增；溢出时整体复位）。
+    cur_gen: u32,
+    /// 每级脏桶编码列表（复用工作集）：本次移动中成员发生变化、需局部重排的桶。
+    dirty_per_level: Vec<Vec<usize>>,
+    /// 跨级排除传播待处理动作（ping-pong 缓冲之一）：(ci, kind)，kind=0 插入 / 1 移除。
+    pending_a: Vec<(usize, u8)>,
+    /// 跨级排除传播待处理动作（ping-pong 缓冲之二）。
+    pending_b: Vec<(usize, u8)>,
+    /// 当前级别经 pending 插入的候选字（复用）：用于重排后判定「未选中则继续向上插入」。
+    inserted_buf: Vec<usize>,
+    /// 当前级别重排新选中的候选字（复用）：原生新选中需向上传播「移除」。
+    newly_sel_buf: Vec<usize>,
+    /// 当前级别重排新落选的候选字（复用）：需向上传播「插入」。
+    newly_desel_buf: Vec<usize>,
+    /// `all_assigned_flags` 触碰代际标记（与 `cur_gen` 同源）。
+    assigned_touch_gen: Vec<u32>,
+    /// `all_assigned_flags` 移动起始值（首次触碰时记录），供回滚与阶段 3 翻转检测复用。
+    assigned_start_flag: Vec<bool>,
+    /// 本次移动中 `all_assigned_flags` 被触碰过的候选字列表（复用工作集）。
+    assigned_touched_list: Vec<usize>,
+    /// 增量更新时记录「需重算简码重码的全码桶」工作集（复用，去堆分配）
+    affected_full_buckets: Vec<usize>,
+    /// 全量重建调用计数（仅用于观测/防回归）。
+    ///
+    /// 在 `full_rebuild` 入口自增，证明生产热路径 `try_move`/`try_swap`（走增量路径
+    /// `apply_move_incremental`）不会触发全量重建。增量路径（apply/commit/rollback）
+    /// 不得触碰此计数器。
+    pub(crate) full_rebuild_calls: usize,
+    /// 阶段 2「出简选择增量」上一次移动访问的候选字次数（观测/防回归，Backlog B1 北极星）。
+    ///
+    /// 统计 `do_incremental_selection` 中真正被检视的候选字工作量：阶段 1 逐级归属处理、
+    /// 重排种子触碰、脏桶局部重排的成员遍历、跨级传播动作。该值应与「受影响字 + 脏桶成员」
+    /// 同阶，**不随候选字总集规模增长**——证明阶段 2 不再做 O(候选字集 × 级数) 的整体重算。
+    /// 空交集（无候选归属变化且无首选翻转）移动时为 0。每次 `apply_move_incremental` 复位。
+    pub(crate) stage2_visits: usize,
 }
 
 impl SimpleEvaluator {
-    /// 创建新的简码评估器
+    /// 创建新的简码评估器（全量构建，初始化增量状态）
+    ///
+    /// `is_first_candidate[ci]` 表示 `ci` 是否为其全码桶首选字，供 Efficiency
+    /// 模式排序键中的 `sel_len`（0/1）取值（需求 4.6/5.4）。
     pub fn new(
         ctx: &OptContext,
         assignment: &[u8],
         full_code_to_chars: &[Vec<usize>],
+        is_first_candidate: &[bool],
     ) -> Self {
         let n_levels = ctx.simple_config.levels.len();
+        let n_chars = ctx.char_infos.len();
 
-        let mut levels: Vec<SimpleLevelTracker> = ctx
-            .simple_config
-            .levels
-            .iter()
-            .map(|l| SimpleLevelTracker {
-                code_num: l.code_num,
-                code_to_candidates: HashMap::new(),
-                covered_freq: 0,
-                equiv_weighted: 0.0,
-                equiv_freq_sum: 0,
-                key_usage: [0.0; EQUIV_TABLE_SIZE],
-                key_presses: 0.0,
-                assigned_chars: Vec::new(),
+        let levels: Vec<SimpleLevelTracker> = (0..n_levels)
+            .map(|li| {
+                let cap = ctx
+                    .simple_level_capacity
+                    .get(li)
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1);
+                let buckets = (0..cap)
+                    .map(|_| SimpleBucket {
+                        members: Vec::new(),
+                        freq_sum: 0,
+                    })
+                    .collect();
+                SimpleLevelTracker {
+                    code_num: ctx.simple_config.levels[li].code_num,
+                    capacity: cap,
+                    buckets,
+                    current_simple_code: vec![-1i64; n_chars],
+                    selected: vec![false; n_chars],
+                    covered_freq: 0,
+                    equiv_weighted: 0.0,
+                    equiv_freq_sum: 0,
+                    key_usage: [0.0; EQUIV_TABLE_SIZE],
+                    key_presses: 0.0,
+                    sel_equiv: vec![0.0; n_chars],
+                    sel_keys: vec![[0u8; SIMPLE_KEYS_CAP]; n_chars],
+                    sel_keys_len: vec![0u8; n_chars],
+                }
             })
             .collect();
 
-        let n_chars = ctx.char_infos.len();
-        let mut sorted_chars: Vec<usize> = (0..n_chars).collect();
-        sorted_chars.sort_by(|&a, &b| {
-            ctx.char_infos[b]
-                .frequency
-                .cmp(&ctx.char_infos[a].frequency)
-        });
-
-        let mut globally_assigned = vec![false; n_chars];
-
-        for li in 0..n_levels {
-            Self::build_level(
-                ctx,
-                assignment,
-                &mut levels[li],
-                li,
-                &sorted_chars,
-                &globally_assigned,
-            );
-            for &ci in &levels[li].assigned_chars {
-                globally_assigned[ci] = true;
-            }
-        }
-
-        // 计算简码重码
-        let (sc_count, sc_rate) =
-            Self::compute_simple_collisions(ctx, full_code_to_chars, &globally_assigned);
+        let bucket_gen: Vec<Vec<u32>> = (0..n_levels)
+            .map(|li| {
+                let cap = ctx
+                    .simple_level_capacity
+                    .get(li)
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1);
+                vec![0u32; cap]
+            })
+            .collect();
 
         let mut se = Self {
             levels,
-            all_assigned_flags: globally_assigned,
-            simple_collision_count: sc_count,
-            simple_collision_rate: sc_rate,
+            all_assigned_flags: vec![false; n_chars],
+            simple_collision_count: 0,
+            simple_collision_freq: 0,
+            simple_collision_rate: 0.0,
+            bucket_collision_contrib: vec![(0usize, 0u64); full_code_to_chars.len()],
+            last_full_codes: vec![0usize; n_chars],
             cached_simple_score: 0.0,
             simple_score_dirty: true,
-            sorted_chars,
+            key_buf: Vec::new(),
+            snapshot: SimpleSnapshot::default(),
+            bucket_gen,
+            cur_gen: 0,
+            dirty_per_level: (0..n_levels).map(|_| Vec::new()).collect(),
+            pending_a: Vec::new(),
+            pending_b: Vec::new(),
+            inserted_buf: Vec::new(),
+            newly_sel_buf: Vec::new(),
+            newly_desel_buf: Vec::new(),
+            assigned_touch_gen: vec![0u32; n_chars],
+            assigned_start_flag: vec![false; n_chars],
+            assigned_touched_list: Vec::new(),
+            affected_full_buckets: Vec::new(),
+            full_rebuild_calls: 0,
+            stage2_visits: 0,
         };
+
+        se.rebuild_internal(ctx, assignment, full_code_to_chars, is_first_candidate);
         se.cached_simple_score = se.compute_simple_score(ctx);
         se.simple_score_dirty = false;
         se
     }
 
-    /// 构建单个简码级别
-    fn build_level(
+    /// 内部全量重建：从候选字集合出发重建所有级别的增量状态与简码重码。
+    ///
+    /// 保持与旧 HashMap 实现一致的语义：
+    /// - 按级别升序处理，低级别先出简，高级别排除已出简字；
+    /// - 桶内按当前分配模式的排序键（`cmp_in_bucket`）局部排序后选取前 `code_num`
+    ///   个出简。Frequency 模式排序键为 `freq`，与旧实现的「freq 降序 / ci 升序
+    ///   take(code_num)」完全一致（需求 17.5）；Efficiency 模式排序键为
+    ///   `freq × (base_saving[ci][li] + sel_len)`。
+    fn rebuild_internal(
+        &mut self,
         ctx: &OptContext,
         assignment: &[u8],
-        level: &mut SimpleLevelTracker,
-        li: usize,
-        sorted_chars: &[usize],
-        excluded: &[bool],
+        full_code_to_chars: &[Vec<usize>],
+        is_first_candidate: &[bool],
     ) {
-        level.code_to_candidates.clear();
-        level.covered_freq = 0;
-        level.equiv_weighted = 0.0;
-        level.equiv_freq_sum = 0;
-        level.key_usage = [0.0; EQUIV_TABLE_SIZE];
-        level.key_presses = 0.0;
-        level.assigned_chars.clear();
+        let n_chars = ctx.char_infos.len();
 
-        for &ci in sorted_chars {
-            if excluded[ci] {
-                continue;
-            }
-            if let Some(code) = ctx.calc_simple_code(ci, li, assignment) {
-                level
-                    .code_to_candidates
-                    .entry(code)
-                    .or_default()
-                    .push((ci, ctx.char_infos[ci].frequency));
-            }
+        // 简码出简选择（桶 / current_simple_code / selected / 级别聚合 / all_assigned_flags）
+        self.rebuild_selection(ctx, assignment, is_first_candidate);
+
+        // 全量重算简码重码并填满每桶贡献缓存（供后续增量差量维护）
+        self.recompute_collisions_full(ctx, full_code_to_chars);
+
+        // 记录每个汉字当前全码编码，作为后续增量检测全码桶变化的基线
+        if self.last_full_codes.len() != n_chars {
+            self.last_full_codes = vec![0usize; n_chars];
+        }
+        for ci in 0..n_chars {
+            self.last_full_codes[ci] = ctx.calc_code_only(ci, assignment);
         }
 
-        let all_assigned: Vec<usize> = level
-            .code_to_candidates
-            .values()
-            .flat_map(|candidates| {
-                candidates
-                    .iter()
-                    .take(level.code_num)
-                    .filter(|(ci, _)| !excluded[*ci])
-                    .map(|&(ci, _)| ci)
-            })
-            .collect();
+        self.simple_score_dirty = true;
+    }
 
-        for ci in &all_assigned {
-            let ci = *ci;
-            let freq = ctx.char_infos[ci].frequency;
-            level.covered_freq += freq;
-            level.assigned_chars.push(ci);
+    /// 将候选字 `ci` 在级别 `li` 的简码键位写入复用缓冲 `key_buf`（去堆分配），并在该级
+    /// `space_commit` 为真时追加一个尾随空格键 `KEY_SPACE`（需求 20.7/20.8）。
+    ///
+    /// 返回是否存在有效简码键位（无简码指令/越界时返回 false，此时不追加空格）。该尾随空格
+    /// 通过 `sel_keys` 缓存与 `key_usage`/`key_presses` 的既有维护路径统一计入分布偏差，并由
+    /// 快照回滚精确还原；`space_commit` 为假时缓冲不含空格。
+    #[inline]
+    fn fill_keys_with_commit(
+        &mut self,
+        ctx: &OptContext,
+        ci: usize,
+        li: usize,
+        assignment: &[u8],
+    ) -> bool {
+        let has_keys = ctx.get_simple_keys_into(ci, li, assignment, &mut self.key_buf);
+        if has_keys && ctx.simple_config.levels[li].space_commit {
+            self.key_buf.push(KEY_SPACE as u8);
+        }
+        has_keys
+    }
 
-            let eq = ctx.calc_simple_equiv(ci, li, assignment);
-            level.equiv_weighted += eq * freq as f64;
-            level.equiv_freq_sum += freq;
+    /// 仅重建简码出简选择（不触碰简码重码缓存）。
+    ///
+    /// 与全量路径语义一致：按级别升序处理，低级别先出简、高级别排除已出简字；
+    /// 桶内按当前分配模式排序键局部排序后取前 `code_num` 个出简。
+    /// 供 `rebuild_internal` 与 `apply_move_incremental` 复用。
+    fn rebuild_selection(
+        &mut self,
+        ctx: &OptContext,
+        assignment: &[u8],
+        is_first_candidate: &[bool],
+    ) {
+        let n_levels = self.levels.len();
+        let n_chars = ctx.char_infos.len();
 
-            if let Some(keys) = ctx.get_simple_keys(ci, li, assignment) {
-                let freq_f = freq as f64;
-                for &k in &keys {
-                    level.key_usage[k as usize] += freq_f;
+        // 重置所有级别状态
+        for level in self.levels.iter_mut() {
+            for b in level.buckets.iter_mut() {
+                b.members.clear();
+                b.freq_sum = 0;
+            }
+            for c in level.current_simple_code.iter_mut() {
+                *c = -1;
+            }
+            for s in level.selected.iter_mut() {
+                *s = false;
+            }
+            level.covered_freq = 0;
+            level.equiv_weighted = 0.0;
+            level.equiv_freq_sum = 0;
+            level.key_usage = [0.0; EQUIV_TABLE_SIZE];
+            level.key_presses = 0.0;
+        }
+        self.all_assigned_flags.clear();
+        self.all_assigned_flags.resize(n_chars, false);
+        // 固定简码字（需求 21.8）：初始化即置 all_assigned_flags = true 且永不翻转
+        // （固定字不在候选集、不参与出简选择），使其在简码重码统计中始终作为「已出简」
+        // 从全码桶排除。固定字不计入任何级别聚合（其贡献由 ctx 常量偏置体现）。
+        for fc in &ctx.simple_fixed_codes {
+            self.all_assigned_flags[fc.ci] = true;
+        }
+
+        let mut touched: Vec<usize> = Vec::new();
+        for li in 0..n_levels {
+            // 阶段 1：候选字入桶（仅遍历候选字集合，排除已被低级别出简的字）
+            touched.clear();
+            for idx in 0..ctx.simple_candidate_chars.len() {
+                let ci = ctx.simple_candidate_chars[idx];
+                if self.all_assigned_flags[ci] {
+                    continue;
                 }
-                level.key_presses += freq_f * keys.len() as f64;
+                if let Some(code) = ctx.calc_simple_code_eligible(ci, li, assignment) {
+                    debug_assert!(code < self.levels[li].capacity);
+                    let bucket = &mut self.levels[li].buckets[code];
+                    if bucket.members.is_empty() {
+                        touched.push(code);
+                    }
+                    bucket.members.push(ci);
+                    bucket.freq_sum += ctx.char_infos[ci].frequency;
+                    self.levels[li].current_simple_code[ci] = code as i64;
+                }
+            }
+
+            // 阶段 2：桶内按分配模式排序键局部排序后选取前 code_num 个出简
+            for ti in 0..touched.len() {
+                let code = touched[ti];
+                // 固定简码占用名额（需求 21.7）：每桶优化可选名额 = code_num - 占用数（下限 0）。
+                let code_num = self.levels[li]
+                    .code_num
+                    .saturating_sub(ctx.simple_fixed_occ(li, code));
+                // 仅对受影响桶内的候选列表执行局部排序（需求 6.2/6.3）
+                Self::sort_bucket(
+                    ctx,
+                    is_first_candidate,
+                    li,
+                    &mut self.levels[li].buckets[code].members,
+                );
+                let sel: Vec<usize> = self.levels[li].buckets[code]
+                    .members
+                    .iter()
+                    .take(code_num)
+                    .copied()
+                    .collect();
+                for ci in sel {
+                    let freq = ctx.char_infos[ci].frequency;
+                    let freq_f = freq as f64;
+                    self.levels[li].selected[ci] = true;
+                    self.all_assigned_flags[ci] = true;
+                    self.levels[li].covered_freq += freq;
+
+                    let eq = ctx.calc_simple_equiv(ci, li, assignment);
+                    self.levels[li].equiv_weighted += eq * freq_f;
+                    self.levels[li].equiv_freq_sum += freq;
+
+                    // 记录选中时刻的当量与键位贡献，供后续增量「取消选中/刷新」精确扣除。
+                    self.levels[li].sel_equiv[ci] = eq;
+                    let has_keys = self.fill_keys_with_commit(ctx, ci, li, assignment);
+                    if has_keys {
+                        let klen = self.key_buf.len();
+                        debug_assert!(klen <= SIMPLE_KEYS_CAP, "简码键位数超出 SIMPLE_KEYS_CAP");
+                        let n = klen.min(SIMPLE_KEYS_CAP);
+                        for i in 0..n {
+                            self.levels[li].sel_keys[ci][i] = self.key_buf[i];
+                        }
+                        self.levels[li].sel_keys_len[ci] = n as u8;
+                        for &k in &self.key_buf {
+                            self.levels[li].key_usage[k as usize] += freq_f;
+                        }
+                        self.levels[li].key_presses += freq_f * klen as f64;
+                    } else {
+                        self.levels[li].sel_keys_len[ci] = 0;
+                    }
+                }
             }
         }
     }
 
-    /// 计算简码重码数和简码重码率
-    /// 遍历全码桶，去掉已出简的字，统计剩余重码
-    fn compute_simple_collisions(
+    /// 计算单个全码桶（去除已出简字后）对简码重码的贡献：(count, freq)。
+    #[inline]
+    fn bucket_collision_contrib_of(
         ctx: &OptContext,
-        full_code_to_chars: &[Vec<usize>],
+        chars: &[usize],
         assigned: &[bool],
-    ) -> (usize, f64) {
-        let mut total_collision_count: usize = 0;
-        let mut total_collision_freq: u64 = 0;
-
-        for chars in full_code_to_chars.iter() {
-            if chars.is_empty() {
-                continue;
-            }
-            // 过滤掉已出简的字
-            let mut n = 0usize;
-            let mut max_freq = 0u64;
-            let mut sum_freq = 0u64;
-            for &ci in chars {
-                if !assigned[ci] {
-                    let f = ctx.char_infos[ci].frequency;
-                    sum_freq += f;
-                    if f > max_freq {
-                        max_freq = f;
-                    }
-                    n += 1;
+    ) -> (usize, u64) {
+        let mut n = 0usize;
+        let mut max_freq = 0u64;
+        let mut sum_freq = 0u64;
+        for &ci in chars {
+            if !assigned[ci] {
+                let f = ctx.char_infos[ci].frequency;
+                sum_freq += f;
+                if f > max_freq {
+                    max_freq = f;
                 }
-            }
-
-            if n >= 2 {
-                total_collision_count += n - 1;
-                total_collision_freq += sum_freq - max_freq;
+                n += 1;
             }
         }
+        if n >= 2 {
+            (n - 1, sum_freq - max_freq)
+        } else {
+            (0, 0)
+        }
+    }
 
-        let rate = if ctx.total_frequency > 0 {
-            total_collision_freq as f64 / ctx.total_frequency as f64
+    /// 全量重算简码重码并填满每桶贡献缓存（供后续增量差量维护）。
+    fn recompute_collisions_full(&mut self, ctx: &OptContext, full_code_to_chars: &[Vec<usize>]) {
+        if self.bucket_collision_contrib.len() != full_code_to_chars.len() {
+            self.bucket_collision_contrib = vec![(0usize, 0u64); full_code_to_chars.len()];
+        }
+        let mut total_count = 0usize;
+        let mut total_freq = 0u64;
+        for (code, chars) in full_code_to_chars.iter().enumerate() {
+            let contrib = if chars.is_empty() {
+                (0, 0)
+            } else {
+                Self::bucket_collision_contrib_of(ctx, chars, &self.all_assigned_flags)
+            };
+            self.bucket_collision_contrib[code] = contrib;
+            total_count += contrib.0;
+            total_freq += contrib.1;
+        }
+        self.simple_collision_count = total_count;
+        self.simple_collision_freq = total_freq;
+        self.simple_collision_rate = if ctx.total_frequency > 0 {
+            total_freq as f64 / ctx.total_frequency as f64
         } else {
             0.0
         };
-
-        (total_collision_count, rate)
     }
 
-    /// 完整重建简码评估
+    /// 计算桶内排序键（需求 4.3/4.4/5.4）。
+    ///
+    /// - Frequency 模式：`key = freq`；
+    /// - Efficiency 模式：`key = freq × (base_saving[ci][li] + sel_len)`，
+    ///   `sel_len` 由 `is_first_candidate[ci]` 取 0（首选字）或 1（非首选字）。
+    #[inline]
+    fn bucket_sort_key(
+        ctx: &OptContext,
+        is_first_candidate: &[bool],
+        li: usize,
+        ci: usize,
+    ) -> i64 {
+        let freq = ctx.char_infos[ci].frequency as i64;
+        match ctx.simple_assign_mode {
+            SimpleAssignMode::Frequency => freq,
+            SimpleAssignMode::Efficiency => {
+                let sel_len: i64 = if is_first_candidate[ci] { 0 } else { 1 };
+                freq * (ctx.simple_base_saving[ci][li] + sel_len)
+            }
+        }
+    }
+
+    /// 桶内出简候选排序比较器（需求 4.7）。
+    ///
+    /// 排序键降序；排序键相等时先按 `freq` 降序、再按 `ci` 升序，保证结果可复现。
+    /// 返回的顺序使「应出简」的候选排在前面，便于 `take(code_num)` 选中。
+    #[inline]
+    fn cmp_in_bucket(
+        ctx: &OptContext,
+        is_first_candidate: &[bool],
+        li: usize,
+        a: usize,
+        b: usize,
+    ) -> Ordering {
+        let ka = Self::bucket_sort_key(ctx, is_first_candidate, li, a);
+        let kb = Self::bucket_sort_key(ctx, is_first_candidate, li, b);
+        if ka != kb {
+            return kb.cmp(&ka); // 排序键降序
+        }
+        let fa = ctx.char_infos[a].frequency;
+        let fb = ctx.char_infos[b].frequency;
+        if fa != fb {
+            return fb.cmp(&fa); // 先按 freq 降序
+        }
+        a.cmp(&b) // 再按 ci 升序
+    }
+
+    /// 仅对单个受影响桶内的候选列表执行局部排序（需求 6.1/6.2/6.3）。
+    ///
+    /// 使用不分配额外堆缓冲的 `sort_unstable_by`；因 `cmp_in_bucket` 以 `ci`
+    /// 收尾构成严格全序，排序结果确定可复现。供 `rebuild_internal` 与后续
+    /// 增量 `apply_move` 复用。
+    #[inline]
+    fn sort_bucket(
+        ctx: &OptContext,
+        is_first_candidate: &[bool],
+        li: usize,
+        members: &mut [usize],
+    ) {
+        members.sort_unstable_by(|&a, &b| Self::cmp_in_bucket(ctx, is_first_candidate, li, a, b));
+    }
+
+    /// 完整重建简码评估（供周期对账与结束校验调用）
     pub fn full_rebuild(
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
         full_code_to_chars: &[Vec<usize>],
+        is_first_candidate: &[bool],
     ) {
-        let n_levels = ctx.simple_config.levels.len();
-        let n_chars = ctx.char_infos.len();
+        // 观测计数：记录一次全量重建（防回归断言依赖此计数证明热路径不走全量重建）。
+        self.full_rebuild_calls += 1;
+        self.rebuild_internal(ctx, assignment, full_code_to_chars, is_first_candidate);
+    }
 
-        // 重用 all_assigned_flags，清零
-        self.all_assigned_flags.clear();
-        self.all_assigned_flags.resize(n_chars, false);
+    /// 简码增量更新（热路径核心，需求 1/14）。
+    ///
+    /// 当退火移动一个/两个字根组且（受影响候选交集 `affected_candidates` 非空、或存在首选翻转
+    /// 重排种子 `resort_seeds`、或全码桶成员变化 `full_affected_chars` 非空）且简码已激活时调用。
+    ///
+    /// 参数：
+    /// - `affected_candidates`：受影响候选字集合 A（= `group_to_simple_affected_candidate[r]`，
+    ///   已与候选字集合求交）。这些字的简码编码可能变化，阶段 1 据此做「旧桶移除/新桶加入」。
+    /// - `resort_seeds`：首选状态（`is_first_candidate`）翻转、且为候选字的汉字（仅 Efficiency
+    ///   模式非空）。其简码编码可能未变，但桶内排序键随首选翻转而变，需把其当前所在简码桶标记
+    ///   为脏以触发局部重排（需求 4.6/5.4/6.2）。
+    /// - `full_affected_chars`：本次移动改变了全码编码的汉字（= 移动组的 `group_to_chars`，
+    ///   交换时为两组之并）。用于定位成员发生变化的全码桶。
+    /// - `full_code_to_chars`：主评估器当前（移动后）的全码桶。
+    /// - `is_first_candidate`：主评估器维护的全码桶首选标记，供 Efficiency 排序键取 `sel_len`。
+    ///
+    /// 在修改前以细粒度撤销日志/快照记录将被覆盖的状态，供 `rollback` 使用；本方法只负责
+    /// 「正向增量」，提交/回滚由调用方决定。
+    ///
+    /// 实现说明（Backlog B1：阶段 2 出简选择精确增量化）：
+    /// - 阶段 2 不再调用 `rebuild_selection` 做整体重算，而是 `do_incremental_selection`：
+    ///   对受影响候选字与重排种子标记脏桶，按级别升序「仅对脏桶局部重排选出前 code_num」，
+    ///   并经 `pending` 做「跨级排除传播」（新出简→更高级移除、落选→更高级插入），逐字段与
+    ///   `full_rebuild` 一致，单步复杂度降至 O(受影响字数 × 级别相关小量)（需求 1.1/1.3/1.4/7.5）；
+    /// - 阶段 3 的简码重码同为真增量：仅在「移动组改变成员的全码桶」与「`all_assigned_flags`
+    ///   翻转的字所在全码桶」这少数桶上用贡献缓存做差量更新，避免每步全量扫描整个编码空间
+    ///   （需求 14.3）。
+    pub fn apply_move_incremental(
+        &mut self,
+        ctx: &OptContext,
+        assignment: &[u8],
+        affected_candidates: &[usize],
+        resort_seeds: &[usize],
+        full_affected_chars: &[usize],
+        full_code_to_chars: &[Vec<usize>],
+        is_first_candidate: &[bool],
+    ) {
+        // 受影响裁剪（需求 1.5/7.6）：当本次移动既不影响任何候选字的简码归属
+        // （`affected_candidates` 空 ⟹ 出简选择不变），又不改变任何全码桶成员
+        // （`full_affected_chars` 空 ⟹ 简码重码不变）时，简码状态完全不变，直接返回。
+        //
+        // 注意：仅 `affected_candidates` 为空不足以早退——非候选字在全码桶间移动虽不改变
+        // 出简选择，却会改变「去掉出简字后」的全码桶成员，从而影响简码重码（需求 14.2/14.3）。
+        // 因此空交集时仍需执行阶段 1 + 阶段 3 的简码重码增量，仅可跳过阶段 2 的出简重选。
+        // === 记录将被覆盖的标量快照（供回滚）===
+        // 即使本次为空交集早退（简码状态完全不变），也先写入移动前标量快照并清空触碰向量，
+        // 使紧随其后的 `rollback()` 成为真正的 no-op（还原到与当前完全相同的值），而不会
+        // 误用上一次移动遗留的陈旧标量覆盖当前状态（需求 2.3）。
+        self.snapshot.has_selection = false;
+        self.snapshot.old_collision_count = self.simple_collision_count;
+        self.snapshot.old_collision_freq = self.simple_collision_freq;
+        self.snapshot.old_collision_rate = self.simple_collision_rate;
+        self.snapshot.old_cached_simple_score = self.cached_simple_score;
+        self.snapshot.collision_buckets.clear();
+        self.snapshot.last_full_codes.clear();
+        // 复位选择相关撤销缓冲（保留容量），保证空交集早退后的 rollback 为干净 no-op。
+        self.snapshot.bucket_snaps_len = 0;
+        self.snapshot.undo_code.clear();
+        self.snapshot.undo_selected.clear();
+        self.snapshot.undo_contrib.clear();
+        self.assigned_touched_list.clear();
+        // 复位阶段 2 访问计数（观测北极星：本次移动的出简选择增量工作量）。
+        self.stage2_visits = 0;
 
-        for li in 0..n_levels {
-            Self::build_level(
-                ctx,
-                assignment,
-                &mut self.levels[li],
-                li,
-                &self.sorted_chars,
-                &self.all_assigned_flags,
-            );
-            for &ci in &self.levels[li].assigned_chars {
-                self.all_assigned_flags[ci] = true;
+        if affected_candidates.is_empty() && full_affected_chars.is_empty() && resort_seeds.is_empty() {
+            return;
+        }
+
+        // 出简选择是否可能变化：存在受影响候选字（简码编码可能变化）或需重排种子
+        // （Efficiency 模式下首选状态翻转改变排序键）时，都需要重算出简选择（阶段 2）。
+        let selection_may_change = !affected_candidates.is_empty() || !resort_seeds.is_empty();
+        self.snapshot.has_selection = selection_may_change;
+
+        // 工作集复位
+        self.affected_full_buckets.clear();
+
+        // === 阶段 1（全码桶来源）：检测移动组所改变的全码桶（旧编码 ∪ 新编码）===
+        for &ci in full_affected_chars {
+            let new_code = ctx.calc_code_only(ci, assignment);
+            let old_code = self.last_full_codes[ci];
+            if new_code != old_code {
+                self.affected_full_buckets.push(old_code);
+                self.affected_full_buckets.push(new_code);
+                self.snapshot.last_full_codes.push((ci, old_code));
+                self.last_full_codes[ci] = new_code;
             }
         }
 
-        let (sc_count, sc_rate) =
-            Self::compute_simple_collisions(ctx, full_code_to_chars, &self.all_assigned_flags);
-        self.simple_collision_count = sc_count;
-        self.simple_collision_rate = sc_rate;
+        // === 阶段 2：仅对脏桶做局部重排 + pending_chars 跨级排除传播（精确增量，Backlog B1）===
+        // 不再调用 `rebuild_selection` 做整体重算。仅遍历受影响候选字 / 重排种子与脏桶，
+        // 单步复杂度降至 O(受影响字数 × 级别相关小量)，逐字段与全量重建一致（需求 1.1/1.3/1.4/7.5）。
+        if selection_may_change {
+            self.do_incremental_selection(
+                ctx,
+                assignment,
+                affected_candidates,
+                resort_seeds,
+                is_first_candidate,
+            );
+        }
+
+        // === 阶段 3（出简翻转来源）：出简标记净翻转的候选字所在全码桶 ===
+        // 复用 `assigned_touched_list` / `assigned_start_flag`：增量选择中每次改写
+        // `all_assigned_flags` 都登记了「移动起始值」，此处只遍历被触碰的少量候选字，
+        // 比较起始值与当前值判定净翻转，避免退化为 O(候选字集) 扫描（需求 14.2/14.3）。
+        if selection_may_change {
+            for idx in 0..self.assigned_touched_list.len() {
+                let ci = self.assigned_touched_list[idx];
+                if self.assigned_start_flag[ci] != self.all_assigned_flags[ci] {
+                    let code = ctx.calc_code_only(ci, assignment);
+                    self.affected_full_buckets.push(code);
+                }
+            }
+        }
+
+        // === 阶段 3：在受影响的少数全码桶上差量更新简码重码（需求 14.3）===
+        self.affected_full_buckets.sort_unstable();
+        self.affected_full_buckets.dedup();
+        for idx in 0..self.affected_full_buckets.len() {
+            let code = self.affected_full_buckets[idx];
+            let (old_count, old_freq) = self.bucket_collision_contrib[code];
+            let (new_count, new_freq) =
+                Self::bucket_collision_contrib_of(ctx, &full_code_to_chars[code], &self.all_assigned_flags);
+            if (new_count, new_freq) == (old_count, old_freq) {
+                continue;
+            }
+            self.snapshot
+                .collision_buckets
+                .push((code, old_count, old_freq));
+            // 先加新值再减旧值，避免 usize 下溢（总量恒 ≥ 旧桶贡献）
+            self.simple_collision_count = self.simple_collision_count + new_count - old_count;
+            self.simple_collision_freq = self.simple_collision_freq + new_freq - old_freq;
+            self.bucket_collision_contrib[code] = (new_count, new_freq);
+        }
+        self.simple_collision_rate = if ctx.total_frequency > 0 {
+            self.simple_collision_freq as f64 / ctx.total_frequency as f64
+        } else {
+            0.0
+        };
 
         self.simple_score_dirty = true;
+    }
+
+    /// 自增移动代际（用于脏桶/出简标记触碰的 O(1) 去重与 O(1) 整体复位）。
+    /// 代际计数溢出（绕回 0）时，整体清零代际标记数组并从 1 重新计数。
+    #[inline]
+    fn bump_generation(&mut self) {
+        self.cur_gen = self.cur_gen.wrapping_add(1);
+        if self.cur_gen == 0 {
+            for lvl in self.bucket_gen.iter_mut() {
+                for g in lvl.iter_mut() {
+                    *g = 0;
+                }
+            }
+            for g in self.assigned_touch_gen.iter_mut() {
+                *g = 0;
+            }
+            self.cur_gen = 1;
+        }
+    }
+
+    /// 首次触碰某桶时：快照其移动前成员与 `freq_sum`（供回滚），并将其编码加入
+    /// `dirty_per_level[li]`（待局部重排）。代际标记保证每桶仅快照/入列一次。
+    #[inline]
+    fn touch_bucket(&mut self, li: usize, code: usize) {
+        if self.bucket_gen[li][code] == self.cur_gen {
+            return;
+        }
+        self.bucket_gen[li][code] = self.cur_gen;
+
+        let idx = self.snapshot.bucket_snaps_len;
+        if idx == self.snapshot.bucket_snaps.len() {
+            self.snapshot.bucket_snaps.push(BucketSnap::default());
+        }
+        // 先把桶成员/频率和复制到本地（短借用），再写入快照池，避免 self 字段借用冲突。
+        let snap = &mut self.snapshot.bucket_snaps[idx];
+        snap.li = li;
+        snap.code = code;
+        snap.members.clear();
+        snap.members.extend_from_slice(&self.levels[li].buckets[code].members);
+        snap.freq_sum = self.levels[li].buckets[code].freq_sum;
+        self.snapshot.bucket_snaps_len += 1;
+
+        self.dirty_per_level[li].push(code);
+    }
+
+    /// 将候选字 `ci` 插入级别 `li` 编码 `code` 的桶（成员追加 + freq_sum 累加），并触碰该桶。
+    #[inline]
+    fn bucket_insert_member(&mut self, li: usize, code: usize, ci: usize, freq: u64) {
+        self.touch_bucket(li, code);
+        let b = &mut self.levels[li].buckets[code];
+        b.members.push(ci);
+        b.freq_sum += freq;
+    }
+
+    /// 从级别 `li` 编码 `code` 的桶移除候选字 `ci`（swap_remove + freq_sum 扣减），并触碰该桶。
+    /// 成员顺序的扰动由桶成员快照在回滚时整存整取还原，不影响正确性（重排前会重新排序）。
+    #[inline]
+    fn bucket_remove_member(&mut self, li: usize, code: usize, ci: usize, freq: u64) {
+        self.touch_bucket(li, code);
+        let b = &mut self.levels[li].buckets[code];
+        if let Some(pos) = b.members.iter().position(|&x| x == ci) {
+            b.members.swap_remove(pos);
+            b.freq_sum -= freq;
+        }
+    }
+
+    /// 记录 `current_simple_code[li][ci]` 的撤销项并就地写入新值。
+    #[inline]
+    fn set_code(&mut self, li: usize, ci: usize, new_code: i64) {
+        let old = self.levels[li].current_simple_code[ci];
+        self.snapshot.undo_code.push((li, ci, old));
+        self.levels[li].current_simple_code[ci] = new_code;
+    }
+
+    /// 首次触碰某字的 `all_assigned_flags` 时记录其移动起始值（供回滚与阶段 3 翻转检测）。
+    #[inline]
+    fn mark_assigned_touch(&mut self, ci: usize) {
+        if self.assigned_touch_gen[ci] == self.cur_gen {
+            return;
+        }
+        self.assigned_touch_gen[ci] = self.cur_gen;
+        self.assigned_start_flag[ci] = self.all_assigned_flags[ci];
+        self.assigned_touched_list.push(ci);
+    }
+
+    /// 选中 `ci` 于级别 `li`：翻转 `selected`/`all_assigned_flags`（带撤销/起始登记），
+    /// 并按当前 `assignment` 累加级别聚合贡献，同时缓存其当量/键位贡献（供后续精确扣除）。
+    #[inline]
+    fn select_char(&mut self, ctx: &OptContext, assignment: &[u8], li: usize, ci: usize) {
+        let freq = ctx.char_infos[ci].frequency;
+        let freq_f = freq as f64;
+
+        self.snapshot.undo_selected.push((li, ci, false));
+        self.levels[li].selected[ci] = true;
+        self.mark_assigned_touch(ci);
+        self.all_assigned_flags[ci] = true;
+
+        self.levels[li].covered_freq += freq;
+        self.levels[li].equiv_freq_sum += freq;
+
+        let eq = ctx.calc_simple_equiv(ci, li, assignment);
+        let has_keys = self.fill_keys_with_commit(ctx, ci, li, assignment);
+        let klen = if has_keys { self.key_buf.len() } else { 0 };
+        debug_assert!(klen <= SIMPLE_KEYS_CAP, "简码键位数超出 SIMPLE_KEYS_CAP");
+        let n = klen.min(SIMPLE_KEYS_CAP);
+
+        // 撤销项：记录旧的贡献缓存，再写入新值
+        let lvl = &mut self.levels[li];
+        self.snapshot.undo_contrib.push(ContribUndo {
+            li,
+            ci,
+            old_equiv: lvl.sel_equiv[ci],
+            old_keys: lvl.sel_keys[ci],
+            old_len: lvl.sel_keys_len[ci],
+        });
+        lvl.equiv_weighted += eq * freq_f;
+        lvl.sel_equiv[ci] = eq;
+        for i in 0..n {
+            let k = self.key_buf[i];
+            lvl.sel_keys[ci][i] = k;
+            lvl.key_usage[k as usize] += freq_f;
+        }
+        lvl.sel_keys_len[ci] = n as u8;
+        lvl.key_presses += freq_f * klen as f64;
+    }
+
+    /// 取消选中 `ci` 于级别 `li`（原生落选）：翻转 `selected`/`all_assigned_flags`，
+    /// 并用缓存的当量/键位贡献精确扣除级别聚合。
+    #[inline]
+    fn deselect_char(&mut self, ctx: &OptContext, li: usize, ci: usize) {
+        self.mark_assigned_touch(ci);
+        self.all_assigned_flags[ci] = false;
+        self.deselect_contrib_only(ctx, li, ci);
+    }
+
+    /// 取消选中 `ci` 于级别 `li` 但保留 `all_assigned_flags`（用于「因低级别出简而被跨级排除」
+    /// 的移除：该字在更低级别已出简，跨级标记应保持为真）。仅翻转本级 `selected` 与扣除贡献。
+    #[inline]
+    fn deselect_contrib_only(&mut self, ctx: &OptContext, li: usize, ci: usize) {
+        let freq = ctx.char_infos[ci].frequency;
+        let freq_f = freq as f64;
+
+        self.snapshot.undo_selected.push((li, ci, true));
+        let lvl = &mut self.levels[li];
+        lvl.selected[ci] = false;
+        lvl.covered_freq -= freq;
+        lvl.equiv_freq_sum -= freq;
+        lvl.equiv_weighted -= lvl.sel_equiv[ci] * freq_f;
+        let klen = lvl.sel_keys_len[ci] as usize;
+        for i in 0..klen {
+            let k = lvl.sel_keys[ci][i];
+            lvl.key_usage[k as usize] -= freq_f;
+        }
+        lvl.key_presses -= freq_f * klen as f64;
+    }
+
+    /// 刷新仍选中字 `ci` 在级别 `li` 的「值型」贡献（当量/键位），用于其简码编码因移动而变化
+    /// （仍保持选中）时更新聚合。`covered_freq` / `equiv_freq_sum` 仅依赖字频（不变），不触碰。
+    /// 对编码未变的字，重算值与缓存值相等，净效果为零，安全且精确（无漂移）。
+    #[inline]
+    fn refresh_char(&mut self, ctx: &OptContext, assignment: &[u8], li: usize, ci: usize) {
+        let freq = ctx.char_infos[ci].frequency;
+        let freq_f = freq as f64;
+
+        let eq = ctx.calc_simple_equiv(ci, li, assignment);
+        let has_keys = self.fill_keys_with_commit(ctx, ci, li, assignment);
+        let klen = if has_keys { self.key_buf.len() } else { 0 };
+        debug_assert!(klen <= SIMPLE_KEYS_CAP, "简码键位数超出 SIMPLE_KEYS_CAP");
+        let n = klen.min(SIMPLE_KEYS_CAP);
+
+        let lvl = &mut self.levels[li];
+        // 撤销项：记录旧贡献缓存
+        self.snapshot.undo_contrib.push(ContribUndo {
+            li,
+            ci,
+            old_equiv: lvl.sel_equiv[ci],
+            old_keys: lvl.sel_keys[ci],
+            old_len: lvl.sel_keys_len[ci],
+        });
+        // 扣除旧值型贡献
+        lvl.equiv_weighted -= lvl.sel_equiv[ci] * freq_f;
+        let old_len = lvl.sel_keys_len[ci] as usize;
+        for i in 0..old_len {
+            let k = lvl.sel_keys[ci][i];
+            lvl.key_usage[k as usize] -= freq_f;
+        }
+        lvl.key_presses -= freq_f * old_len as f64;
+        // 加入新值型贡献并刷新缓存
+        lvl.equiv_weighted += eq * freq_f;
+        lvl.sel_equiv[ci] = eq;
+        for i in 0..n {
+            let k = self.key_buf[i];
+            lvl.sel_keys[ci][i] = k;
+            lvl.key_usage[k as usize] += freq_f;
+        }
+        lvl.sel_keys_len[ci] = n as u8;
+        lvl.key_presses += freq_f * klen as f64;
+    }
+
+    /// 对单个脏桶做局部重排并重选前 `code_num` 个出简，检测出简翻转，更新聚合与跨级标记，
+    /// 并把「原生新选中 / 新落选」分别记入 `newly_sel_buf` / `newly_desel_buf` 供跨级传播。
+    fn reselect_bucket(
+        &mut self,
+        ctx: &OptContext,
+        assignment: &[u8],
+        is_first_candidate: &[bool],
+        li: usize,
+        code: usize,
+    ) {
+        // 仅对受影响桶内候选列表局部排序（需求 6.1/6.2/6.3）
+        {
+            let members = &mut self.levels[li].buckets[code].members;
+            members.sort_unstable_by(|&a, &b| {
+                Self::cmp_in_bucket(ctx, is_first_candidate, li, a, b)
+            });
+        }
+        let code_num = self.levels[li]
+            .code_num
+            .saturating_sub(ctx.simple_fixed_occ(li, code));
+        let len = self.levels[li].buckets[code].members.len();
+        // 北极星计数：脏桶局部重排访问的成员数（与桶规模同阶，非候选字总集）。
+        self.stage2_visits += len;
+        for idx in 0..len {
+            let ci = self.levels[li].buckets[code].members[idx];
+            let now_sel = idx < code_num;
+            let was_sel = self.levels[li].selected[ci];
+            if now_sel && !was_sel {
+                self.select_char(ctx, assignment, li, ci);
+                self.newly_sel_buf.push(ci);
+            } else if !now_sel && was_sel {
+                self.deselect_char(ctx, li, ci);
+                self.newly_desel_buf.push(ci);
+            } else if now_sel && was_sel {
+                self.refresh_char(ctx, assignment, li, ci);
+            }
+        }
+    }
+
+    /// 阶段 2 核心：精确增量地重算出简选择。
+    ///
+    /// 步骤：
+    /// 1. 移动起始整存全部级别聚合标量（供回滚），并复位脏桶/传播/触碰工作集；
+    /// 2. 阶段 1（候选归属变化）：对每个受影响候选字、在其当前所在的各级别做「旧桶移除 + 新桶加入」，
+    ///    同步 `current_simple_code`，并把旧/新桶标记为脏；
+    /// 3. 阶段 2（按级别升序处理脏桶）：先应用来自低级别的跨级传播动作（插入/移除），
+    ///    再对脏桶局部重排选出前 `code_num`，检测出简翻转更新聚合与 `selected`/`all_assigned_flags`，
+    ///    并把翻转影响经 `pending` 传播到更高一级（新出简→更高级移除、落选→更高级插入），
+    ///    复刻全量重建「低级别先出简、高级别排除已出简字」的语义（需求 1.4/15.1）。
+    fn do_incremental_selection(
+        &mut self,
+        ctx: &OptContext,
+        assignment: &[u8],
+        affected_candidates: &[usize],
+        resort_seeds: &[usize],
+        is_first_candidate: &[bool],
+    ) {
+        const ACT_INSERT: u8 = 0;
+        const ACT_REMOVE: u8 = 1;
+
+        self.bump_generation();
+        self.snapshot_aggregates();
+
+        let n_levels = self.levels.len();
+        for li in 0..n_levels {
+            self.dirty_per_level[li].clear();
+        }
+        self.pending_a.clear();
+        self.pending_b.clear();
+
+        // --- 阶段 1：受影响候选字逐级「旧桶移除 / 新桶加入」（仅在其当前出现的级别）---
+        for &ci in affected_candidates {
+            let freq = ctx.char_infos[ci].frequency;
+            for li in 0..n_levels {
+                let old = self.levels[li].current_simple_code[ci];
+                if old < 0 {
+                    // 当前未出现在该级别（被低级别排除，或该级无简码）：归属由跨级传播处理。
+                    continue;
+                }
+                self.stage2_visits += 1;
+                // `calc_simple_code` 的 Some/None 与 assignment 无关（仅 value 变化），
+                // 且该字当前出现在该级（old >= 0）⟹ 当初入桶时已通过长度资格过滤，
+                // 故此处长度资格恒为真（静态），eligible 版本必返回 Some。
+                let new_code = ctx
+                    .calc_simple_code_eligible(ci, li, assignment)
+                    .expect("present candidate must have a simple code at this level");
+                if new_code as i64 == old {
+                    continue;
+                }
+                self.bucket_remove_member(li, old as usize, ci, freq);
+                self.bucket_insert_member(li, new_code, ci, freq);
+                self.set_code(li, ci, new_code as i64);
+            }
+        }
+
+        // --- 重排种子：首选状态翻转使排序键变化的候选字（Efficiency 模式）---
+        // 其简码编码未变（归属不变），但桶内排序键变化，可能改变出简选择。仅把它们当前所在的
+        // 各级桶标记为脏（不改动成员），交由后续局部重排重新判定，并经 pending 传播跨级影响。
+        for &ci in resort_seeds {
+            for li in 0..n_levels {
+                let code = self.levels[li].current_simple_code[ci];
+                if code >= 0 {
+                    self.stage2_visits += 1;
+                    self.touch_bucket(li, code as usize);
+                }
+            }
+        }
+
+        // --- 阶段 2：按级别升序处理脏桶 + 跨级排除传播 ---
+        for li in 0..n_levels {
+            self.inserted_buf.clear();
+
+            // (a) 应用来自低级别的传播动作（pending_a 面向当前级别）
+            for k in 0..self.pending_a.len() {
+                let (ci, kind) = self.pending_a[k];
+                let freq = ctx.char_infos[ci].frequency;
+                self.stage2_visits += 1;
+                if kind == ACT_INSERT {
+                    match ctx.calc_simple_code_eligible(ci, li, assignment) {
+                        Some(code) => {
+                            self.bucket_insert_member(li, code, ci, freq);
+                            self.set_code(li, ci, code as i64);
+                            self.inserted_buf.push(ci);
+                        }
+                        None => {
+                            // 该级无简码或长度不合格：不入桶，但更高级别仍可选 → 继续向上插入
+                            self.pending_b.push((ci, ACT_INSERT));
+                        }
+                    }
+                } else {
+                    // ACT_REMOVE：该字已在更低级别出简，需从本级及以上排除
+                    let code = self.levels[li].current_simple_code[ci];
+                    let was_sel = self.levels[li].selected[ci];
+                    if code >= 0 {
+                        self.bucket_remove_member(li, code as usize, ci, freq);
+                        self.set_code(li, ci, -1);
+                    }
+                    if was_sel {
+                        // 本级原本出简：取消但保留 all_assigned（已在更低级别出简）；不再向上传播
+                        self.deselect_contrib_only(ctx, li, ci);
+                    } else {
+                        // 本级原为「在桶未出简」或「无简码」：更高级别仍需排除 → 继续向上移除
+                        self.pending_b.push((ci, ACT_REMOVE));
+                    }
+                }
+            }
+
+            // (b) 局部重排脏桶并检测出简翻转
+            self.newly_sel_buf.clear();
+            self.newly_desel_buf.clear();
+            for di in 0..self.dirty_per_level[li].len() {
+                let code = self.dirty_per_level[li][di];
+                self.reselect_bucket(ctx, assignment, is_first_candidate, li, code);
+            }
+
+            // (c) 跨级传播到 li+1
+            // 原生落选：在更高级别重新可选 → 插入
+            for di in 0..self.newly_desel_buf.len() {
+                let ci = self.newly_desel_buf[di];
+                self.pending_b.push((ci, ACT_INSERT));
+            }
+            // 新选中：原生者曾出现在更高级别 → 移除；本级新插入者从未到达更高级别 → 不传播
+            for di in 0..self.newly_sel_buf.len() {
+                let ci = self.newly_sel_buf[di];
+                if !self.inserted_buf.contains(&ci) {
+                    self.pending_b.push((ci, ACT_REMOVE));
+                }
+            }
+            // 本级新插入但未选中者：在更高级别仍为可选成员 → 继续向上插入
+            for di in 0..self.inserted_buf.len() {
+                let ci = self.inserted_buf[di];
+                if !self.levels[li].selected[ci] {
+                    self.pending_b.push((ci, ACT_INSERT));
+                }
+            }
+
+            // pending 翻页：pending_b → pending_a
+            std::mem::swap(&mut self.pending_a, &mut self.pending_b);
+            self.pending_b.clear();
+        }
+    }
+
+    /// 移动起始整存全部级别聚合标量（供回滚整体写回）。复用 `snapshot.aggregates` 缓冲。
+    fn snapshot_aggregates(&mut self) {
+        self.snapshot.aggregates.clear();
+        for li in 0..self.levels.len() {
+            let lvl = &self.levels[li];
+            self.snapshot.aggregates.push(LevelAggregateSnapshot {
+                covered_freq: lvl.covered_freq,
+                equiv_weighted: lvl.equiv_weighted,
+                equiv_freq_sum: lvl.equiv_freq_sum,
+                key_usage: lvl.key_usage,
+                key_presses: lvl.key_presses,
+            });
+        }
+    }
+
+    /// 提交本次增量：清空快照缓冲（确认增量结果，需求 2.1）。
+    ///
+    /// 仅复位长度/清空小型工作向量；底层缓冲（`bucket_snaps`/撤销日志/聚合快照等）保留
+    /// 已分配容量以避免下次移动重新分配（需求 3.1）。
+    pub fn commit(&mut self) {
+        self.snapshot.has_selection = false;
+        self.snapshot.bucket_snaps_len = 0;
+        self.snapshot.aggregates.clear();
+        self.snapshot.undo_code.clear();
+        self.snapshot.undo_selected.clear();
+        self.snapshot.undo_contrib.clear();
+        self.snapshot.collision_buckets.clear();
+        self.snapshot.last_full_codes.clear();
+        self.assigned_touched_list.clear();
+    }
+
+    /// 回滚本次增量：用细粒度撤销日志还原至移动前状态（需求 2.2/2.3/3.1）。
+    ///
+    /// 还原内容（当 `has_selection`）：
+    /// - 级别聚合标量：从 `aggregates` 整体写回；
+    /// - 触碰桶的成员与 `freq_sum`：从 `bucket_snaps` 整存整取（精确还原成员顺序）；
+    /// - `current_simple_code` / `selected` / 选中贡献缓存（`sel_equiv`/`sel_keys`/`sel_keys_len`）：
+    ///   逆序回放撤销日志；
+    /// - `all_assigned_flags`：对被触碰候选字写回移动起始值；
+    /// 以及（无论 `has_selection`）简码重码贡献缓存/标量、`last_full_codes` 与 `cached_simple_score`。
+    ///
+    /// 不触发任何全量重建；回滚成本为 O(受影响项)，与正向 `apply` 同阶。
+    pub fn rollback(&mut self) {
+        if self.snapshot.has_selection {
+            // 1) 级别聚合标量整体写回
+            for li in 0..self.levels.len() {
+                let s = &self.snapshot.aggregates[li];
+                let lvl = &mut self.levels[li];
+                lvl.covered_freq = s.covered_freq;
+                lvl.equiv_weighted = s.equiv_weighted;
+                lvl.equiv_freq_sum = s.equiv_freq_sum;
+                lvl.key_usage = s.key_usage;
+                lvl.key_presses = s.key_presses;
+            }
+
+            // 2) 触碰桶成员/freq_sum 整存整取（仅有效前缀）
+            for i in 0..self.snapshot.bucket_snaps_len {
+                let snap = &self.snapshot.bucket_snaps[i];
+                let b = &mut self.levels[snap.li].buckets[snap.code];
+                b.members.clear();
+                b.members.extend_from_slice(&snap.members);
+                b.freq_sum = snap.freq_sum;
+            }
+
+            // 3) 逆序回放 current_simple_code 撤销日志
+            for k in (0..self.snapshot.undo_code.len()).rev() {
+                let (li, ci, old) = self.snapshot.undo_code[k];
+                self.levels[li].current_simple_code[ci] = old;
+            }
+
+            // 4) 逆序回放 selected 撤销日志
+            for k in (0..self.snapshot.undo_selected.len()).rev() {
+                let (li, ci, old) = self.snapshot.undo_selected[k];
+                self.levels[li].selected[ci] = old;
+            }
+
+            // 5) 逆序回放选中贡献缓存撤销日志
+            for k in (0..self.snapshot.undo_contrib.len()).rev() {
+                let u = self.snapshot.undo_contrib[k];
+                let lvl = &mut self.levels[u.li];
+                lvl.sel_equiv[u.ci] = u.old_equiv;
+                lvl.sel_keys[u.ci] = u.old_keys;
+                lvl.sel_keys_len[u.ci] = u.old_len;
+            }
+
+            // 6) all_assigned_flags：被触碰候选字写回移动起始值
+            for idx in 0..self.assigned_touched_list.len() {
+                let ci = self.assigned_touched_list[idx];
+                self.all_assigned_flags[ci] = self.assigned_start_flag[ci];
+            }
+        }
+
+        // 7) 还原 last_full_codes 条目（逆序，确保多次触碰同一 ci 时回到最早值）
+        for &(ci, old_code) in self.snapshot.last_full_codes.iter().rev() {
+            self.last_full_codes[ci] = old_code;
+        }
+
+        // 8) 还原简码重码贡献缓存（逆序）
+        for &(code, old_count, old_freq) in self.snapshot.collision_buckets.iter().rev() {
+            self.bucket_collision_contrib[code] = (old_count, old_freq);
+        }
+
+        // 9) 还原简码重码标量与缓存得分
+        self.simple_collision_count = self.snapshot.old_collision_count;
+        self.simple_collision_freq = self.snapshot.old_collision_freq;
+        self.simple_collision_rate = self.snapshot.old_collision_rate;
+        self.cached_simple_score = self.snapshot.old_cached_simple_score;
+        self.simple_score_dirty = false;
+
+        // 清空工作向量（保留容量）
+        self.commit();
     }
 
     /// 计算简码得分
@@ -354,6 +1333,16 @@ impl SimpleEvaluator {
             total_key_presses += level.key_presses;
         }
 
+        // 固定简码常量偏置（需求 21.8/21.9）：固定字不进入任何级别聚合，其对覆盖率/当量/
+        // 分布的贡献为不随分配变化的常量，在此并入聚合，使指标与「固定字按字面简码出简」语义一致。
+        total_covered += ctx.fixed_covered_freq;
+        total_equiv_weighted += ctx.fixed_equiv_weighted;
+        total_equiv_freq += ctx.fixed_equiv_freq_sum;
+        for k in 0..EQUIV_TABLE_SIZE {
+            total_key_usage[k] += ctx.fixed_key_usage[k];
+        }
+        total_key_presses += ctx.fixed_key_presses;
+
         let coverage = if ctx.total_frequency > 0 {
             total_covered as f64 / ctx.total_frequency as f64
         } else {
@@ -415,6 +1404,18 @@ pub struct Evaluator {
     bucket_freq_sum: Vec<u64>,
     /// 每个桶的最大频率（用于增量 collision_freq 计算）
     bucket_max_freq: Vec<u64>,
+    /// 每个汉字是否为其全码桶首选字（需求 5：首选字选重键长为 0）
+    is_first_candidate: Vec<bool>,
+    /// 每个全码桶当前首选字 ci（usize::MAX 表示空桶；需求 5）
+    bucket_first: Vec<usize>,
+    /// 本次移动中 `is_first_candidate` 发生写入（可能翻转）的汉字列表（复用工作集）。
+    ///
+    /// Efficiency 模式下桶内排序键含 `sel_len`（由 `is_first_candidate` 取 0/1），故某字
+    /// 首选状态翻转会改变其在简码桶中的排序键，进而可能改变出简选择——即便该字的简码编码
+    /// 未变、不在 `group_to_simple_affected_candidate` 内。`update_char` 在每次写入
+    /// `is_first_candidate` 时登记受影响字，供简码增量把这些字的当前简码桶标记为「需重排」，
+    /// 从而逐字段对齐全量重建（需求 4.6/5.4/6.2）。`apply_simple_for_move` 读取后清空。
+    simple_is_first_dirty: Vec<usize>,
 
     /// 总重码数
     total_collisions: usize,
@@ -443,8 +1444,23 @@ pub struct Evaluator {
     /// 得分是否需要重新计算
     pub score_dirty: bool,
 
+    /// 缓存的全码分量得分（需求 10.1）
+    pub cached_full_score: f64,
+    /// 全码分量得分是否需要重新计算
+    pub full_score_dirty: bool,
+    /// 简码计算是否已激活（需求 8）。未激活时简码分量对综合得分贡献恒为 0（需求 10.2）。
+    pub simple_active: bool,
+    /// 当前有效简码权重（需求 9/10）。未激活时为 0；激活后由退火主循环按权重曲线维护。
+    pub current_simple_weight: f64,
+
     /// 简码评估器
     simple_eval: Option<SimpleEvaluator>,
+
+    /// 全量重建调用计数（仅用于观测/防回归）。
+    ///
+    /// 在 `rebuild_simple` 入口自增。结合 `SimpleEvaluator::full_rebuild_calls`，
+    /// 用于证明生产热路径 `try_move`/`try_swap` 激活简码后不再触发全量重建。
+    full_rebuild_calls: usize,
 }
 
 impl Evaluator {
@@ -502,6 +1518,26 @@ impl Evaluator {
             }
         }
 
+        // 初始化首选标记：每个非空全码桶取 (最大频率, 最小 ci) 为首选字（需求 5.1/5.2）
+        let mut is_first_candidate = vec![false; n];
+        let mut bucket_first = vec![usize::MAX; cs];
+        for code in 0..cs {
+            if code_to_chars[code].is_empty() {
+                continue;
+            }
+            let mut max_f = 0u64;
+            let mut first = usize::MAX;
+            for &ci in &code_to_chars[code] {
+                let f = ctx.char_infos[ci].frequency;
+                if f > max_f || (f == max_f && ci < first) {
+                    max_f = f;
+                    first = ci;
+                }
+            }
+            bucket_first[code] = first;
+            is_first_candidate[first] = true;
+        }
+
         let inv_tf = if ctx.total_frequency > 0 {
             1.0 / ctx.total_frequency as f64
         } else {
@@ -514,9 +1550,23 @@ impl Evaluator {
         };
 
         let simple_eval = if ctx.enable_simple_code && !ctx.simple_config.levels.is_empty() {
-            Some(SimpleEvaluator::new(ctx, assignment, &code_to_chars))
+            Some(SimpleEvaluator::new(ctx, assignment, &code_to_chars, &is_first_candidate))
         } else {
             None
+        };
+
+        // 向后兼容（back-compat）决策：
+        // `Evaluator::new` 仍按 `enable_simple_code` 急切（eager）构建 `SimpleEvaluator`，
+        // 因此既有测试（prop1/2/3/4/5/6/7/11/14 等）仍能在 `new` 后断言 `simple_eval.is_some()`。
+        // 急切构建时直接置 `simple_active = true` 且 `current_simple_weight = weight_simple_code`，
+        // 使 `compute_score` 与旧公式
+        // `weight_full_code * full_score + weight_simple_code * simple_score` 完全等价；
+        // 而退火后期的「延迟激活」流程（任务 10）改走 `activate_simple` 显式翻转 `simple_active`
+        // 并由权重曲线维护 `current_simple_weight`。
+        let (simple_active, current_simple_weight) = if simple_eval.is_some() {
+            (true, ctx.weights.weight_simple_code)
+        } else {
+            (false, 0.0)
         };
 
         let mut e = Self {
@@ -526,6 +1576,9 @@ impl Evaluator {
             char_bucket_pos,
             bucket_freq_sum,
             bucket_max_freq,
+            is_first_candidate,
+            bucket_first,
+            simple_is_first_dirty: Vec::new(),
             total_collisions,
             collision_frequency,
             total_equiv_weighted,
@@ -537,24 +1590,34 @@ impl Evaluator {
             inv_total_key_presses: inv_tkp,
             cached_score: 0.0,
             score_dirty: true,
+            cached_full_score: 0.0,
+            full_score_dirty: true,
+            simple_active,
+            current_simple_weight,
             simple_eval,
+            full_rebuild_calls: 0,
         };
+        e.cached_full_score = e.compute_full_score(ctx);
+        e.full_score_dirty = false;
         e.cached_score = e.compute_score(ctx);
         e.score_dirty = false;
         e
     }
 
-    /// 重新扫描桶的最大频率
+    /// 重新扫描桶的最大频率与首选字 (max_freq, 最小 ci)
+    /// 首选字取桶内最大频率者，频率并列时取最小 ci（需求 5.1/5.2）
     #[inline]
-    fn rescan_bucket_max(&self, ctx: &OptContext, code: usize) -> u64 {
+    fn rescan_bucket_first(&self, ctx: &OptContext, code: usize) -> (u64, usize) {
         let mut max_f = 0u64;
+        let mut first = usize::MAX;
         for &ci in &self.code_to_chars[code] {
             let f = ctx.char_infos[ci].frequency;
-            if f > max_f {
+            if f > max_f || (f == max_f && ci < first) {
                 max_f = f;
+                first = ci;
             }
         }
-        max_f
+        (max_f, first)
     }
 
     /// 计算桶的重码频率（仅用于 SimpleEvaluator 等非热路径）
@@ -612,15 +1675,20 @@ impl Evaluator {
         }
         self.code_to_chars[old_code].pop();
 
-        // 更新旧桶的频率统计
+        // 更新旧桶的频率统计与首选字（需求 5.3）
         self.bucket_freq_sum[old_code] -= freq;
-        // 如果移除的是 max，需要重扫
+        // 如果移除的是 max（含恰为首选字的情况），需要重扫求新的 (max, 首选)
         if freq >= self.bucket_max_freq[old_code] {
-            self.bucket_max_freq[old_code] = if self.code_to_chars[old_code].is_empty() {
-                0
+            if self.code_to_chars[old_code].is_empty() {
+                self.bucket_max_freq[old_code] = 0;
+                self.bucket_first[old_code] = usize::MAX;
             } else {
-                self.rescan_bucket_max(ctx, old_code)
-            };
+                let (mf, first) = self.rescan_bucket_first(ctx, old_code);
+                self.bucket_max_freq[old_code] = mf;
+                self.bucket_first[old_code] = first;
+                self.is_first_candidate[first] = true;
+                self.simple_is_first_dirty.push(first);
+            }
         }
 
         let new_old_len = self.code_to_chars[old_code].len();
@@ -644,6 +1712,24 @@ impl Evaluator {
         self.code_to_chars[new_code].push(ci);
         self.char_bucket_pos[ci] = new_pos;
         self.bucket_freq_sum[new_code] += freq;
+        // 加入新桶后增量维护首选字（需求 5.3）：取插入前的桶状态判定
+        let prev_first = self.bucket_first[new_code];
+        let prev_max = self.bucket_max_freq[new_code];
+        let becomes_first = prev_first == usize::MAX
+            || freq > prev_max
+            || (freq == prev_max && ci < prev_first);
+        if becomes_first {
+            if prev_first != usize::MAX {
+                self.is_first_candidate[prev_first] = false;
+                self.simple_is_first_dirty.push(prev_first);
+            }
+            self.bucket_first[new_code] = ci;
+            self.is_first_candidate[ci] = true;
+            self.simple_is_first_dirty.push(ci);
+        } else {
+            self.is_first_candidate[ci] = false;
+            self.simple_is_first_dirty.push(ci);
+        }
         if freq > self.bucket_max_freq[new_code] {
             self.bucket_max_freq[new_code] = freq;
         }
@@ -662,6 +1748,12 @@ impl Evaluator {
         self.collision_frequency = (self.collision_frequency + new_old_cf + after_new_cf)
             - (old_bucket_cf + new_bucket_cf);
         self.current_codes[ci] = new_code;
+
+        // 全码聚合已变化：标记全码分量缓存为脏（需求 10.1）。
+        // `update_char` 是全码聚合的唯一变更入口（正向移动与回滚反向重放都经此），
+        // 在此单点置脏可保证 `full_score_component` 永远基于最新聚合重算，
+        // 无需在 `try_move`/`try_swap` 的多个分支重复维护。
+        self.full_score_dirty = true;
     }
 
     /// 执行全码 _max 硬约束检查
@@ -825,30 +1917,84 @@ impl Evaluator {
     }
 
     /// 计算综合得分
+    ///
+    /// 合成公式（需求 9.5/10.3）：
+    /// `total = weight_full_code * full_score + current_simple_weight * simple_score`。
+    /// 未激活时（`simple_active == false`）`current_simple_weight = 0` 且简码分量取 0，
+    /// 故综合得分退化为纯全码分量 `weight_full_code * full_score`（需求 10.2）。
+    ///
+    /// 注：本方法为 `&self` 纯计算，直接读取 `simple_eval.cached_simple_score`
+    /// （与旧实现一致）；调用方需保证简码缓存已是最新（`get_score` / 增量路径会维护）。
     #[inline(always)]
     pub fn compute_score(&self, ctx: &OptContext) -> f64 {
         let full_score = self.compute_full_score(ctx);
-
-        if ctx.enable_simple_code {
-            if let Some(ref se) = self.simple_eval {
-                let simple_score = se.cached_simple_score;
-                ctx.weights.weight_full_code * full_score + ctx.weights.weight_simple_code * simple_score
-            } else {
-                full_score
-            }
+        let simple_score = if self.simple_active {
+            self.simple_eval
+                .as_ref()
+                .map_or(0.0, |se| se.cached_simple_score)
         } else {
-            full_score
-        }
+            0.0
+        };
+        ctx.weights.weight_full_code * full_score + self.current_simple_weight * simple_score
     }
 
     /// 获取得分
     #[inline(always)]
     pub fn get_score(&mut self, ctx: &OptContext) -> f64 {
         if self.score_dirty {
-            self.cached_score = self.compute_score(ctx);
+            // 刷新全码分量缓存（需求 10.1）
+            self.cached_full_score = self.compute_full_score(ctx);
+            self.full_score_dirty = false;
+            // 简码分量：未激活时贡献 0（需求 10.2）
+            let simple_score = self.simple_score_component(ctx);
+            self.cached_score = ctx.weights.weight_full_code * self.cached_full_score
+                + self.current_simple_weight * simple_score;
             self.score_dirty = false;
         }
         self.cached_score
+    }
+
+    /// 获取当前全码分量得分（需求 10.1，供退火主循环按分量存储最佳解）。
+    ///
+    /// 依据 `full_score_dirty` 缓存，脏时以 `compute_full_score` 从全码聚合 O(1) 重算。
+    #[inline(always)]
+    pub fn full_score_component(&mut self, ctx: &OptContext) -> f64 {
+        if self.full_score_dirty {
+            self.cached_full_score = self.compute_full_score(ctx);
+            self.full_score_dirty = false;
+        }
+        self.cached_full_score
+    }
+
+    /// 获取当前简码分量得分（需求 10.1/10.2，供退火主循环按分量存储最佳解）。
+    ///
+    /// 未激活（`simple_active == false`）或无简码评估器时恒为 0（需求 10.2）。
+    #[inline(always)]
+    pub fn simple_score_component(&mut self, ctx: &OptContext) -> f64 {
+        if self.simple_active {
+            if let Some(ref mut se) = self.simple_eval {
+                se.get_simple_score(ctx)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    }
+
+    /// 按分量与给定权重 O(1) 合成综合得分（需求 11.2/11.3）。
+    ///
+    /// 退火主循环以全码分量 `best_full_score`、简码分量 `best_simple_score` 存储最佳解，
+    /// 比较时用当前有效简码权重 `weight_simple_eff` 重算 `best_total`，从而解决目标函数
+    /// 随时间漂移导致最佳解被冻结的问题。该重算不依赖任何评估器内部状态，故为关联函数。
+    #[inline(always)]
+    pub fn best_total(
+        weight_full: f64,
+        full_score: f64,
+        weight_simple_eff: f64,
+        simple_score: f64,
+    ) -> f64 {
+        weight_full * full_score + weight_simple_eff * simple_score
     }
 
     /// 计算等价值变异系数
@@ -989,7 +2135,9 @@ impl Evaluator {
 
     /// 检查是否有简码影响
     pub fn has_simple_impact(&self, ctx: &OptContext, group: usize) -> bool {
-        if !ctx.enable_simple_code || self.simple_eval.is_none() {
+        // 简码未激活时（延迟激活早期探索阶段，需求 8.5/10.2）简码分量贡献恒为 0，
+        // 故任何移动都不需要触碰简码评估，直接返回 false 跳过简码重算（性能与正确性双赢）。
+        if !ctx.enable_simple_code || self.simple_eval.is_none() || !self.simple_active {
             return false;
         }
         !ctx.group_to_simple_affected[group].is_empty()
@@ -997,14 +2145,203 @@ impl Evaluator {
 
     /// 重建简码评估
     pub fn rebuild_simple(&mut self, ctx: &OptContext, assignment: &[u8]) {
+        // 观测计数：记录一次经主评估器入口触发的全量重建。
+        self.full_rebuild_calls += 1;
+        let code_to_chars = &self.code_to_chars;
+        let is_first_candidate = &self.is_first_candidate;
         if let Some(ref mut se) = self.simple_eval {
-            se.full_rebuild(ctx, assignment, &self.code_to_chars);
+            se.full_rebuild(ctx, assignment, code_to_chars, is_first_candidate);
             se.cached_simple_score = se.compute_simple_score(ctx);
             se.simple_score_dirty = false;
         }
     }
 
-    /// 尝试移动（改变单个组的键位）
+    /// 观测用：返回截至目前的全量重建总次数（仅用于防回归测试，不参与优化逻辑）。
+    ///
+    /// 合计主评估器入口 `rebuild_simple` 的计数与简码评估器 `full_rebuild` 的计数。
+    /// 生产热路径 `try_move`/`try_swap` 在简码激活后只走增量路径
+    /// （`apply_simple_for_move` → `apply_move_incremental`），因此该计数在热路径调用
+    /// 期间应保持不变。
+    pub fn full_rebuild_calls(&self) -> usize {
+        self.full_rebuild_calls + self.simple_eval.as_ref().map_or(0, |se| se.full_rebuild_calls)
+    }
+
+    /// 观测用：返回上一次简码增量移动中阶段 2（出简选择增量）访问的候选字工作量
+    /// （Backlog B1 北极星）。无简码评估器时返回 0。该值应与「受影响字 + 脏桶成员」同阶，
+    /// 不随候选字总集规模增长，用于证明阶段 2 不再做 O(候选字集 × 级数) 的整体重算。
+    #[allow(dead_code)]
+    pub fn last_stage2_visits(&self) -> usize {
+        self.simple_eval.as_ref().map_or(0, |se| se.stage2_visits)
+    }
+
+    /// 观测用：分别返回两个全量重建计数 `(主评估器 rebuild_simple 次数, 简码评估器 full_rebuild 次数)`。
+    ///
+    /// 生产路径中 `SimpleEvaluator::full_rebuild` 仅由 `Evaluator::rebuild_simple` 调用，
+    /// 故两者在生产中应同步增长；若二者出现差异，说明 `full_rebuild` 被 `rebuild_simple`
+    /// 以外的路径触发。两个计数都不统计 `reconcile`（周期对账走 `Evaluator::new` 重建，
+    /// 是需求 15 认可的周期性全量，不经这两个入口），因此它们专门回答：
+    /// 「是否有人（尤其是退火热路径）调用了旧的全量重建入口」。健康运行下两者在整个 SA
+    /// 主循环期间应恒为 0。
+    pub fn full_rebuild_calls_breakdown(&self) -> (usize, usize) {
+        (
+            self.full_rebuild_calls,
+            self.simple_eval.as_ref().map_or(0, |se| se.full_rebuild_calls),
+        )
+    }
+
+    /// 简码增量更新入口（任务 9.1 将以此替换 `try_move`/`try_swap` 中的 `rebuild_simple`）。
+    ///
+    /// `groups` 为本次移动涉及的字根组（移动单组时长度为 1，交换时为 2）。本方法收集这些组的
+    /// 受影响候选字交集（`group_to_simple_affected_candidate`）与受影响全码字（`group_to_chars`），
+    /// 调用 `SimpleEvaluator::apply_move_incremental` 做增量更新，并刷新缓存的简码得分。
+    ///
+    /// 注意：当前未接入 `try_move`/`try_swap`（仍走 `rebuild_simple` 路径），接入与回滚分支
+    /// 由任务 9/10 完成；此处提供可调用入口并保证与全量重建结果一致。
+    pub fn apply_simple_for_move(&mut self, ctx: &OptContext, assignment: &[u8], groups: &[usize]) {
+        if self.simple_eval.is_none() {
+            return;
+        }
+
+        // 收集受影响候选字交集（去重）与受影响全码字（去重）
+        let mut affected_candidates: Vec<usize> = Vec::new();
+        let mut full_affected_chars: Vec<usize> = Vec::new();
+        for &g in groups {
+            affected_candidates.extend_from_slice(&ctx.group_to_simple_affected_candidate[g]);
+            full_affected_chars.extend_from_slice(&ctx.group_to_chars[g]);
+        }
+        affected_candidates.sort_unstable();
+        affected_candidates.dedup();
+        full_affected_chars.sort_unstable();
+        full_affected_chars.dedup();
+
+        // 收集「重排种子」：本次移动中首选状态翻转、且属于候选字的汉字（仅 Efficiency 模式相关）。
+        // 这些字的桶内排序键随 `is_first_candidate` 翻转而变化，可能改变出简选择（需求 4.6/5.4/6.2）。
+        //
+        // 注意：即使某字在 `affected_candidates` 中，也必须保留为重排种子——因为受影响候选字
+        // 仅在「简码编码发生变化」的级别被阶段 1 标脏；若其在某级别编码未变但首选状态翻转
+        // （排序键变化），该级别的桶不会被阶段 1 标脏，必须靠重排种子触发局部重排。
+        // Frequency 模式排序键与首选状态无关，无需重排；不收集以省去无谓工作。
+        let mut resort_seeds: Vec<usize> = Vec::new();
+        if ctx.simple_assign_mode == SimpleAssignMode::Efficiency {
+            for &ci in &self.simple_is_first_dirty {
+                if ctx.simple_is_candidate[ci] {
+                    resort_seeds.push(ci);
+                }
+            }
+            resort_seeds.sort_unstable();
+            resort_seeds.dedup();
+        }
+        // 读取完毕，清空首选翻转登记缓冲，避免跨移动累积（拒绝路径的反向翻转作为下次种子无害）。
+        self.simple_is_first_dirty.clear();
+
+        let code_to_chars = &self.code_to_chars;
+        let is_first_candidate = &self.is_first_candidate;
+        if let Some(ref mut se) = self.simple_eval {
+            se.apply_move_incremental(
+                ctx,
+                assignment,
+                &affected_candidates,
+                &resort_seeds,
+                &full_affected_chars,
+                code_to_chars,
+                is_first_candidate,
+            );
+            se.cached_simple_score = se.compute_simple_score(ctx);
+            se.simple_score_dirty = false;
+        }
+    }
+
+    /// 提交简码增量（接受移动时调用，需求 2.1）。
+    ///
+    /// 委托 `SimpleEvaluator::commit` 清空快照确认增量。无简码评估器时为 no-op。
+    /// 供任务 9/10 在 `try_move`/`try_swap` 的接受分支接入。
+    pub fn commit_simple(&mut self) {
+        if let Some(ref mut se) = self.simple_eval {
+            se.commit();
+        }
+    }
+
+    /// 回滚简码增量（移动被拒绝或 `_max` 硬约束回滚时调用，需求 2.2/2.3）。
+    ///
+    /// 委托 `SimpleEvaluator::rollback` 用快照还原受影响桶项、级别聚合、简码重码标量与
+    /// `cached_simple_score`，使简码状态恢复至移动前，且不触发任何全量重建。
+    /// 供任务 9/10 在 `try_move`/`try_swap` 的拒绝/回滚分支接入（替换 `rebuild_simple`）。
+    pub fn rollback_simple(&mut self) {
+        if let Some(ref mut se) = self.simple_eval {
+            se.rollback();
+        }
+    }
+
+    /// 激活简码计算（需求 8.3/8.6）。
+    ///
+    /// 退火进度首次达到 `simple_start_progress`（或硬激活）时由主循环调用：
+    /// - 若简码评估器尚未构建（延迟激活流程），执行一次全量构建初始化增量状态（需求 8.6）；
+    /// - 置 `simple_active = true`，此后简码分量开始参与综合得分。
+    ///
+    /// `current_simple_weight` 不在此设置——它由退火主循环按权重渐进曲线
+    /// `w_simple_eff(p)` 维护（需求 9）。激活后将 `score_dirty` / `full_score_dirty`
+    /// 置脏，使下次 `get_score` 以新激活状态重算。
+    ///
+    /// 幂等：已激活时直接返回（闩锁语义，需求 8.4 由主循环保证）。
+    pub fn activate_simple(&mut self, ctx: &OptContext, assignment: &[u8]) {
+        if self.simple_active {
+            return;
+        }
+        if self.simple_eval.is_none()
+            && ctx.enable_simple_code
+            && !ctx.simple_config.levels.is_empty()
+        {
+            self.simple_eval = Some(SimpleEvaluator::new(
+                ctx,
+                assignment,
+                &self.code_to_chars,
+                &self.is_first_candidate,
+            ));
+        }
+        // 仅当确有简码评估器时才视为激活；否则（简码关闭/无级别）保持未激活、贡献为 0。
+        if self.simple_eval.is_some() {
+            self.simple_active = true;
+            self.score_dirty = true;
+            self.full_score_dirty = true;
+        }
+    }
+
+    /// 周期对账 / 结束强制校验（需求 15.4/15.5/15.6）。
+    ///
+    /// 用对当前 `assignment` 从零做的全量重算覆盖增量维护的全码聚合与简码指标，
+    /// 纠正长程优化中可能累积的浮点/整型漂移。实现上直接构建一个全新的
+    /// `Evaluator`（其全码聚合与简码状态均为精确全量值），再保留当前的激活状态
+    /// 与有效简码权重，使对账后逐字段等于「对当前分配从零构建的评估器」（Property 13）。
+    pub fn reconcile(&mut self, ctx: &OptContext, assignment: &[u8]) {
+        let active = self.simple_active;
+        let weight = self.current_simple_weight;
+        // 保留全量重建观测计数：reconcile 用 `*self = fresh` 整体替换评估器，若不显式
+        // 携带，计数会在每次对账时被重置为 0，从而掩盖「热路径意外触发全量重建」的回归。
+        // 这里把旧计数带入 fresh，使其成为跨整个优化过程的真实累计值（防回归诊断）。
+        let prev_ev_calls = self.full_rebuild_calls;
+        let prev_se_calls = self
+            .simple_eval
+            .as_ref()
+            .map_or(0, |se| se.full_rebuild_calls);
+
+        let mut fresh = Evaluator::new(ctx, assignment);
+        // 保留激活状态与有效简码权重（这两项是退火过程的时变量，不属于全量重算范畴）
+        fresh.simple_active = active;
+        fresh.current_simple_weight = weight;
+        // 携带全量重建观测计数（reconcile 自身不计数：它走 Evaluator::new，不经
+        // rebuild_simple / full_rebuild 入口，是需求 15 认可的周期性全量）。
+        fresh.full_rebuild_calls = prev_ev_calls;
+        if let Some(se) = fresh.simple_eval.as_mut() {
+            se.full_rebuild_calls = prev_se_calls;
+        }
+        // 以保留的激活状态/权重重算缓存得分，保证 cached_score 与分量一致
+        fresh.cached_full_score = fresh.compute_full_score(ctx);
+        fresh.full_score_dirty = false;
+        fresh.cached_score = fresh.compute_score(ctx);
+        fresh.score_dirty = false;
+
+        *self = fresh;
+    }
     #[inline(always)]
     pub fn try_move(
         &mut self,
@@ -1034,7 +2371,7 @@ impl Evaluator {
         }
 
         if needs_simple {
-            self.rebuild_simple(ctx, assignment);
+            self.apply_simple_for_move(ctx, assignment, &[r]);
         }
 
         // _max 硬约束检查：超限则直接回滚，不进入得分计算
@@ -1046,7 +2383,7 @@ impl Evaluator {
                 self.update_char(ctx, assignment, ci);
             }
             if needs_simple {
-                self.rebuild_simple(ctx, assignment);
+                self.rollback_simple();
             }
             self.cached_score = old_score;
             self.score_dirty = false;
@@ -1060,7 +2397,7 @@ impl Evaluator {
                 self.update_char(ctx, assignment, ci);
             }
             if needs_simple {
-                self.rebuild_simple(ctx, assignment);
+                self.rollback_simple();
             }
             self.cached_score = old_score;
             self.score_dirty = false;
@@ -1072,6 +2409,9 @@ impl Evaluator {
         let delta = new_score - old_score;
 
         if delta <= 0.0 || rng.gen::<f64>() < (-delta / temp).exp() {
+            if needs_simple {
+                self.commit_simple();
+            }
             true
         } else {
             // 回滚 key_weighted_usage
@@ -1084,7 +2424,7 @@ impl Evaluator {
             }
 
             if needs_simple {
-                self.rebuild_simple(ctx, assignment);
+                self.rollback_simple();
             }
 
             self.cached_score = old_score;
@@ -1131,7 +2471,7 @@ impl Evaluator {
         }
 
         if needs_simple {
-            self.rebuild_simple(ctx, assignment);
+            self.apply_simple_for_move(ctx, assignment, &[r1, r2]);
         }
 
         // _max 硬约束检查：超限则直接回滚，不进入得分计算
@@ -1149,7 +2489,7 @@ impl Evaluator {
                 self.update_char(ctx, assignment, ci);
             }
             if needs_simple {
-                self.rebuild_simple(ctx, assignment);
+                self.rollback_simple();
             }
             self.cached_score = old_score;
             self.score_dirty = false;
@@ -1169,7 +2509,7 @@ impl Evaluator {
                 self.update_char(ctx, assignment, ci);
             }
             if needs_simple {
-                self.rebuild_simple(ctx, assignment);
+                self.rollback_simple();
             }
             self.cached_score = old_score;
             self.score_dirty = false;
@@ -1181,6 +2521,9 @@ impl Evaluator {
         let delta = new_score - old_score;
 
         if delta <= 0.0 || rng.gen::<f64>() < (-delta / temp).exp() {
+            if needs_simple {
+                self.commit_simple();
+            }
             true
         } else {
             // 回滚 key_weighted_usage
@@ -1199,12 +2542,3075 @@ impl Evaluator {
             }
 
             if needs_simple {
-                self.rebuild_simple(ctx, assignment);
+                self.rollback_simple();
             }
 
             self.cached_score = old_score;
             self.score_dirty = false;
             false
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 首选标记测试（simple-code-perf-optimization, Property 3）
+// =========================================================================
+#[cfg(test)]
+mod first_candidate_tests {
+    use super::*;
+    use crate::config::{Config, TargetsConfig};
+    use crate::context::OptContext;
+    use crate::types::{KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, EQUIV_TABLE_SIZE};
+    use proptest::prelude::*;
+    use rand::thread_rng;
+    use std::collections::HashMap;
+
+    /// 构建最小 OptContext：每个频率对应一个动态组，每组含 1 个字根、1 个单部件汉字。
+    /// 不同组的汉字被分到同一键位时即产生重码（全码桶）。关闭简码以简化上下文构造，
+    /// 从而验证首选标记仅依赖全码桶、与简码分配无关。
+    fn make_ctx(freqs: &[u64], allowed: &[u8]) -> OptContext {
+        let n = freqs.len();
+        let mut groups = Vec::with_capacity(n);
+        let mut splits = Vec::with_capacity(n);
+        for (i, &f) in freqs.iter().enumerate() {
+            let root = format!("r{i}");
+            groups.push(RootGroup {
+                roots: vec![root.clone()],
+                allowed_keys: allowed.to_vec(),
+            });
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, vec![root], f));
+        }
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut cfg = Config::default();
+        cfg.weights.simple_code.enabled = false; // 关闭简码，简化上下文构造
+        let weights = cfg.get_weight_config();
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels: vec![] },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 从头重算每个汉字的首选标记：对每个非空全码桶取 (最大频率, 最小 ci) 为首选字。
+    /// 仅依赖全码编码（assignment）与字频，不引用任何简码状态，因此与简码分配无关。
+    fn expected_first_candidates(ctx: &OptContext, assignment: &[u8]) -> Vec<bool> {
+        let n = ctx.char_infos.len();
+        let cs = ctx.code_space;
+        let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); cs];
+        for ci in 0..n {
+            let code = ctx.calc_code_only(ci, assignment);
+            buckets[code].push(ci);
+        }
+        let mut expected = vec![false; n];
+        for chars in &buckets {
+            if chars.is_empty() {
+                continue;
+            }
+            let mut max_f = 0u64;
+            let mut first = usize::MAX;
+            for &ci in chars {
+                let f = ctx.char_infos[ci].frequency;
+                if f > max_f || (f == max_f && ci < first) {
+                    max_f = f;
+                    first = ci;
+                }
+            }
+            expected[first] = true;
+        }
+        expected
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 3: 首选标记与全码桶重算一致
+        // 对任意合法分配及任意一串移动序列，对每个汉字，增量维护的 is_first_candidate[ci]
+        // 应等于「ci 是其全码桶 code_to_chars[code] 中频率最大者（频率并列时取最小 ci）」
+        // 这一从全码桶直接重算的结果，且该值与简码分配无关。
+        // Validates: Requirements 5.1, 5.2, 5.3, 5.4, 4.6
+        #[test]
+        fn prop3_first_candidate_matches_full_bucket_rescan(
+            // 使用较小的频率范围以制造频率并列，充分驱动 (最大频率, 最小 ci) 的并列裁决
+            freqs in prop::collection::vec(1u64..6, 3usize..8),
+            moves in prop::collection::vec((0usize..16, 0u8..4), 0usize..40),
+        ) {
+            let allowed: [u8; 4] = [0, 1, 2, 3];
+            let ctx = make_ctx(&freqs, &allowed);
+            let n = freqs.len();
+            let mut assignment = vec![0u8; n];
+            let mut ev = Evaluator::new(&ctx, &assignment);
+            let mut rng = thread_rng();
+
+            // 初始状态即应与从头重算一致
+            let expected0 = expected_first_candidates(&ctx, &assignment);
+            prop_assert_eq!(&ev.is_first_candidate, &expected0);
+
+            // 每个汉字恰位于其全码桶的首选关系中，因此 true 的数量 = 非空桶数量
+            for (gi, nk) in moves {
+                let r = gi % n;
+                // 高温保证大多数移动被接受，充分驱动增量维护路径
+                ev.try_move(&ctx, &mut assignment, r, nk, 1e18, &mut rng);
+
+                // 每步后：增量维护的首选标记应与从全码桶从头重算的结果逐元素一致
+                let expected = expected_first_candidates(&ctx, &assignment);
+                prop_assert_eq!(
+                    &ev.is_first_candidate,
+                    &expected,
+                    "is_first_candidate 与全码桶重算不一致, assignment={:?}",
+                    assignment
+                );
+
+                // 一致性约束：恰有「非空全码桶数量」个汉字被标记为首选字
+                let n_true = ev.is_first_candidate.iter().filter(|&&b| b).count();
+                let n_nonempty = ev.code_to_chars.iter().filter(|b| !b.is_empty()).count();
+                prop_assert_eq!(n_true, n_nonempty);
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 全码重码独立性测试（simple-code-perf-optimization, Property 14）
+// =========================================================================
+#[cfg(test)]
+mod full_collision_independence_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep,
+        WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建最小 OptContext：每个频率对应一个动态组（1 字根、1 单部件汉字）。
+    /// 不同组的汉字落到同一键位即产生全码重码桶。`enable_simple` 控制是否启用简码：
+    /// - 启用时附带一个 `"Aa"` 规则的简码级别（使主评估器持有 `SimpleEvaluator`，
+    ///   从而拥有非平凡的出简标记集合 `all_assigned_flags`），覆盖率阈值取 1.0 使所有字均为候选；
+    /// - 关闭时简码级别留空（`simple_eval` 为 `None`）。
+    ///
+    /// 两种取值下全码结构（组、允许键、字根/部件）完全一致，因此可对比全码指标。
+    fn make_ctx(freqs: &[u64], allowed: &[u8], enable_simple: bool) -> OptContext {
+        let n = freqs.len();
+        let mut groups = Vec::with_capacity(n);
+        let mut splits = Vec::with_capacity(n);
+        for (i, &f) in freqs.iter().enumerate() {
+            let root = format!("r{i}");
+            groups.push(RootGroup {
+                roots: vec![root.clone()],
+                allowed_keys: allowed.to_vec(),
+            });
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, vec![root], f));
+        }
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = enable_simple;
+        weights.simple_coverage_ratio = 1.0;
+        let simple_config = if enable_simple {
+            SimpleCodeConfig {
+                levels: vec![SimpleCodeLevel {
+                    level: 1,
+                    code_num: 1,
+                    rule_candidates: vec![vec![SimpleCodeStep {
+                        root_selector: 'A',
+                        code_selector: 'a',
+                    }]],
+                    space_commit: false,
+                }],
+            }
+        } else {
+            SimpleCodeConfig { levels: vec![] }
+        };
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            simple_config,
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 14: 全码重码独立于出简状态
+        //
+        // 对任意分配与任意出简标记集合，主评估器的全码重码指标（total_collisions 与
+        // collision_frequency，经 get_metrics 暴露为 collision_count 与 collision_rate）
+        // 应与出简状态无关——改变 all_assigned_flags 不改变这两个全码指标。
+        // Validates: Requirements 14.1
+        #[test]
+        fn prop14_full_collision_independent_of_simple(
+            // 较小的频率范围以制造重码桶与频率并列
+            freqs in prop::collection::vec(1u64..6, 3usize..8),
+            // 确定性移动序列：直接改写 assignment（不依赖随机接受），逐步遍历分配空间
+            moves in prop::collection::vec((0usize..16, 0u8..4), 0usize..40),
+            // 用于驱动任意出简标记集合的随机布尔串
+            flag_bits in prop::collection::vec(any::<bool>(), 0usize..256),
+        ) {
+            let allowed: [u8; 4] = [0, 1, 2, 3];
+            let n = freqs.len();
+            let ctx_off = make_ctx(&freqs, &allowed, false);
+            let ctx_on = make_ctx(&freqs, &allowed, true);
+
+            let mut asg = vec![0u8; n];
+
+            // 逐步施加确定性移动；step==0 为初始分配，其后每步改写一个组的键位
+            for step in 0..=moves.len() {
+                // 简码启用：主评估器持有 SimpleEvaluator（含 all_assigned_flags）
+                let mut ev_on = Evaluator::new(&ctx_on, &asg);
+                // 简码关闭：作为「无出简状态」的全码基准
+                let ev_off = Evaluator::new(&ctx_off, &asg);
+                prop_assert!(ev_on.simple_eval.is_some());
+                prop_assert!(ev_off.simple_eval.is_none());
+
+                // (A) 启用 vs 关闭简码：全码指标完全一致（全码计算独立于简码）
+                let m_on = ev_on.get_metrics(&ctx_on);
+                let m_off = ev_off.get_metrics(&ctx_off);
+                prop_assert_eq!(m_on.collision_count, m_off.collision_count);
+                prop_assert!((m_on.collision_rate - m_off.collision_rate).abs() < 1e-12);
+
+                // (B) 直接改变出简标记集合 all_assigned_flags，全码指标必须不变（需求 14.1 核心）
+                let base_count = ev_on.total_collisions;
+                let base_freq = ev_on.collision_frequency;
+
+                // 全部出简
+                for f in ev_on.simple_eval.as_mut().unwrap().all_assigned_flags.iter_mut() {
+                    *f = true;
+                }
+                prop_assert_eq!(ev_on.total_collisions, base_count);
+                prop_assert_eq!(ev_on.collision_frequency, base_freq);
+
+                // 全部不出简
+                for f in ev_on.simple_eval.as_mut().unwrap().all_assigned_flags.iter_mut() {
+                    *f = false;
+                }
+                prop_assert_eq!(ev_on.total_collisions, base_count);
+                prop_assert_eq!(ev_on.collision_frequency, base_freq);
+
+                // 任意（随机）出简标记集合
+                {
+                    let flags = &mut ev_on.simple_eval.as_mut().unwrap().all_assigned_flags;
+                    let len = flags.len();
+                    for (i, f) in flags.iter_mut().enumerate() {
+                        *f = flag_bits.get(step * len + i).copied().unwrap_or(i % 2 == 0);
+                    }
+                }
+                prop_assert_eq!(ev_on.total_collisions, base_count);
+                prop_assert_eq!(ev_on.collision_frequency, base_freq);
+
+                // get_metrics 暴露的全码指标同样不受出简状态影响
+                let m_after = ev_on.get_metrics(&ctx_on);
+                prop_assert_eq!(m_after.collision_count, base_count);
+                prop_assert!((m_after.collision_rate - m_off.collision_rate).abs() < 1e-12);
+
+                // 施加下一步移动（确定性改写）
+                if step < moves.len() {
+                    let (gi, nk) = moves[step];
+                    asg[gi % n] = nk;
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 去堆分配验证测试（simple-code-perf-optimization, 任务 5.2）
+// =========================================================================
+// 验证简码热路径所用的复用缓冲变体 `OptContext::get_simple_keys_into`：
+//   (1) 结果与全量分配版本 `get_simple_keys` 完全一致（同一键位序列 / 同样的有/无简码判定）；
+//   (2) 复用同一缓冲区跨多次调用时不在每步重新分配（容量预热后保持恒定，即无每步堆分配）。
+// Requirements: 3.1, 3.3
+#[cfg(test)]
+mod dealloc_free_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep,
+        WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、含多步简码指令的最小 OptContext。
+    ///
+    /// `specs[i] = (freq, n_roots)`：第 i 个汉字含 `n_roots` 个互不相同的字根
+    /// （各自独立成组），故该字全码部件数 == `n_roots`。简码配置三个级别，规则分别取
+    /// 1 / 2 / 3 个逻辑根的首个编码（`code_selector = 'a'`），从而产生 1 / 2 / 3 步指令：
+    /// - 级别 0：`[A.a]`  → `n_roots >= 1` 时解析成功（1 个键位）
+    /// - 级别 1：`[A.a,B.a]` → `n_roots >= 2` 时解析成功（2 个键位）
+    /// - 级别 2：`[A.a,B.a,C.a]` → `n_roots >= 3` 时解析成功（3 个键位）
+    ///
+    /// 否则该级指令为 `None`。这样可同时覆盖「有简码键位」与「无简码键位」两种分支，
+    /// 并让简码键位长度跨级别变化（驱动复用缓冲的容量预热）。
+    fn make_ctx(specs: &[(u64, usize)]) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1, 2],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num: 1,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num: 1,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num: 1,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: false,
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 固定 specs：含 1 / 2 / 3 根的汉字，键位序列长度跨 1~3 变化。
+    fn sample_specs() -> Vec<(u64, usize)> {
+        vec![(100, 1), (90, 2), (80, 3), (70, 2), (60, 1), (50, 3)]
+    }
+
+    #[test]
+    fn into_matches_allocating_across_levels_and_assignments() {
+        let specs = sample_specs();
+        let ctx = make_ctx(&specs);
+        let n_chars = ctx.char_infos.len();
+        let n_levels = ctx.simple_config.levels.len();
+        let n_groups = ctx.num_groups;
+
+        // 多组分配：全 0、全 1、全 2、以及若干周期性图案
+        let assignments: Vec<Vec<u8>> = vec![
+            vec![0u8; n_groups],
+            vec![1u8; n_groups],
+            vec![2u8; n_groups],
+            (0..n_groups).map(|g| (g % 3) as u8).collect(),
+            (0..n_groups).map(|g| ((g + 1) % 3) as u8).collect(),
+            (0..n_groups).map(|g| ((g * 2) % 3) as u8).collect(),
+        ];
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut saw_some = false;
+        let mut saw_none = false;
+
+        for asg in &assignments {
+            for ci in 0..n_chars {
+                for li in 0..n_levels {
+                    let allocating = ctx.get_simple_keys(ci, li, asg);
+                    let ok = ctx.get_simple_keys_into(ci, li, asg, &mut buf);
+
+                    match allocating {
+                        Some(expected) => {
+                            saw_some = true;
+                            assert!(
+                                ok,
+                                "复用路径应成功 (ci={ci}, li={li}), 但返回 false; asg={asg:?}"
+                            );
+                            assert_eq!(
+                                buf, expected,
+                                "复用路径键位序列与全量路径不一致 (ci={ci}, li={li}); asg={asg:?}"
+                            );
+                        }
+                        None => {
+                            saw_none = true;
+                            assert!(
+                                !ok,
+                                "全量路径为 None 时复用路径应返回 false (ci={ci}, li={li}); asg={asg:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // 测试夹具应同时覆盖「有简码」与「无简码」两种分支，否则等价性验证不充分
+        assert!(saw_some, "测试夹具未覆盖任何有效简码键位序列");
+        assert!(saw_none, "测试夹具未覆盖任何无效（None）简码分支");
+    }
+
+    #[test]
+    fn reused_buffer_capacity_stable_no_per_call_realloc() {
+        let specs = sample_specs();
+        let ctx = make_ctx(&specs);
+        let n_chars = ctx.char_infos.len();
+        let n_levels = ctx.simple_config.levels.len();
+        let n_groups = ctx.num_groups;
+        let asg = vec![0u8; n_groups];
+
+        // 先求出所有 (ci, li) 中的最大简码键位长度，并据此预热缓冲容量。
+        let mut buf: Vec<u8> = Vec::new();
+        let mut max_len = 0usize;
+        for ci in 0..n_chars {
+            for li in 0..n_levels {
+                if ctx.get_simple_keys_into(ci, li, &asg, &mut buf) {
+                    max_len = max_len.max(buf.len());
+                }
+            }
+        }
+        assert!(max_len >= 2, "夹具应产生长度>=2 的简码键位以验证容量预热");
+
+        // 预热到至少 max_len 的容量；此后任何 (ci, li, assignment) 调用都不应触发再分配。
+        buf.clear();
+        buf.reserve(max_len);
+        let warmed_cap = buf.capacity();
+        assert!(warmed_cap >= max_len);
+
+        // 反复调用 get_simple_keys_into（变化 ci/li/assignment），断言容量恒定（无每步堆分配）。
+        for round in 0..200usize {
+            let asg: Vec<u8> = (0..n_groups).map(|g| ((g + round) % 3) as u8).collect();
+            for ci in 0..n_chars {
+                for li in 0..n_levels {
+                    ctx.get_simple_keys_into(ci, li, &asg, &mut buf);
+                    assert_eq!(
+                        buf.capacity(),
+                        warmed_cap,
+                        "复用缓冲容量在第 {round} 轮 (ci={ci}, li={li}) 发生变化，存在每步堆分配"
+                    );
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // 复用缓冲路径与全量路径在任意 specs / 分配 / (ci, li) 上结果一致，
+        // 且全程复用同一缓冲区时容量单调不减（即不会在每步收缩后重分配）。
+        // Validates: Requirements 3.1, 3.3
+        #[test]
+        fn prop_into_equiv_and_no_capacity_shrink(
+            specs in prop::collection::vec((1u64..200, 1usize..=3), 1..6),
+            key_bits in prop::collection::vec(0u8..3, 0..64),
+        ) {
+            let ctx = make_ctx(&specs);
+            let n_chars = ctx.char_infos.len();
+            let n_levels = ctx.simple_config.levels.len();
+            let n_groups = ctx.num_groups;
+
+            // 由随机比特构造一个合法分配（键位取自 {0,1,2}）
+            let asg: Vec<u8> = (0..n_groups)
+                .map(|g| key_bits.get(g).copied().unwrap_or((g % 3) as u8))
+                .collect();
+
+            let mut buf: Vec<u8> = Vec::new();
+            let mut last_cap = buf.capacity();
+
+            for ci in 0..n_chars {
+                for li in 0..n_levels {
+                    let allocating = ctx.get_simple_keys(ci, li, &asg);
+                    let ok = ctx.get_simple_keys_into(ci, li, &asg, &mut buf);
+
+                    match allocating {
+                        Some(expected) => {
+                            prop_assert!(ok);
+                            prop_assert_eq!(&buf, &expected);
+                        }
+                        None => prop_assert!(!ok),
+                    }
+
+                    // 复用缓冲容量只增不减：清空+push 永不收缩，故无周期性再分配。
+                    prop_assert!(buf.capacity() >= last_cap);
+                    last_cap = buf.capacity();
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 桶内选中集合测试（simple-code-perf-optimization, Property 4）
+// =========================================================================
+#[cfg(test)]
+mod bucket_selection_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、含 3 个级别、参数化分配模式与每级编码数 `code_num` 的最小 OptContext。
+    ///
+    /// `specs[i] = (freq, n_roots)`：第 i 个汉字含 `n_roots` 个互不相同的字根（各自独立成组），
+    /// 故该字全码部件数 == `n_roots`，从而 `simple_base_saving[ci][li]` 随 `n_roots`/`li` 变化，
+    /// 充分驱动 Efficiency 模式排序键 `freq × (base_saving + sel_len)` 的差异。
+    ///
+    /// 仅用 2 个允许键位（`[0, 1]`），使级别 0 桶容量为 2、级别 1 为 4、级别 2 为 8，
+    /// 在较多候选字下制造同桶碰撞，让「桶内成员数 > code_num」时的选取逻辑真正被触发。
+    /// 覆盖率阈值取 1.0 使所有字均为候选字。
+    fn make_ctx(specs: &[(u64, usize)], mode: SimpleAssignMode, code_num: usize) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: false,
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        weights.simple_assign_mode = mode;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 独立重算桶内排序键（与设计 Property 4 一致，刻意从头实现而非复用产线比较器）。
+    ///
+    /// - Frequency 模式：`key = freq`；
+    /// - Efficiency 模式：`key = freq × (base_saving[ci][li] + sel_len)`，`sel_len` 由
+    ///   `is_first_candidate[ci]` 取 0（首选字）或 1（非首选字）。
+    fn oracle_sort_key(
+        ctx: &OptContext,
+        is_first_candidate: &[bool],
+        li: usize,
+        ci: usize,
+    ) -> i64 {
+        let freq = ctx.char_infos[ci].frequency as i64;
+        match ctx.simple_assign_mode {
+            SimpleAssignMode::Frequency => freq,
+            SimpleAssignMode::Efficiency => {
+                let sel_len: i64 = if is_first_candidate[ci] { 0 } else { 1 };
+                freq * (ctx.simple_base_saving[ci][li] + sel_len)
+            }
+        }
+    }
+
+    /// 独立并列裁决比较器：排序键降序；相等时先按 `freq` 降序，再按 `ci` 升序。
+    fn oracle_cmp(
+        ctx: &OptContext,
+        is_first_candidate: &[bool],
+        li: usize,
+        a: usize,
+        b: usize,
+    ) -> std::cmp::Ordering {
+        let ka = oracle_sort_key(ctx, is_first_candidate, li, a);
+        let kb = oracle_sort_key(ctx, is_first_candidate, li, b);
+        kb.cmp(&ka).then_with(|| {
+            let fa = ctx.char_infos[a].frequency;
+            let fb = ctx.char_infos[b].frequency;
+            fb.cmp(&fa).then_with(|| a.cmp(&b))
+        })
+    }
+
+    /// 从头独立推导每级的「桶成员」与「桶内选中集合」。
+    ///
+    /// 忠实复现设计 Property 4：按级别升序处理，低级别先出简；高级别桶中排除已被前序级别
+    /// 选中（出简）的字（跨级排除）。每个桶内用 `oracle_cmp` 排序后取前 `code_num` 个为选中集合。
+    /// 返回 `(members_per_level, selected_per_level)`，均以「桶编码 -> 排序后的 ci 列表」表示。
+    #[allow(clippy::type_complexity)]
+    fn oracle_selection(
+        ctx: &OptContext,
+        assignment: &[u8],
+        is_first_candidate: &[bool],
+    ) -> (
+        Vec<HashMap<usize, Vec<usize>>>,
+        Vec<HashMap<usize, Vec<usize>>>,
+    ) {
+        let n_levels = ctx.simple_config.levels.len();
+        let n_chars = ctx.char_infos.len();
+        let mut assigned = vec![false; n_chars];
+        let mut members_per_level: Vec<HashMap<usize, Vec<usize>>> = Vec::with_capacity(n_levels);
+        let mut selected_per_level: Vec<HashMap<usize, Vec<usize>>> = Vec::with_capacity(n_levels);
+
+        for li in 0..n_levels {
+            let code_num = ctx.simple_config.levels[li].code_num;
+            // 阶段 1：候选字入桶（排除已被低级别出简的字 —— 跨级排除）
+            let mut buckets: HashMap<usize, Vec<usize>> = HashMap::new();
+            for &ci in &ctx.simple_candidate_chars {
+                if assigned[ci] {
+                    continue;
+                }
+                if let Some(code) = ctx.calc_simple_code_eligible(ci, li, assignment) {
+                    buckets.entry(code).or_default().push(ci);
+                }
+            }
+            // 阶段 2：桶内排序后取前 code_num 个为选中集合，并标记其跨级排除
+            let mut selected: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (&code, members) in buckets.iter() {
+                let mut sorted = members.clone();
+                sorted.sort_by(|&a, &b| oracle_cmp(ctx, is_first_candidate, li, a, b));
+                let sel: Vec<usize> = sorted.iter().take(code_num).copied().collect();
+                for &ci in &sel {
+                    assigned[ci] = true;
+                }
+                selected.insert(code, sel);
+            }
+            members_per_level.push(buckets);
+            selected_per_level.push(selected);
+        }
+        (members_per_level, selected_per_level)
+    }
+
+    /// 将一组 ci 排序后返回（用于按集合语义比较）。
+    fn sorted(mut v: Vec<usize>) -> Vec<usize> {
+        v.sort_unstable();
+        v
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 4: 桶内选中集合符合所选模式的排序键
+        //
+        // 对任意简码桶的候选字集合，桶内被选中出简的字集合应恰为「按当前分配模式的排序键、并按
+        // 并列裁决规则（排序键相等时先按 freq 降序、再按 ci 升序）排序后的前 code_num 个（在未被
+        // 前序级别排除的字中）」。其中 frequency 模式排序键为 freq，efficiency 模式排序键为
+        // freq × (base_saving + sel_len)、sel_len 由 is_first_candidate 取 0 或 1。
+        // 参数化 frequency / efficiency 两种模式。
+        // Validates: Requirements 4.3, 4.4, 4.7, 6.2, 6.3
+        #[test]
+        fn prop4_bucket_selection_matches_sort_key(
+            // true => Frequency 模式；false => Efficiency 模式（参数化两种模式）
+            mode_is_freq in any::<bool>(),
+            // (freq, n_roots)：小频率范围制造并列；n_roots 1..=3 使 base_saving 跨级变化
+            specs in prop::collection::vec((1u64..6, 1usize..4), 3usize..9),
+            // 每级编码数 1..=2：code_num=2 时桶内成员数可超出，真正触发「取前 code_num」选取
+            code_num in 1usize..3,
+            // 确定性移动序列：直接改写 assignment（不依赖随机接受），遍历分配空间
+            moves in prop::collection::vec((0usize..32, 0u8..2), 0usize..24),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let ctx = make_ctx(&specs, mode, code_num);
+            let n_groups = ctx.num_groups;
+            let n_chars = ctx.char_infos.len();
+            let n_levels = ctx.simple_config.levels.len();
+
+            let mut asg = vec![0u8; n_groups];
+
+            // step==0 为初始分配，其后每步确定性改写一个组的键位
+            for step in 0..=moves.len() {
+                let ev = Evaluator::new(&ctx, &asg);
+                let se = ev.simple_eval.as_ref().expect("简码已启用，simple_eval 应为 Some");
+                let is_first = &ev.is_first_candidate;
+
+                // 用与评估器相同的 is_first_candidate 独立从头推导期望选中集合
+                let (exp_members, exp_selected) = oracle_selection(&ctx, &asg, is_first);
+
+                for li in 0..n_levels {
+                    let level = &se.levels[li];
+                    let code_num_li = ctx.simple_config.levels[li].code_num;
+
+                    // 从评估器状态重建：current_simple_code 指向的桶成员 + selected 选中集合
+                    let mut act_members: HashMap<usize, Vec<usize>> = HashMap::new();
+                    let mut act_selected: HashMap<usize, Vec<usize>> = HashMap::new();
+                    for ci in 0..n_chars {
+                        let code = level.current_simple_code[ci];
+                        if code >= 0 {
+                            let code = code as usize;
+                            act_members.entry(code).or_default().push(ci);
+                            if level.selected[ci] {
+                                act_selected.entry(code).or_default().push(ci);
+                            }
+                        }
+                    }
+
+                    // (1) 桶成员集合（current_simple_code 归属）应与从头推导一致
+                    let exp_codes = sorted(exp_members[li].keys().copied().collect());
+                    let act_codes = sorted(act_members.keys().copied().collect());
+                    prop_assert_eq!(
+                        &act_codes, &exp_codes,
+                        "级别 {} 桶集合不一致, mode={:?}, asg={:?}", li, mode, asg
+                    );
+
+                    for (&code, exp_mem) in exp_members[li].iter() {
+                        let act_mem = act_members.get(&code).cloned().unwrap_or_default();
+                        prop_assert_eq!(
+                            sorted(act_mem.clone()), sorted(exp_mem.clone()),
+                            "级别 {} 桶 {} 成员不一致, mode={:?}, asg={:?}", li, code, mode, asg
+                        );
+
+                        // (2) 桶内选中出简集合应恰为排序后的前 code_num 个
+                        let exp_sel = exp_selected[li].get(&code).cloned().unwrap_or_default();
+                        let act_sel = act_selected.get(&code).cloned().unwrap_or_default();
+                        prop_assert_eq!(
+                            sorted(act_sel.clone()), sorted(exp_sel.clone()),
+                            "级别 {} 桶 {} 选中集合与排序键前 code_num 不一致, mode={:?}, asg={:?}",
+                            li, code, mode, asg
+                        );
+
+                        // (3) 选中数 = min(code_num, 桶成员数)
+                        prop_assert_eq!(
+                            act_sel.len(),
+                            exp_mem.len().min(code_num_li),
+                            "级别 {} 桶 {} 选中数不等于 min(code_num, 成员数), mode={:?}",
+                            li, code, mode
+                        );
+                    }
+                }
+
+                if step < moves.len() {
+                    let (gi, nk) = moves[step];
+                    asg[gi % n_groups] = nk;
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 增量与全量一致性测试（simple-code-perf-optimization, Property 1）
+// =========================================================================
+#[cfg(test)]
+mod incremental_full_consistency_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、含 3 个级别、参数化分配模式 / 每级编码数 / 候选覆盖率的最小 OptContext。
+    ///
+    /// `specs[i] = (freq, n_roots)`：第 i 个汉字含 `n_roots` 个互不相同的字根（各自独立成组），
+    /// 故该字全码部件数 == `n_roots`，从而 `simple_base_saving[ci][li]` 随 `n_roots`/`li` 变化，
+    /// 充分驱动 Efficiency 模式排序键的差异。仅用 2 个允许键位（`[0, 1]`），使级别 0 桶容量为 2、
+    /// 级别 1 为 4、级别 2 为 8，在多候选字下制造同桶碰撞与「桶成员数 > code_num」的选取。
+    ///
+    /// `coverage_ratio < 1.0` 时低频字将落选候选集合（非候选字），从而其所属字根组的
+    /// `group_to_simple_affected_candidate` 为空 —— 触发「空交集移动」的早退分支（需求 1.5/7.6）。
+    fn make_ctx(
+        specs: &[(u64, usize)],
+        mode: SimpleAssignMode,
+        code_num: usize,
+        coverage_ratio: f64,
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq.max(1)));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: false,
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = coverage_ratio;
+        weights.simple_assign_mode = mode;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 任务 17.1 回归专用：与 `make_ctx` 同构，但可逐级指定 `space_commit`，并注入固定简码
+    /// （经 `OptContext::new_with_fixed`）。用于验证「含空格上屏 + 固定简码 + 长度约束」时
+    /// 增量维护仍与全量重建逐字段一致。
+    fn make_ctx_combined(
+        specs: &[(u64, usize)],
+        mode: SimpleAssignMode,
+        code_num: usize,
+        coverage_ratio: f64,
+        space_commits: [bool; 3],
+        fixed: &[(char, String)],
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq.max(1)));
+        }
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: space_commits[0],
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: space_commits[1],
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: space_commits[2],
+            },
+        ];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = coverage_ratio;
+        weights.simple_assign_mode = mode;
+        OptContext::new_with_fixed(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+            fixed,
+        )
+    }
+
+    /// 将一次合法移动（把组 `r` 改到键位 `new_key`）施加到 `ev` 上，复刻产线移动顺序：
+    /// 1. 改写 `assignment[r]`；2. 对组内全码受影响字增量维护全码桶（`update_char`，
+    ///    同步 `code_to_chars` / `is_first_candidate`）；3. 走简码增量路径 `apply_simple_for_move`。
+    ///
+    /// 这样 `ev.simple_eval` 即经增量维护得到的简码状态，可与对同一 `assignment` 从零
+    /// 全量构建的 `Evaluator::new(...).simple_eval` 作为 oracle 逐字段比对。
+    fn apply_move_inc(ev: &mut Evaluator, ctx: &OptContext, assignment: &mut [u8], r: usize, new_key: u8) {
+        assignment[r] = new_key;
+        // 注意：先克隆组内字列表以规避借用冲突（group_to_chars 借自 ctx，update_char 借 ev）
+        for idx in 0..ctx.group_to_chars[r].len() {
+            let ci = ctx.group_to_chars[r][idx];
+            ev.update_char(ctx, assignment, ci);
+        }
+        ev.apply_simple_for_move(ctx, assignment, &[r]);
+    }
+
+    /// 逐字段断言两个 SimpleEvaluator 的全部简码指标与状态一致。
+    ///
+    /// 比对内容：weighted_freq_coverage / equiv_mean / dist_deviation /
+    /// simple_collision_count / simple_collision_rate（含底层 simple_collision_freq），
+    /// 以及每级 `selected`、每候选字 `current_simple_code` 与跨级 `all_assigned_flags`。
+    fn assert_simple_eq(
+        ctx: &OptContext,
+        inc: &Evaluator,
+        full: &Evaluator,
+        label: &str,
+    ) -> Result<(), TestCaseError> {
+        let m_inc = inc.get_simple_metrics(ctx);
+        let m_full = full.get_simple_metrics(ctx);
+
+        let eps = 1e-9;
+        prop_assert!(
+            (m_inc.weighted_freq_coverage - m_full.weighted_freq_coverage).abs() < eps,
+            "{label}: weighted_freq_coverage 不一致 inc={} full={}",
+            m_inc.weighted_freq_coverage,
+            m_full.weighted_freq_coverage
+        );
+        prop_assert!(
+            (m_inc.equiv_mean - m_full.equiv_mean).abs() < eps,
+            "{label}: equiv_mean 不一致 inc={} full={}",
+            m_inc.equiv_mean,
+            m_full.equiv_mean
+        );
+        prop_assert!(
+            (m_inc.dist_deviation - m_full.dist_deviation).abs() < eps,
+            "{label}: dist_deviation 不一致 inc={} full={}",
+            m_inc.dist_deviation,
+            m_full.dist_deviation
+        );
+        prop_assert_eq!(
+            m_inc.collision_count,
+            m_full.collision_count,
+            "{}: simple_collision_count 不一致",
+            label
+        );
+        prop_assert!(
+            (m_inc.collision_rate - m_full.collision_rate).abs() < eps,
+            "{label}: simple_collision_rate 不一致 inc={} full={}",
+            m_inc.collision_rate,
+            m_full.collision_rate
+        );
+
+        let se_inc = inc.simple_eval.as_ref().expect("inc.simple_eval");
+        let se_full = full.simple_eval.as_ref().expect("full.simple_eval");
+
+        // 底层简码重码标量（整数，精确比对）
+        prop_assert_eq!(
+            se_inc.simple_collision_count,
+            se_full.simple_collision_count,
+            "{}: 底层 simple_collision_count 不一致",
+            label
+        );
+        prop_assert_eq!(
+            se_inc.simple_collision_freq,
+            se_full.simple_collision_freq,
+            "{}: 底层 simple_collision_freq 不一致",
+            label
+        );
+
+        // 跨级出简标记
+        prop_assert_eq!(
+            &se_inc.all_assigned_flags,
+            &se_full.all_assigned_flags,
+            "{}: all_assigned_flags 不一致",
+            label
+        );
+
+        // 逐级 selected / current_simple_code
+        prop_assert_eq!(se_inc.levels.len(), se_full.levels.len(), "{}: 级别数不一致", label);
+        for li in 0..se_inc.levels.len() {
+            prop_assert_eq!(
+                &se_inc.levels[li].selected,
+                &se_full.levels[li].selected,
+                "{}: 级别 {} selected 不一致",
+                label,
+                li
+            );
+            prop_assert_eq!(
+                &se_inc.levels[li].current_simple_code,
+                &se_full.levels[li].current_simple_code,
+                "{}: 级别 {} current_simple_code 不一致",
+                label,
+                li
+            );
+            // 级别聚合标量（覆盖频率精确；浮点聚合用紧 epsilon）
+            prop_assert_eq!(
+                se_inc.levels[li].covered_freq,
+                se_full.levels[li].covered_freq,
+                "{}: 级别 {} covered_freq 不一致",
+                label,
+                li
+            );
+            prop_assert!(
+                (se_inc.levels[li].equiv_weighted - se_full.levels[li].equiv_weighted).abs() < eps,
+                "{label}: 级别 {li} equiv_weighted 不一致"
+            );
+            prop_assert_eq!(
+                se_inc.levels[li].equiv_freq_sum,
+                se_full.levels[li].equiv_freq_sum,
+                "{}: 级别 {} equiv_freq_sum 不一致",
+                label,
+                li
+            );
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 1 (任务 17.1 回归): 含空格上屏与固定简码下增量=全量
+        //
+        // 在「逐级随机 space_commit + 注入固定简码 + 长度约束」的上下文下，对随机移动序列逐步
+        // 断言增量维护的全部简码状态与对同一分配 full_rebuild 的结果逐字段一致（assert_simple_eq）。
+        // 固定简码仅取级别 0 单键（键位 'a'/'b' ∈ 允许键 [0,1]），结尾下划线与 level0 space_commit
+        // 一致，且仅当对应字全码长度 > level0 有效长度时纳入（满足需求 22 长度约束）。
+        // Validates: Requirements 20.7, 21.8, 21.9, 22.4
+        #[test]
+        fn prop_task17_1_incremental_matches_full_with_space_and_fixed(
+            mode_is_freq in any::<bool>(),
+            specs in prop::collection::vec((1u64..6, 2usize..4), 3usize..9),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            space_bits in any::<[bool; 3]>(),
+            n_fixed in 0usize..3,
+            moves in prop::collection::vec((0usize..64, 0u8..2), 0usize..30),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+
+            // 固定简码：前 n_fixed（≤2）个字，级别 0 单键（key 'a'/'b'），下划线随 level0
+            // space_commit，仅当全码长度严格大于 level0 有效长度时纳入（否则被长度约束拒绝）。
+            let space0 = space_bits[0];
+            let eff0 = 1usize + if space0 { 1 } else { 0 };
+            let mut fixed: Vec<(char, String)> = Vec::new();
+            for i in 0..n_fixed.min(2).min(specs.len()) {
+                let full_len = specs[i].1.max(1);
+                if full_len > eff0 {
+                    let mut code = crate::types::key_to_char(i as u8).to_string(); // 0→'a',1→'b'
+                    if space0 {
+                        code.push('_');
+                    }
+                    let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+                    fixed.push((ch, code));
+                }
+            }
+
+            let ctx = make_ctx_combined(&specs, mode, code_num, coverage_ratio, space_bits, &fixed);
+            let n_groups = ctx.num_groups;
+            let mut assignment = vec![0u8; n_groups];
+
+            let mut ev_inc = Evaluator::new(&ctx, &assignment);
+            prop_assert!(ev_inc.simple_eval.is_some(), "简码应启用");
+
+            let ev_full0 = Evaluator::new(&ctx, &assignment);
+            assert_simple_eq(&ctx, &ev_inc, &ev_full0, "task17.1 step0")?;
+
+            for (k, &(gi, nk)) in moves.iter().enumerate() {
+                let r = gi % n_groups;
+                apply_move_inc(&mut ev_inc, &ctx, &mut assignment, r, nk);
+                let ev_full = Evaluator::new(&ctx, &assignment);
+                let label = format!(
+                    "task17.1 step{} move(r={},nk={}) space={:?} n_fixed={} mode={:?}",
+                    k + 1, r, nk, space_bits, fixed.len(), mode
+                );
+                assert_simple_eq(&ctx, &ev_inc, &ev_full, &label)?;
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 1: 简码增量维护与全量重建一致
+        //
+        // 对任意合法分配以及任意一串合法移动序列，在每种分配模式（frequency / efficiency）下，
+        // 经增量维护得到的全部简码指标 —— 频率覆盖率、平均当量、分布偏差、简码重码数、
+        // 简码重码率、各级出简标记 all_assigned_flags、各级 selected、各候选字
+        // current_simple_code —— 都应与对同一最终分配执行 full_rebuild 得到的结果逐字段一致。
+        // 参数化 frequency / efficiency 两种模式，对随机移动序列逐步比对。
+        // Validates: Requirements 1.1, 1.2, 1.3, 1.4, 6.1, 6.2, 6.3, 7.5, 8.6, 10.1, 14.2, 14.3, 14.4, 15.1, 17.3, 17.5
+        #[test]
+        fn prop1_incremental_matches_full_rebuild(
+            // true => Frequency 模式；false => Efficiency 模式（参数化两种模式）
+            mode_is_freq in any::<bool>(),
+            // (freq, n_roots)：小频率范围制造并列；n_roots 1..=3 使 base_saving 跨级变化
+            specs in prop::collection::vec((1u64..6, 1usize..4), 3usize..9),
+            // 每级编码数 1..=3：覆盖 code_num 大于/小于桶成员数两种情形
+            code_num in 1usize..4,
+            // 覆盖率阈值 0.5..=1.0：< 1.0 时产生非候选字 → 触发空交集移动早退
+            coverage_pct in 50u32..=100,
+            // 随机移动序列（组索引, 新键位 ∈ {0,1}）
+            moves in prop::collection::vec((0usize..64, 0u8..2), 0usize..40),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let ctx = make_ctx(&specs, mode, code_num, coverage_ratio);
+            let n_groups = ctx.num_groups;
+
+            let mut assignment = vec![0u8; n_groups];
+
+            // 增量评估器：全程通过 update_char + apply_simple_for_move 增量维护
+            let mut ev_inc = Evaluator::new(&ctx, &assignment);
+            prop_assert!(ev_inc.simple_eval.is_some(), "简码应启用");
+
+            // 初始状态即应与全量一致
+            let ev_full0 = Evaluator::new(&ctx, &assignment);
+            assert_simple_eq(&ctx, &ev_inc, &ev_full0, "step0")?;
+
+            for (k, &(gi, nk)) in moves.iter().enumerate() {
+                let r = gi % n_groups;
+                // 增量施加移动（产线顺序：全码 update_char → 简码 apply_simple_for_move）
+                apply_move_inc(&mut ev_inc, &ctx, &mut assignment, r, nk);
+
+                // oracle：对当前最终分配从零全量重建（Evaluator::new 走 full build）
+                let ev_full = Evaluator::new(&ctx, &assignment);
+
+                let label = format!("step{} move(r={},nk={}) assignment={:?}", k + 1, r, nk, assignment);
+                assert_simple_eq(&ctx, &ev_inc, &ev_full, &label)?;
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 13: 对账以全量结果覆盖增量值
+        //
+        // 对任意优化过程中的中间分配（由随机移动序列在增量维护的评估器上到达），执行
+        // reconcile 后，全码与简码的全部指标应等于对当前分配从零做全量重建/重算所得的指标：
+        // - 全码：get_metrics() 的 collision_count / collision_rate / equiv_mean / equiv_cv / dist_deviation
+        // - 简码：get_simple_metrics() 的 weighted_freq_coverage / equiv_mean / dist_deviation /
+        //         collision_count / collision_rate
+        // 整型字段精确相等，浮点字段紧 epsilon。同时验证 reconcile 保留时变量
+        // simple_active / current_simple_weight（退火过程量，不属于全量重算范畴）。
+        // Validates: Requirements 15.4, 15.5, 15.6
+        #[test]
+        fn prop13_reconcile_equals_full_rebuild(
+            mode_is_freq in any::<bool>(),
+            specs in prop::collection::vec((1u64..6, 1usize..4), 3usize..9),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            moves in prop::collection::vec((0usize..64, 0u8..2), 0usize..40),
+            // 用作 reconcile 前的时变量测试值（应在 reconcile 后保持不变）
+            test_weight in 0.0f64..2.0,
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let ctx = make_ctx(&specs, mode, code_num, coverage_ratio);
+            let n_groups = ctx.num_groups;
+
+            let mut assignment = vec![0u8; n_groups];
+
+            // 增量评估器：到达任意中间分配（产线顺序 update_char → apply_simple_for_move）
+            let mut ev_inc = Evaluator::new(&ctx, &assignment);
+            prop_assert!(ev_inc.simple_eval.is_some(), "简码应启用");
+            for &(gi, nk) in moves.iter() {
+                let r = gi % n_groups;
+                apply_move_inc(&mut ev_inc, &ctx, &mut assignment, r, nk);
+            }
+
+            // 设置退火时变量为测试值，reconcile 后应保持不变（需求 15）
+            ev_inc.simple_active = true;
+            ev_inc.current_simple_weight = test_weight;
+
+            // 对账：以对当前分配从零全量重建覆盖增量值
+            ev_inc.reconcile(&ctx, &assignment);
+
+            // oracle：对当前最终分配从零全量构建
+            let ev_full = Evaluator::new(&ctx, &assignment);
+
+            let eps = 1e-9;
+
+            // ---- 全码指标（get_metrics）逐字段相等 ----
+            let fm_inc = ev_inc.get_metrics(&ctx);
+            let fm_full = ev_full.get_metrics(&ctx);
+            prop_assert_eq!(
+                fm_inc.collision_count, fm_full.collision_count,
+                "full collision_count 不一致 assignment={:?}", assignment
+            );
+            prop_assert!(
+                (fm_inc.collision_rate - fm_full.collision_rate).abs() < eps,
+                "full collision_rate 不一致 inc={} full={}", fm_inc.collision_rate, fm_full.collision_rate
+            );
+            prop_assert!(
+                (fm_inc.equiv_mean - fm_full.equiv_mean).abs() < eps,
+                "full equiv_mean 不一致 inc={} full={}", fm_inc.equiv_mean, fm_full.equiv_mean
+            );
+            prop_assert!(
+                (fm_inc.equiv_cv - fm_full.equiv_cv).abs() < eps,
+                "full equiv_cv 不一致 inc={} full={}", fm_inc.equiv_cv, fm_full.equiv_cv
+            );
+            prop_assert!(
+                (fm_inc.dist_deviation - fm_full.dist_deviation).abs() < eps,
+                "full dist_deviation 不一致 inc={} full={}", fm_inc.dist_deviation, fm_full.dist_deviation
+            );
+
+            // ---- 简码指标（get_simple_metrics）逐字段相等 ----
+            let sm_inc = ev_inc.get_simple_metrics(&ctx);
+            let sm_full = ev_full.get_simple_metrics(&ctx);
+            prop_assert!(
+                (sm_inc.weighted_freq_coverage - sm_full.weighted_freq_coverage).abs() < eps,
+                "simple weighted_freq_coverage 不一致 inc={} full={}",
+                sm_inc.weighted_freq_coverage, sm_full.weighted_freq_coverage
+            );
+            prop_assert!(
+                (sm_inc.equiv_mean - sm_full.equiv_mean).abs() < eps,
+                "simple equiv_mean 不一致 inc={} full={}", sm_inc.equiv_mean, sm_full.equiv_mean
+            );
+            prop_assert!(
+                (sm_inc.dist_deviation - sm_full.dist_deviation).abs() < eps,
+                "simple dist_deviation 不一致 inc={} full={}", sm_inc.dist_deviation, sm_full.dist_deviation
+            );
+            prop_assert_eq!(
+                sm_inc.collision_count, sm_full.collision_count,
+                "simple collision_count 不一致"
+            );
+            prop_assert!(
+                (sm_inc.collision_rate - sm_full.collision_rate).abs() < eps,
+                "simple collision_rate 不一致 inc={} full={}", sm_inc.collision_rate, sm_full.collision_rate
+            );
+
+            // ---- reconcile 保留时变量 simple_active / current_simple_weight ----
+            prop_assert!(ev_inc.simple_active, "reconcile 应保留 simple_active=true");
+            prop_assert!(
+                (ev_inc.current_simple_weight - test_weight).abs() < eps,
+                "reconcile 应保留 current_simple_weight inc={} expected={}",
+                ev_inc.current_simple_weight, test_weight
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 1 (Backlog B1 强化): 阶段 2 出简选择精确增量
+        // —— 「仅脏桶局部重排 + pending_chars 跨级排除传播」与全量重建逐字段一致，且工作量局部化。
+        //
+        // 本测试专门守护 B1 精确增量化：参数偏向小频率范围（制造排序键并列）、code_num 1..=3
+        // （覆盖「桶成员数 > code_num」的择优与落选）、3 个简码级别（驱动「出简翻转触发跨级连锁」），
+        // 覆盖率 0.5..=1.0（含 coverage<1.0 的非候选字场景），并参数化 frequency / efficiency 两模式。
+        // 对随机移动序列逐步断言：
+        //   (1) 增量出简选择（每级 selected / current_simple_code、跨级 all_assigned_flags、级别聚合、
+        //       简码重码）与对同一分配 full_rebuild 的结果逐字段一致（含单级桶成员变化与跨级连锁）；
+        //   (2) 北极星：阶段 2 不再做整体重算——Frequency 模式下「非候选字组移动」（受影响候选交集为空）
+        //       的 last_stage2_visits 必为 0（空交集早退，需求 1.5/7.6）；且任意移动的访问量不超过
+        //       「候选字数 × 级数」的整体重算上界（增量恒不劣于全量扫描）。
+        // Validates: Requirements 1.1, 1.3, 1.4, 7.5
+        #[test]
+        fn prop_b1_incremental_selection_local_and_consistent(
+            mode_is_freq in any::<bool>(),
+            specs in prop::collection::vec((1u64..5, 1usize..4), 4usize..10),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            moves in prop::collection::vec((0usize..64, 0u8..2), 1usize..40),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let ctx = make_ctx(&specs, mode, code_num, coverage_ratio);
+            let n_groups = ctx.num_groups;
+            let n_levels = ctx.simple_config.levels.len();
+            let n_candidates = ctx.simple_candidate_chars.len();
+            // 增量阶段 2 每个候选字至多在「阶段 1 归属 / 重排种子 / 脏桶重排 / 跨级传播」各相位
+            // 被各级访问常数次，故访问量有 O(候选字 × 级数) 的常数倍上界；取宽松常数 6 作为
+            // 防回归哨兵（真正的「不随候选字总集增长」由 b1_stage2_work_is_local 单元测试守护）。
+            let sanity_bound = 6 * (n_candidates + 1) * (n_levels + 1);
+
+            let mut assignment = vec![0u8; n_groups];
+            let mut ev_inc = Evaluator::new(&ctx, &assignment);
+            prop_assert!(ev_inc.simple_eval.is_some(), "简码应启用");
+
+            for (k, &(gi, nk)) in moves.iter().enumerate() {
+                let r = gi % n_groups;
+                let affected_empty = ctx.group_to_simple_affected_candidate[r].is_empty();
+
+                apply_move_inc(&mut ev_inc, &ctx, &mut assignment, r, nk);
+                let visits = ev_inc.last_stage2_visits();
+
+                // (2) 北极星断言
+                prop_assert!(
+                    visits <= sanity_bound,
+                    "step{}: 阶段 2 访问量 {} 超过常数倍上界 {}（candidates={} levels={}）",
+                    k + 1, visits, sanity_bound, n_candidates, n_levels
+                );
+                if mode_is_freq && affected_empty {
+                    // Frequency 模式无重排种子；非候选字组移动 ⟹ 出简选择不变 ⟹ 阶段 2 零访问。
+                    prop_assert_eq!(
+                        visits, 0,
+                        "step{}: Frequency 模式空交集移动应零访问，实际 {}",
+                        k + 1, visits
+                    );
+                }
+
+                // (1) 逐字段一致
+                let ev_full = Evaluator::new(&ctx, &assignment);
+                let label = format!(
+                    "B1 step{} move(r={},nk={}) mode={:?} code_num={} cov={} visits={}",
+                    k + 1, r, nk, mode, code_num, coverage_ratio, visits
+                );
+                assert_simple_eq(&ctx, &ev_inc, &ev_full, &label)?;
+            }
+        }
+    }
+
+    /// 北极星单元测试（Backlog B1）：阶段 2「出简选择增量」的工作量随**受影响局部**变化，
+    /// 不随候选字总集规模增长——证明已摆脱旧实现 O(候选字集 × 级数) 的整体重算。
+    ///
+    /// 构造稀疏上下文：N 个单根候选字，键位充足且初始分配两两不同 ⟹ 每个字在级别 1 独占一个
+    /// 简码桶（全被选中、无桶内竞争、无跨级连锁）。对组 0 施加一次「迁移到空闲键位」的移动：
+    /// 仅触碰该字的旧/新简码桶（各 ≤1 成员）与其首选翻转。断言：
+    ///   - 该移动的 last_stage2_visits 为很小的常数（不随 N 变化）；
+    ///   - N = 6 与 N = 20 两种规模下访问量完全相等（局部性）；
+    ///   - 访问量远小于「候选字数 × 级数」的整体重算上界。
+    fn make_sparse_ctx(n: usize, n_keys: u8) -> OptContext {
+        use crate::config::TargetsConfig;
+        use crate::types::{
+            KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, SimpleCodeLevel,
+            SimpleCodeStep, WeightConfig,
+        };
+        use std::collections::HashMap;
+
+        let allowed: Vec<u8> = (0..n_keys).collect();
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(n);
+        for i in 0..n {
+            let root = format!("s{i}");
+            groups.push(RootGroup {
+                roots: vec![root.clone()],
+                allowed_keys: allowed.clone(),
+            });
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            // 频率两两不同（i+1），避免并列，使选择确定且每字独占桶后全部选中。
+            splits.push((ch, vec![root], (i as u64) + 1));
+        }
+        let step = |sel: char| SimpleCodeStep { root_selector: sel, code_selector: 'a' };
+        // 单级（level 1）：单根字仅在该级有简码，足以验证局部性。
+        let levels = vec![SimpleCodeLevel {
+            level: 1,
+            code_num: 1,
+            rule_candidates: vec![vec![step('A')]],
+            space_commit: false,
+        }];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0; // 全部为候选字
+        weights.simple_assign_mode = SimpleAssignMode::Efficiency;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 在稀疏上下文中，对组 0 施加「字 0 迁移到空闲键位」的移动，返回该步阶段 2 访问量。
+    fn sparse_localized_move_visits(n: usize) -> (usize, usize) {
+        let n_keys = (n as u8) + 5; // 充足键位，保证初始两两不同且留有空闲键
+        let ctx = make_sparse_ctx(n, n_keys);
+        let n_groups = ctx.num_groups; // = n（每字单根单组）
+        // 初始分配：assignment[i] = i ⟹ 各字级别 1 简码两两不同（独占桶）。
+        let mut assignment: Vec<u8> = (0..n_groups as u8).collect();
+        let mut ev = Evaluator::new(&ctx, &assignment);
+        // 迁移字 0 到一个未被占用的键位（n+1），其旧/新简码桶均 ≤1 成员。
+        let free_key = (n as u8) + 1;
+        apply_move_inc(&mut ev, &ctx, &mut assignment, 0, free_key);
+        (ev.last_stage2_visits(), ctx.simple_candidate_chars.len())
+    }
+
+    #[test]
+    fn b1_stage2_work_is_local_not_candidate_set_size() {
+        let (v_small, n_small) = sparse_localized_move_visits(6);
+        let (v_large, n_large) = sparse_localized_move_visits(20);
+
+        // 两种候选规模下，局部化移动的阶段 2 访问量应完全相等（与候选字总集无关）。
+        assert_eq!(
+            v_small, v_large,
+            "局部化移动的阶段 2 访问量应与候选字总集规模无关：N=6 时 {}，N=20 时 {}",
+            v_small, v_large
+        );
+        // 且为很小的常数，远小于整体重算上界（候选字数 × 级数）。
+        assert!(
+            v_large <= 8,
+            "局部化移动的阶段 2 访问量应为很小的常数，实际 {}",
+            v_large
+        );
+        assert!(
+            v_large < n_large,
+            "阶段 2 访问量 {} 应远小于候选字数 {}（证明非整体重算）",
+            v_large, n_large
+        );
+        assert!(n_small == 6 && n_large == 20, "稀疏构造应令全部字为候选字");
+    }
+}
+
+// =========================================================================
+// 任务 8.2 / Property 2: 拒绝/回滚与未移动等价（round-trip）属性测试
+//
+// 对任意简码评估器状态与任意一次受影响移动，先执行增量更新（apply_move_incremental，
+// 经 Evaluator::apply_simple_for_move 入口）再执行 rollback（经 rollback_simple），
+// 所得简码评估器的全部状态应与移动前逐字段相等。复刻产线拒绝路径顺序：先逆转全码更新
+// （assignment + update_char），再回滚简码（rollback_simple）。
+// =========================================================================
+#[cfg(test)]
+mod rollback_roundtrip_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、含 3 个级别、参数化分配模式 / 每级编码数 / 候选覆盖率的最小 OptContext。
+    ///
+    /// 与 `incremental_full_consistency_tests::make_ctx` 同构：`specs[i] = (freq, n_roots)`
+    /// 决定第 i 个汉字的字频与全码部件数；仅用 2 个允许键位制造同桶碰撞与「桶成员数 > code_num」
+    /// 的选取（驱动「改变选择」「并列裁决」等边界）。`coverage_ratio < 1.0` 时低频字落选候选集，
+    /// 其字根组的受影响交集为空 —— 覆盖「空交集移动（非候选字组）」的回滚 no-op 路径。
+    fn make_ctx(
+        specs: &[(u64, usize)],
+        mode: SimpleAssignMode,
+        code_num: usize,
+        coverage_ratio: f64,
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq.max(1)));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: false,
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = coverage_ratio;
+        weights.simple_assign_mode = mode;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 单个级别的可比较状态快照（用于逐字段精确比对）。
+    #[derive(Clone, PartialEq, Debug)]
+    struct LevelSnap {
+        /// 各桶 (成员列表, freq_sum)
+        buckets: Vec<(Vec<usize>, u64)>,
+        current_simple_code: Vec<i64>,
+        selected: Vec<bool>,
+        covered_freq: u64,
+        equiv_weighted: f64,
+        equiv_freq_sum: u64,
+        key_usage: Vec<f64>,
+        key_presses: f64,
+    }
+
+    /// SimpleEvaluator 的完整可比较状态快照。
+    ///
+    /// 涵盖 Property 2 列举的全部字段：各级桶成员 + freq_sum、current_simple_code、selected、
+    /// 级别聚合（covered_freq/equiv_weighted/equiv_freq_sum/key_usage/key_presses）、
+    /// all_assigned_flags、简码重码标量（count/freq/rate）、cached_simple_score；并额外比对
+    /// rollback 应一并还原的内部状态 last_full_codes 与 bucket_collision_contrib，以加强检测。
+    #[derive(Clone, PartialEq, Debug)]
+    struct SeSnap {
+        levels: Vec<LevelSnap>,
+        all_assigned_flags: Vec<bool>,
+        simple_collision_count: usize,
+        simple_collision_freq: u64,
+        simple_collision_rate: f64,
+        cached_simple_score: f64,
+        last_full_codes: Vec<usize>,
+        bucket_collision_contrib: Vec<(usize, u64)>,
+    }
+
+    /// 从 Evaluator 持有的 SimpleEvaluator 抽取完整状态快照。
+    fn snap(ev: &Evaluator) -> SeSnap {
+        let se = ev.simple_eval.as_ref().expect("simple_eval 应启用");
+        let levels = se
+            .levels
+            .iter()
+            .map(|lv| LevelSnap {
+                buckets: lv
+                    .buckets
+                    .iter()
+                    .map(|b| (b.members.clone(), b.freq_sum))
+                    .collect(),
+                current_simple_code: lv.current_simple_code.clone(),
+                selected: lv.selected.clone(),
+                covered_freq: lv.covered_freq,
+                equiv_weighted: lv.equiv_weighted,
+                equiv_freq_sum: lv.equiv_freq_sum,
+                key_usage: lv.key_usage.to_vec(),
+                key_presses: lv.key_presses,
+            })
+            .collect();
+        SeSnap {
+            levels,
+            all_assigned_flags: se.all_assigned_flags.clone(),
+            simple_collision_count: se.simple_collision_count,
+            simple_collision_freq: se.simple_collision_freq,
+            simple_collision_rate: se.simple_collision_rate,
+            cached_simple_score: se.cached_simple_score,
+            last_full_codes: se.last_full_codes.clone(),
+            bucket_collision_contrib: se.bucket_collision_contrib.clone(),
+        }
+    }
+
+    /// 施加一次完整移动（不提交）：复刻产线顺序 —— 先改写 assignment[r]，再对组内全码受影响字
+    /// 增量维护全码桶（update_char），最后走简码增量 + 快照路径（apply_simple_for_move）。
+    fn apply_move(ev: &mut Evaluator, ctx: &OptContext, assignment: &mut [u8], r: usize, new_key: u8) {
+        assignment[r] = new_key;
+        for idx in 0..ctx.group_to_chars[r].len() {
+            let ci = ctx.group_to_chars[r][idx];
+            ev.update_char(ctx, assignment, ci);
+        }
+        ev.apply_simple_for_move(ctx, assignment, &[r]);
+    }
+
+    /// 逆转一次移动（拒绝路径）：复刻产线拒绝顺序 —— 先逆转全码更新（恢复 assignment[r] = old_key
+    /// 并对组内字 update_char 回退），再回滚简码增量（rollback_simple）。
+    fn reject_move(ev: &mut Evaluator, ctx: &OptContext, assignment: &mut [u8], r: usize, old_key: u8) {
+        assignment[r] = old_key;
+        for idx in 0..ctx.group_to_chars[r].len() {
+            let ci = ctx.group_to_chars[r][idx];
+            ev.update_char(ctx, assignment, ci);
+        }
+        ev.rollback_simple();
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 2: 拒绝/回滚与未移动等价（round-trip）
+        //
+        // 对任意简码评估器状态与任意一次受影响移动，先执行 apply_move_incremental（经
+        // apply_simple_for_move）再执行 rollback（经 rollback_simple），所得简码评估器的全部状态
+        // （桶成员、freq_sum、各级聚合、current_simple_code、selected、all_assigned_flags、
+        // 简码重码数与重码率、cached_simple_score）应与移动前逐字段相等。
+        //
+        // 测试在「活动」评估器上推进一串移动：每步以随机布尔决定接受（apply + commit，推进 baseline）
+        // 或拒绝（apply + 逆转全码 + rollback，断言 round-trip 等价），从而在多样 baseline 下校验回滚。
+        // 覆盖边界：空交集移动（非候选字组，coverage<1.0）、改变选择的移动、并列裁决（小频率范围）。
+        // 参数化 frequency / efficiency 两种模式。
+        // Validates: Requirements 2.1, 2.2, 2.3, 3.1
+        #[test]
+        fn prop2_rollback_roundtrip(
+            // true => Frequency 模式；false => Efficiency 模式（参数化两种模式）
+            mode_is_freq in any::<bool>(),
+            // (freq, n_roots)：小频率范围制造并列；n_roots 1..=3 使 base_saving 跨级变化
+            specs in prop::collection::vec((1u64..6, 1usize..4), 3usize..9),
+            // 每级编码数 1..=3：覆盖 code_num 大于/小于桶成员数两种情形（含改变选择/并列）
+            code_num in 1usize..4,
+            // 覆盖率阈值 0.5..=1.0：< 1.0 时产生非候选字 → 触发空交集移动的回滚 no-op
+            coverage_pct in 50u32..=100,
+            // 随机移动序列（组索引, 新键位 ∈ {0,1}, 接受?）
+            moves in prop::collection::vec((0usize..64, 0u8..2, any::<bool>()), 0usize..40),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let ctx = make_ctx(&specs, mode, code_num, coverage_ratio);
+            let n_groups = ctx.num_groups;
+
+            let mut assignment = vec![0u8; n_groups];
+            let mut ev = Evaluator::new(&ctx, &assignment);
+            prop_assert!(ev.simple_eval.is_some(), "简码应启用");
+
+            for (k, &(gi, nk, accept)) in moves.iter().enumerate() {
+                let r = gi % n_groups;
+                let old_key = assignment[r];
+
+                if accept {
+                    // 接受：apply + commit，推进 baseline（无需 round-trip 断言）
+                    apply_move(&mut ev, &ctx, &mut assignment, r, nk);
+                    ev.commit_simple();
+                } else {
+                    // 拒绝：快照移动前完整状态 → apply（不提交）→ 逆转全码 + rollback → 断言等价
+                    let before = snap(&ev);
+                    apply_move(&mut ev, &ctx, &mut assignment, r, nk);
+                    reject_move(&mut ev, &ctx, &mut assignment, r, old_key);
+                    let after = snap(&ev);
+
+                    let label = format!(
+                        "step{} reject move(r={},nk={},old={}) mode={:?} code_num={} cov={}",
+                        k + 1, r, nk, old_key, mode, code_num, coverage_ratio
+                    );
+                    prop_assert_eq!(&before, &after, "{}: 回滚后简码状态与移动前不一致", label);
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 最佳解综合得分重算测试（simple-code-perf-optimization, Property 10）
+// =========================================================================
+#[cfg(test)]
+mod best_total_recompute_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 10: 最佳解综合得分按分量以当前权重重算
+        //
+        // 对任意最佳解分量 best_full_score、best_simple_score 与任意权重 weight_full、w_eff，
+        // Evaluator::best_total 应恰好等于 weight_full · best_full_score + w_eff · best_simple_score。
+        // 该重算只做两次乘法加一次加法，为 O(1)，不依赖任何评估器内部状态。
+        //
+        // Validates: Requirements 11.1, 11.2, 11.3, 16.5
+        #[test]
+        fn prop10_best_total_recompute(
+            best_full_score in -1.0e9f64..1.0e9f64,
+            best_simple_score in -1.0e9f64..1.0e9f64,
+            weight_full in -1.0e6f64..1.0e6f64,
+            w_eff in -1.0e6f64..1.0e6f64,
+        ) {
+            let got = Evaluator::best_total(weight_full, best_full_score, w_eff, best_simple_score);
+            let expected = weight_full * best_full_score + w_eff * best_simple_score;
+            // 函数内部执行的正是同样的两次乘法 + 一次加法，结果按位精确相等。
+            prop_assert_eq!(got, expected);
+        }
+    }
+}
+
+// =========================================================================
+// 任务 9.2 / Property 9: 激活前简码贡献为零属性测试
+//
+// 对任意分配（含任意一串合法全码移动），在以下两种「简码未参与综合得分」的情形下，
+// 综合得分 `get_score` 都应等于纯全码得分 `weight_full_code * compute_full_score`：
+//   (a) 简码已启用（enable_simple_code = true）但尚未激活（延迟激活早期探索阶段，
+//       p < simple_start_progress）：simple_active = false 且 current_simple_weight = 0；
+//   (b) 简码整体关闭（enable_simple_code = false）：Evaluator::new 直接置
+//       simple_active = false、current_simple_weight = 0，行为与「简码未启用」一致（需求 17.4）。
+// =========================================================================
+#[cfg(test)]
+mod pre_activation_zero_contribution_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建最小 OptContext，可参数化是否启用简码（`enable_simple`）。
+    ///
+    /// 结构与 `incremental_full_consistency_tests::make_ctx` 同构：`specs[i] = (freq, n_roots)`
+    /// 决定第 i 个汉字的字频与全码部件数；仅用 2 个允许键位（`[0, 1]`）制造同桶碰撞，
+    /// 使全码得分（compute_full_score）随分配/移动产生非平凡变化，从而该属性确有判别力。
+    fn make_ctx(
+        specs: &[(u64, usize)],
+        enable_simple: bool,
+        mode: SimpleAssignMode,
+        code_num: usize,
+        coverage_ratio: f64,
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq.max(1)));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: false,
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = enable_simple;
+        weights.simple_coverage_ratio = coverage_ratio;
+        weights.simple_assign_mode = mode;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 施加一次合法全码移动（仅维护全码桶；简码未参与，无需 apply_simple_for_move）：
+    /// 改写 `assignment[r]` 后对组内全码受影响字调用 `update_char`，并置 `score_dirty` 触发重算。
+    fn apply_full_move(ev: &mut Evaluator, ctx: &OptContext, assignment: &mut [u8], r: usize, new_key: u8) {
+        assignment[r] = new_key;
+        for idx in 0..ctx.group_to_chars[r].len() {
+            let ci = ctx.group_to_chars[r][idx];
+            ev.update_char(ctx, assignment, ci);
+        }
+        ev.score_dirty = true;
+        ev.full_score_dirty = true;
+    }
+
+    /// 断言：综合得分恰等于纯全码分量 `weight_full_code * compute_full_score`（简码贡献为 0）。
+    fn assert_zero_simple_contribution(
+        ev: &mut Evaluator,
+        ctx: &OptContext,
+        label: &str,
+    ) -> Result<(), TestCaseError> {
+        let total = ev.get_score(ctx);
+        let full_only = ctx.weights.weight_full_code * ev.compute_full_score(ctx);
+        let eps = 1e-9 * (1.0 + full_only.abs());
+        prop_assert!(
+            (total - full_only).abs() <= eps,
+            "{label}: 简码贡献应为 0：get_score={total} 应等于 weight_full_code*full_score={full_only}",
+        );
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 9: 激活前简码贡献为零
+        //
+        // 对任意进度 p < simple_start_progress（以 simple_active=false、current_simple_weight=0 表征）、
+        // 以及 weights.simple_code.enabled = false 的任意分配，简码分数 simple_score 对综合得分的
+        // 贡献应为 0，使综合得分等于纯全码得分 weight_full_code * full_score。
+        // 含两条路径：(a) 简码已启用但未激活；(b) enable_simple_code=false。
+        // Validates: Requirements 8.5, 10.2, 17.4
+        #[test]
+        fn prop9_pre_activation_zero_simple_contribution(
+            // (freq, n_roots)：小频率范围制造同桶碰撞，使全码得分非平凡
+            specs in prop::collection::vec((1u64..6, 1usize..4), 3usize..9),
+            mode_is_freq in any::<bool>(),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            // 随机合法全码移动序列（组索引, 新键位 ∈ {0,1}）
+            moves in prop::collection::vec((0usize..64, 0u8..2), 0usize..30),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+
+            // ---- 路径 (a)：简码已启用但「未激活」（延迟激活早期阶段，需求 8.5/10.2）----
+            {
+                let ctx = make_ctx(&specs, true, mode, code_num, coverage_ratio);
+                let n_groups = ctx.num_groups;
+                let mut assignment = vec![0u8; n_groups];
+                let mut ev = Evaluator::new(&ctx, &assignment);
+                // 启用简码时 new 会急切构建并置 simple_active=true；这里手动回退到「未激活」状态，
+                // 模拟退火延迟激活的早期探索阶段：simple_active=false 且 current_simple_weight=0。
+                prop_assert!(ev.simple_eval.is_some(), "启用简码时 simple_eval 应存在");
+                ev.simple_active = false;
+                ev.current_simple_weight = 0.0;
+                ev.score_dirty = true;
+                ev.full_score_dirty = true;
+
+                assert_zero_simple_contribution(&mut ev, &ctx, "(a)启用未激活 step0")?;
+
+                for (k, &(gi, nk)) in moves.iter().enumerate() {
+                    let r = gi % n_groups;
+                    apply_full_move(&mut ev, &ctx, &mut assignment, r, nk);
+                    // 移动期间务必保持「未激活」状态（不调用 activate_simple）
+                    prop_assert!(!ev.simple_active, "(a) 全程应保持未激活");
+                    let label = format!("(a)启用未激活 step{}", k + 1);
+                    assert_zero_simple_contribution(&mut ev, &ctx, &label)?;
+                }
+            }
+
+            // ---- 路径 (b)：简码整体关闭（enable_simple_code=false，需求 17.4）----
+            {
+                let ctx = make_ctx(&specs, false, mode, code_num, coverage_ratio);
+                let n_groups = ctx.num_groups;
+                let mut assignment = vec![0u8; n_groups];
+                let mut ev = Evaluator::new(&ctx, &assignment);
+                // 简码关闭时 new 应置 simple_active=false、current_simple_weight=0，且无简码评估器。
+                prop_assert!(ev.simple_eval.is_none(), "关闭简码时 simple_eval 应为 None");
+                prop_assert!(!ev.simple_active, "关闭简码时 simple_active 应为 false");
+                prop_assert_eq!(ev.current_simple_weight, 0.0, "关闭简码时 current_simple_weight 应为 0");
+
+                assert_zero_simple_contribution(&mut ev, &ctx, "(b)关闭 step0")?;
+
+                for (k, &(gi, nk)) in moves.iter().enumerate() {
+                    let r = gi % n_groups;
+                    apply_full_move(&mut ev, &ctx, &mut assignment, r, nk);
+                    let label = format!("(b)关闭 step{}", k + 1);
+                    assert_zero_simple_contribution(&mut ev, &ctx, &label)?;
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 热路径防回归测试（simple-code-perf-optimization, hot-path regression guard）
+//
+// 目标：守护本特性「简码评估增量化」的核心性能成果不被悄悄回退——一旦有人把生产热路径
+// try_move / try_swap 改回（直接或间接）调用全量重建（Evaluator::rebuild_simple /
+// SimpleEvaluator::full_rebuild），下面的断言立即失败。
+//
+// 手段：在 SimpleEvaluator::full_rebuild 与 Evaluator::rebuild_simple 入口处维护仅用于观测
+// 的调用计数器 full_rebuild_calls（增量路径 apply_simple_for_move / commit / rollback 不触碰）。
+// 激活简码后记录基线，跑一批 try_move / try_swap（覆盖「接受」与「拒绝」两分支），断言该计数
+// 相对基线零增长。
+// =========================================================================
+#[cfg(test)]
+mod hot_path_no_full_rebuild_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use rand::thread_rng;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、含 3 个级别、参数化分配模式 / 每级编码数 / 候选覆盖率的最小 OptContext。
+    ///
+    /// 与增量一致性测试同构：`specs[i] = (freq, n_roots)`，每个字根独立成组，仅 2 个允许键位
+    /// `[0, 1]`，从而在多候选字下制造同桶碰撞并让全码桶在移动时频繁变化（既覆盖出简选择变化，
+    /// 又覆盖简码重码增量）。
+    fn make_ctx(
+        specs: &[(u64, usize)],
+        mode: SimpleAssignMode,
+        code_num: usize,
+        coverage_ratio: f64,
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq.max(1)));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: false,
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: false,
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = coverage_ratio;
+        weights.simple_assign_mode = mode;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 复刻产线延迟激活：`Evaluator::new` 会急切构建并置 `simple_active=true`，这里显式回退为
+    /// 未激活，再通过 `activate_simple` 重新打开，使「激活后」的语义与退火主循环一致。
+    fn new_activated(ctx: &OptContext, assignment: &[u8]) -> Evaluator {
+        let mut ev = Evaluator::new(ctx, assignment);
+        ev.simple_active = false;
+        ev.current_simple_weight = 0.0;
+        ev.score_dirty = true;
+        ev.activate_simple(ctx, assignment);
+        ev
+    }
+
+    // -------------------------------------------------------------------------
+    // 确定性断言：分别强制「接受」与「拒绝」两个分支，证明两条路径都不触发全量重建。
+    // -------------------------------------------------------------------------
+
+    // Feature: simple-code-perf-optimization, hot-path regression guard: 激活后 try_move/try_swap 不触发全量重建
+    #[test]
+    fn accept_branch_does_not_trigger_full_rebuild() {
+        // 覆盖率 1.0 ⟹ 全部为候选字，保证移动确有简码影响（needs_simple=true）。
+        let ctx = make_ctx(
+            &[(1000, 2), (800, 2), (600, 1), (5, 1)],
+            SimpleAssignMode::Efficiency,
+            2,
+            1.0,
+        );
+        let n_groups = ctx.num_groups;
+        let mut assignment = vec![0u8; n_groups];
+        let mut ev = new_activated(&ctx, &assignment);
+        assert!(ev.simple_eval.is_some() && ev.simple_active, "简码应已激活");
+
+        let baseline = ev.full_rebuild_calls();
+        let mut rng = thread_rng();
+
+        // 找一个确有简码影响的组，从键 0 移到键 1。
+        // temp = +∞ ⟹ exp(-delta/temp) = 1.0 > rng.gen()∈[0,1)，与 rng 无关地必然接受。
+        let r = (0..n_groups)
+            .find(|&g| ev.has_simple_impact(&ctx, g))
+            .expect("应存在受简码影响的组");
+        assert!(ev.has_simple_impact(&ctx, r), "该组移动应触发简码增量路径");
+
+        let accepted = ev.try_move(&ctx, &mut assignment, r, 1, f64::INFINITY, &mut rng);
+        assert!(accepted, "temp=+∞ 时应必然接受（覆盖 commit 分支）");
+        assert_eq!(
+            ev.full_rebuild_calls(),
+            baseline,
+            "接受分支（commit）期间全量重建计数不得增长"
+        );
+
+        // 再叠加一次 try_swap（两组键位不同方可交换），同样必然接受。
+        let r2 = (0..n_groups).find(|&g| g != r).expect("至少两组");
+        // 确保 r、r2 当前键位不同：r 已被移到 1，找一个仍在 0 的组。
+        if let Some(rz) = (0..n_groups).find(|&g| assignment[g] == 0) {
+            if rz != r && assignment[r] != assignment[rz] {
+                let swapped = ev.try_swap(&ctx, &mut assignment, r, rz, f64::INFINITY, &mut rng);
+                assert!(swapped, "temp=+∞ 时 try_swap 应必然接受");
+            }
+        }
+        let _ = r2;
+        assert_eq!(
+            ev.full_rebuild_calls(),
+            baseline,
+            "try_swap 接受分支期间全量重建计数不得增长"
+        );
+    }
+
+    // Feature: simple-code-perf-optimization, hot-path regression guard: 激活后 try_move/try_swap 不触发全量重建
+    #[test]
+    fn reject_branch_does_not_trigger_full_rebuild() {
+        // 单字根字（n_roots=1）⟹ 全码 = 单键，便于构造「移动制造重码」的确定性恶化移动。
+        // 频率极端（10万级 vs 1）⟹ 重码频率项主导得分，移动后 delta 必为正。
+        let ctx = make_ctx(
+            &[(100_000, 1), (100_000, 1), (1, 1)],
+            SimpleAssignMode::Efficiency,
+            2,
+            1.0,
+        );
+        let n_groups = ctx.num_groups;
+        assert_eq!(n_groups, 3, "每字单根 ⟹ 3 组");
+
+        // 低重码起点：组0→键0（独占），组1、组2→键1。
+        let mut assignment = vec![0u8, 1u8, 1u8];
+        let mut ev = new_activated(&ctx, &assignment);
+        assert!(ev.simple_eval.is_some() && ev.simple_active, "简码应已激活");
+        assert!(ev.has_simple_impact(&ctx, 0), "组0移动应触发简码增量路径");
+
+        let baseline = ev.full_rebuild_calls();
+        let mut rng = thread_rng();
+
+        // 把组0 从键0 移到键1 ⟹ 三字同键，重码频率从 1 暴涨到 100001，delta>0。
+        // temp = f64::MIN_POSITIVE ⟹ exp(-delta/temp) = 0.0，rng.gen()∈[0,1) 不可能 < 0 ⟹ 必然拒绝。
+        let rejected = !ev.try_move(&ctx, &mut assignment, 0, 1, f64::MIN_POSITIVE, &mut rng);
+        assert!(rejected, "恶化移动 + 极小温度应必然拒绝（覆盖 rollback 分支）");
+        // 拒绝后 assignment 应已被还原。
+        assert_eq!(assignment, vec![0u8, 1u8, 1u8], "拒绝后分配应回滚");
+        assert_eq!(
+            ev.full_rebuild_calls(),
+            baseline,
+            "拒绝分支（rollback）期间全量重建计数不得增长"
+        );
+
+        // try_swap 的拒绝分支：交换组0(键0)与组2(键1) ⟹ 组0(高频)与组1(高频)同键，重码暴涨，必然拒绝。
+        let swap_rejected =
+            !ev.try_swap(&ctx, &mut assignment, 0, 2, f64::MIN_POSITIVE, &mut rng);
+        assert!(swap_rejected, "恶化交换 + 极小温度应必然拒绝");
+        assert_eq!(assignment, vec![0u8, 1u8, 1u8], "拒绝后分配应回滚");
+        assert_eq!(
+            ev.full_rebuild_calls(),
+            baseline,
+            "try_swap 拒绝分支期间全量重建计数不得增长"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // 属性测试：对随机分配 / 模式 / 覆盖率 / 移动与交换序列（混合温度同时覆盖接受与拒绝），
+    // 断言「激活后整批热路径调用期间全量重建计数零增长」。≥100 次迭代。
+    // -------------------------------------------------------------------------
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, hot-path regression guard: 激活后 try_move/try_swap 不触发全量重建
+        #[test]
+        fn prop_hot_path_zero_full_rebuild(
+            mode_is_freq in any::<bool>(),
+            specs in prop::collection::vec((1u64..6, 1usize..4), 3usize..9),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            // 每个操作：(组索引种子, 第二组索引种子, 新键位, 是否交换, 是否高温)
+            ops in prop::collection::vec((0usize..64, 0usize..64, 0u8..2, any::<bool>(), any::<bool>()), 1usize..40),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let ctx = make_ctx(&specs, mode, code_num, coverage_ratio);
+            let n_groups = ctx.num_groups;
+
+            let mut assignment = vec![0u8; n_groups];
+            let mut ev = new_activated(&ctx, &assignment);
+            prop_assert!(ev.simple_eval.is_some() && ev.simple_active, "激活后简码应启用");
+
+            let baseline = ev.full_rebuild_calls();
+            let mut rng = thread_rng();
+
+            let mut accepted = 0usize;
+            let mut rejected = 0usize;
+
+            for &(g1, g2, nk, is_swap, hot) in ops.iter() {
+                // 高温 +∞ ⟹ 必然接受（覆盖 commit）；极小温度 ⟹ 恶化移动必然拒绝（覆盖 rollback）。
+                let temp = if hot { f64::INFINITY } else { f64::MIN_POSITIVE };
+                let r1 = g1 % n_groups;
+                let did = if is_swap {
+                    let r2 = g2 % n_groups;
+                    if r1 != r2 && assignment[r1] != assignment[r2] {
+                        ev.try_swap(&ctx, &mut assignment, r1, r2, temp, &mut rng)
+                    } else {
+                        false
+                    }
+                } else {
+                    ev.try_move(&ctx, &mut assignment, r1, nk, temp, &mut rng)
+                };
+                if did { accepted += 1; } else { rejected += 1; }
+
+                // 核心防回归断言：无论接受还是拒绝，热路径都不得触发任何全量重建。
+                prop_assert_eq!(
+                    ev.full_rebuild_calls(),
+                    baseline,
+                    "热路径调用后全量重建计数发生增长（应零增长）"
+                );
+            }
+
+            // 计数器仅作内部一致性观测（不强制两分支同时出现，由确定性测试保证分支覆盖）。
+            prop_assert_eq!(accepted + rejected, ops.len());
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 空格上屏与长度约束属性测试（simple-code-perf-optimization, Property 16 / 20）
+// =========================================================================
+#[cfg(test)]
+mod space_commit_and_length_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE, KEY_SPACE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、含 3 个级别（步数分别为 1/2/3）的最小 OptContext，可按级别指定
+    /// `space_commit`。`specs[i] = (freq, n_roots)`：第 i 个汉字含 `n_roots` 个互不相同
+    /// 的字根（各自独立成组），故该字全码部件数 == `n_roots`。
+    ///
+    /// 等量表设为全 1：使简码当量有解析闭式——步数为 `n` 的级别，无空格上屏时当量为
+    /// `(n-1)/n`，有空格上屏时为 `n/n = 1`（含末位键到 KEY_SPACE 的 +1 转移）。
+    fn make_ctx_space(specs: &[(u64, usize)], space: [bool; 3]) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1, 2],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num: 1,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: space[0],
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num: 1,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: space[1],
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num: 1,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: space[2],
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[1.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0; // 全部字纳入候选
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 构建单级（步数 1，规则 [A.a]）、每字含 3 个独立字根（full_len=3）的 OptContext，
+    /// 可指定该级 space_commit。code_space = code_base^3（约 3.3 万）保持可控，适合构建
+    /// SimpleEvaluator 验证分布口径。
+    fn make_ctx_single_step1(freqs: &[u64], space_commit: bool) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(freqs.len());
+        for (i, &freq) in freqs.iter().enumerate() {
+            let mut roots: Vec<String> = Vec::with_capacity(3);
+            for j in 0..3usize {
+                let root = format!("s{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1, 2],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![SimpleCodeLevel {
+            level: 1,
+            code_num: 1,
+            rule_candidates: vec![vec![step('A')]],
+            space_commit,
+        }];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[1.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        // 用 Frequency 模式：桶内排序键 = freq，与 base_saving 无关，使 space true/false 两侧
+        // 出简选择集合一致，从而隔离「尾随空格对分布的影响」这一被测口径（需求 20.7/20.8）。
+        weights.simple_assign_mode = SimpleAssignMode::Frequency;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 构建 SimpleEvaluator 所需的 full_code_to_chars 与 is_first_candidate（与
+    /// `save_simple_code_output` / `Evaluator::new` 同口径）。
+    fn build_simple_eval(ctx: &OptContext, asg: &[u8]) -> SimpleEvaluator {
+        let n = ctx.char_infos.len();
+        let cs = ctx.code_space;
+        let mut full_code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
+        for ci in 0..n {
+            full_code_to_chars[ctx.calc_code_only(ci, asg)].push(ci);
+        }
+        let mut is_first = vec![false; n];
+        for chars in full_code_to_chars.iter() {
+            if chars.is_empty() {
+                continue;
+            }
+            let mut max_f = 0u64;
+            let mut first = usize::MAX;
+            for &ci in chars {
+                let f = ctx.char_infos[ci].frequency;
+                if f > max_f || (f == max_f && ci < first) {
+                    max_f = f;
+                    first = ci;
+                }
+            }
+            is_first[first] = true;
+        }
+        SimpleEvaluator::new(ctx, asg, &full_code_to_chars, &is_first)
+    }
+
+    /// 该级指令步数（None 计 0）。
+    fn step_count(ctx: &OptContext, ci: usize, li: usize) -> usize {
+        ctx.char_simple_infos[ci]
+            .level_instructions
+            .get(li)
+            .and_then(|o| o.as_ref())
+            .map_or(0, |v| v.len())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 16: 空格上屏的 base_saving 与当量/分布口径
+        //
+        // 对任意候选字 ci 与简码级别 li：当该级 space_commit 为真时，simple_base_saving[ci][li]
+        // 应等于 full_len - (simple_len + 1)，且该字出简对当量计入末位键到 KEY_SPACE 的转移、
+        // 对分布计入一次 KEY_SPACE 键（key_usage 与 key_presses 各 +1）；当 space_commit 为假时
+        // base_saving 应等于 full_len - simple_len，且当量与分布均不含尾随空格项。
+        // 其中 full_len = char_infos[ci].parts.len()，simple_len 为该级指令步数。
+        #[test]
+        fn prop16_space_commit_base_saving_equiv_dist(
+            // n_roots ∈ 4..=6 使三级（步数 1/2/3）的 base_saving / 当量口径覆盖多步指令。
+            // 注意：(A)(B) 仅用 base_saving 与 calc_simple_equiv，无需构建 SimpleEvaluator，
+            // 故不触发 code_space 大小的分配，可放心取较大 n_roots。
+            specs in prop::collection::vec((1u64..=200, 4usize..=6), 1..=6),
+        ) {
+            let ctx_f = make_ctx_space(&specs, [false, false, false]);
+            let ctx_t = make_ctx_space(&specs, [true, true, true]);
+            let n_chars = ctx_f.char_infos.len();
+            let n_levels = ctx_f.simple_config.levels.len();
+            let asg = vec![0u8; ctx_f.num_groups];
+
+            // (A) base_saving 口径
+            for ci in 0..n_chars {
+                let full_len = ctx_f.char_infos[ci].parts.len() as i64;
+                for li in 0..n_levels {
+                    let sc = step_count(&ctx_f, ci, li) as i64;
+                    prop_assert_eq!(ctx_f.simple_base_saving[ci][li], full_len - sc,
+                        "space_commit=false: base_saving 应为 full_len - simple_len");
+                    prop_assert_eq!(ctx_t.simple_base_saving[ci][li], full_len - (sc + 1),
+                        "space_commit=true: base_saving 应为 full_len - (simple_len + 1)");
+                }
+            }
+
+            // (B) 当量口径：全 1 等量表 ⟹ 步数 n 的级别，false=(n-1)/n，true=n/n=1
+            for ci in 0..n_chars {
+                for li in 0..n_levels {
+                    let n = step_count(&ctx_f, ci, li);
+                    if n == 0 { continue; }
+                    let eq_f = ctx_f.calc_simple_equiv(ci, li, &asg);
+                    let eq_t = ctx_t.calc_simple_equiv(ci, li, &asg);
+                    let exp_f = (n as f64 - 1.0) / n as f64;
+                    let exp_t = 1.0;
+                    prop_assert!((eq_f - exp_f).abs() < 1e-9,
+                        "space=false 当量应为 (n-1)/n: got {} expect {}", eq_f, exp_f);
+                    prop_assert!((eq_t - exp_t).abs() < 1e-9,
+                        "space=true 当量应为 1.0（含尾随空格转移）: got {}", eq_t);
+                    // 差额恰为一个「末位键→KEY_SPACE」转移除以 n（此处等量表为 1）
+                    prop_assert!((eq_t - eq_f - 1.0 / n as f64).abs() < 1e-9);
+                }
+            }
+
+            // (C) 分布口径：用小 code_space 的单级上下文（n_roots=3、步数 1）构建 SimpleEvaluator，
+            // 比较 true/false 的 key_usage[KEY_SPACE] 与 key_presses。单级 n_roots=3 使 code_space
+            // = code_base^3（约 3.3 万）保持可控，避免 build_simple_eval 的大分配。
+            let dfreqs: Vec<u64> = specs.iter().map(|&(f, _)| f).collect();
+            let ctx_fd = make_ctx_single_step1(&dfreqs, false);
+            let ctx_td = make_ctx_single_step1(&dfreqs, true);
+            let dn = ctx_fd.char_infos.len();
+            let asgd = vec![0u8; ctx_fd.num_groups];
+            let se_f = build_simple_eval(&ctx_fd, &asgd);
+            let se_t = build_simple_eval(&ctx_td, &asgd);
+
+            // 单级（li=0）：false 不含尾随空格键；选中字 true 侧各计一次 KEY_SPACE。
+            prop_assert_eq!(se_f.levels[0].key_usage[KEY_SPACE], 0.0,
+                "space=false 不应计入 KEY_SPACE 用键");
+
+            let mut sel_freq_sum = 0.0f64;
+            for ci in 0..dn {
+                // 长度资格在 n_roots=3、步数 1 下 true/false 均满足 ⟹ 出简选择一致
+                prop_assert_eq!(se_f.levels[0].selected[ci], se_t.levels[0].selected[ci],
+                    "true/false 出简选择应一致 (ci={})", ci);
+                if se_t.levels[0].selected[ci] {
+                    sel_freq_sum += ctx_fd.char_infos[ci].frequency as f64;
+                }
+            }
+
+            prop_assert!((se_t.levels[0].key_usage[KEY_SPACE] - sel_freq_sum).abs() < 1e-6,
+                "space=true KEY_SPACE 用键应等于选中字字频和: got {} expect {}",
+                se_t.levels[0].key_usage[KEY_SPACE], sel_freq_sum);
+
+            for k in 0..EQUIV_TABLE_SIZE {
+                if k == KEY_SPACE { continue; }
+                prop_assert!((se_f.levels[0].key_usage[k] - se_t.levels[0].key_usage[k]).abs() < 1e-6,
+                    "非空格键用键应一致 (k={})", k);
+            }
+
+            let diff = se_t.levels[0].key_presses - se_f.levels[0].key_presses;
+            prop_assert!((diff - sel_freq_sum).abs() < 1e-6,
+                "space=true key_presses 应比 false 多选中字字频和: diff {} expect {}",
+                diff, sel_freq_sum);
+        }
+
+        // Feature: simple-code-perf-optimization, Property 20: 简码长度严格短于全码
+        //
+        // 对任意候选字 ci 与级别 li，该字在该级出简（进入简码桶且 current_simple_code[ci] != -1）
+        // 当且仅当其有效简码长度 effective_simple_len(li) = 指令步数 + (space_commit ? 1 : 0)
+        // 严格小于全码长度 full_len(ci) = char_infos[ci].parts.len()。任何被分配（含退火分配）
+        // 的简码，其有效长度都严格小于对应字的全码长度。
+        #[test]
+        fn prop20_simple_len_strictly_shorter_than_full(
+            // n_roots ∈ 1..=3 覆盖「合格」与「不合格（含 None 级别与 effective>=full）」两种分支，
+            // 同时把 code_space 控制在 code_base^3（约 3.3 万），避免 build_simple_eval 大分配。
+            specs in prop::collection::vec((1u64..=200, 1usize..=3), 1..=6),
+            space in prop::collection::vec(any::<bool>(), 3),
+        ) {
+            let sp = [space[0], space[1], space[2]];
+            let ctx = make_ctx_space(&specs, sp);
+            let n_chars = ctx.char_infos.len();
+            let n_levels = ctx.simple_config.levels.len();
+            let asg = vec![0u8; ctx.num_groups];
+
+            // (A) 资格谓词与重算一致：eligible ⟺ (step>0 && step + space < full_len)
+            for ci in 0..n_chars {
+                let full_len = ctx.char_infos[ci].parts.len();
+                for li in 0..n_levels {
+                    let sc = step_count(&ctx, ci, li);
+                    let space_bit = if sp[li] { 1 } else { 0 };
+                    let effective = sc + space_bit;
+                    let expected = sc > 0 && effective < full_len;
+                    prop_assert_eq!(ctx.simple_is_eligible(ci, li), expected,
+                        "eligibility 谓词与重算不一致 (ci={}, li={}, sc={}, space={}, full={})",
+                        ci, li, sc, space_bit, full_len);
+                }
+            }
+
+            // (B) 进入简码桶 / 出简的字其有效长度必严格短于全码
+            let se = build_simple_eval(&ctx, &asg);
+            for li in 0..n_levels {
+                for ci in 0..n_chars {
+                    let full_len = ctx.char_infos[ci].parts.len();
+                    let sc = step_count(&ctx, ci, li);
+                    let effective = sc + if sp[li] { 1 } else { 0 };
+
+                    // 进入简码桶（current_simple_code != -1）⟹ 合格 ⟹ 有效长度 < 全码
+                    if se.levels[li].current_simple_code[ci] != -1 {
+                        prop_assert!(ctx.simple_is_eligible(ci, li),
+                            "入桶字必合格 (ci={}, li={})", ci, li);
+                        prop_assert!(effective < full_len,
+                            "入桶字有效长度 {} 应 < 全码 {} (ci={}, li={})", effective, full_len, ci, li);
+                    }
+                    // 被实际出简（selected）⟹ 有效长度 < 全码
+                    if se.levels[li].selected[ci] {
+                        prop_assert!(effective < full_len,
+                            "出简字有效长度 {} 应 < 全码 {} (ci={}, li={})", effective, full_len, ci, li);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 固定简码测试（simple-code-perf-optimization, Property 18 / 19 + 任务 15.1 校验 + 17.1 回归）
+// =========================================================================
+#[cfg(test)]
+mod fixed_simple_code_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        key_to_char, KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig,
+        SimpleCodeLevel, SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、含 3 个级别、参数化分配模式 / 每级编码数 / 候选覆盖率 / 各级 space_commit /
+    /// 固定简码映射的 OptContext。
+    ///
+    /// `specs[i] = (freq, n_roots)`：第 i 个汉字含 `n_roots` 个互不相同字根（各自独立成组），
+    /// 故全码部件数 == `n_roots`。仅用 2 个允许键位 `[0, 1]`，使级别 0 桶容量为 2、级别 1 为 4、
+    /// 级别 2 为 8，制造同桶碰撞与「桶成员数 > code_num」选取，并令固定简码（键位 0/1）与优化字
+    /// 争用同一桶空间，从而真正考验占用名额扣减（需求 21.7）。
+    fn make_ctx_fixed(
+        specs: &[(u64, usize)],
+        mode: SimpleAssignMode,
+        code_num: usize,
+        coverage_ratio: f64,
+        space: [bool; 3],
+        fixed: &[(char, String)],
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq.max(1)));
+        }
+
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel {
+                level: 1,
+                code_num,
+                rule_candidates: vec![vec![step('A')]],
+                space_commit: space[0],
+            },
+            SimpleCodeLevel {
+                level: 2,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B')]],
+                space_commit: space[1],
+            },
+            SimpleCodeLevel {
+                level: 3,
+                code_num,
+                rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
+                space_commit: space[2],
+            },
+        ];
+
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = coverage_ratio;
+        weights.simple_assign_mode = mode;
+        OptContext::new_with_fixed(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+            fixed,
+        )
+    }
+
+    /// 把 (字索引, 键位) 列表去重为「按字索引去重、键位映射为单字符级别 0 固定简码」。
+    /// 返回 (char, code_str) 列表（如 (0x4e00, "a")）。所有项均为级别 0（1 键，无空格上屏），
+    /// 当对应字 `n_roots >= 2` 时有效长度 1 < 全码长度，故必被接受。
+    fn build_level0_fixed(raw: &[(u8, u8)], n: usize) -> Vec<(char, String)> {
+        let mut seen: Vec<usize> = Vec::new();
+        let mut out: Vec<(char, String)> = Vec::new();
+        for &(idx, key) in raw {
+            let ci = (idx as usize) % n;
+            if seen.contains(&ci) {
+                continue;
+            }
+            seen.push(ci);
+            let k = key % 2; // 仅用允许键位 {0,1}
+            let ch = char::from_u32(0x4e00 + ci as u32).unwrap();
+            out.push((ch, key_to_char(k).to_string()));
+        }
+        out
+    }
+
+    // ---------------------------------------------------------------------
+    // Property 18: 固定简码与候选字集合解耦且占用名额
+    // ---------------------------------------------------------------------
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 18: 固定简码与候选字集合解耦且占用名额
+        //
+        // 对任意字频分布、覆盖率阈值与固定简码映射，候选字集合的「按覆盖率选取」结果应与无固定
+        // 简码时完全一致；剔除步骤后，候选字集合恰为「该覆盖率前缀」去掉固定简码字；且对任意级别
+        // li 与桶编码 code，该桶经退火分配的出简数不超过 code_num - simple_fixed_occupancy[li][code]，
+        // 「固定占用 + 优化分配」不超过 code_num（含跨移动序列）。
+        // Validates: Requirements 21.3, 21.4, 21.7
+        #[test]
+        fn prop18_fixed_decoupled_and_occupancy(
+            mode_is_freq in any::<bool>(),
+            // n_roots >= 2，保证级别 0 单键固定简码（有效长 1）严格短于全码
+            specs in prop::collection::vec((1u64..6, 2usize..4), 3usize..9),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            fixed_raw in prop::collection::vec((0u8..8, 0u8..2), 0usize..5),
+            moves in prop::collection::vec((0usize..64, 0u8..2), 0usize..24),
+        ) {
+            let mode = if mode_is_freq { SimpleAssignMode::Frequency } else { SimpleAssignMode::Efficiency };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let n = specs.len();
+            let fixed = build_level0_fixed(&fixed_raw, n);
+
+            // 基线：无固定简码
+            let ctx_base = make_ctx_fixed(&specs, mode, code_num, coverage_ratio, [false; 3], &[]);
+            // 含固定简码
+            let ctx = make_ctx_fixed(&specs, mode, code_num, coverage_ratio, [false; 3], &fixed);
+
+            // (A) 候选选取与无固定简码一致；剔除步骤后 == 前缀去掉固定字（需求 21.3/21.4）
+            let expected: Vec<usize> = ctx_base
+                .simple_candidate_chars
+                .iter()
+                .copied()
+                .filter(|&ci| !ctx.simple_fixed_assigned[ci])
+                .collect();
+            prop_assert_eq!(&ctx.simple_candidate_chars, &expected,
+                "剔除固定字后候选集应等于无固定简码前缀去掉固定字");
+            // 覆盖率（按全集前缀计）不受固定简码影响
+            prop_assert_eq!(ctx.simple_actual_coverage, ctx_base.simple_actual_coverage,
+                "覆盖率应与无固定简码时一致");
+            // 固定字一律不在候选集
+            for fc in &ctx.simple_fixed_codes {
+                prop_assert!(!ctx.simple_is_candidate[fc.ci], "固定字不应在候选集");
+            }
+
+            // (B) 占用名额约束（初始 + 跨移动序列）
+            let mut assignment = vec![0u8; ctx.num_groups];
+            let mut ev = Evaluator::new(&ctx, &assignment);
+            check_occupancy_bound(&ctx, &ev)?;
+            for &(gi, nk) in &moves {
+                let r = gi % ctx.num_groups;
+                assignment[r] = nk;
+                for idx in 0..ctx.group_to_chars[r].len() {
+                    let ci = ctx.group_to_chars[r][idx];
+                    ev.update_char(&ctx, &assignment, ci);
+                }
+                ev.apply_simple_for_move(&ctx, &assignment, &[r]);
+                ev.commit_simple();
+                check_occupancy_bound(&ctx, &ev)?;
+            }
+        }
+    }
+
+    /// 断言：对每个级别每个桶，优化出简数 ≤ code_num - 占用数，且 占用 + 优化 ≤ code_num。
+    fn check_occupancy_bound(ctx: &OptContext, ev: &Evaluator) -> Result<(), TestCaseError> {
+        let se = ev.simple_eval.as_ref().expect("simple_eval");
+        for li in 0..se.levels.len() {
+            let cn = se.levels[li].code_num;
+            let lvl = &se.levels[li];
+            for code in 0..lvl.buckets.len() {
+                let occ = ctx.simple_fixed_occ(li, code);
+                let sel_count = lvl.buckets[code]
+                    .members
+                    .iter()
+                    .filter(|&&ci| lvl.selected[ci])
+                    .count();
+                prop_assert!(sel_count <= cn.saturating_sub(occ),
+                    "级别 {} 桶 {} 优化出简数 {} 超过可选名额 {}", li, code, sel_count, cn.saturating_sub(occ));
+                prop_assert!(sel_count + occ <= cn,
+                    "级别 {} 桶 {} 固定占用 {} + 优化 {} 超过 code_num {}", li, code, occ, sel_count, cn);
+            }
+        }
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------------
+    // Property 19: 固定简码的恒定出简贡献
+    // ---------------------------------------------------------------------
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 19: 固定简码的恒定出简贡献
+        //
+        // 对任意分配与任意一串移动序列，固定简码字的 all_assigned_flags 恒为真（始终从全码桶的
+        // 简码重码统计中排除）；且固定简码对简码覆盖率、加权当量、分布偏差的贡献为不随分配变化
+        // 的常量。固定简码的级别归属须与其结尾下划线（与该级 space_commit）及长度约束一致。
+        // Validates: Requirements 21.5, 21.6, 21.8, 21.9
+        #[test]
+        fn prop19_fixed_constant_contribution(
+            mode_is_freq in any::<bool>(),
+            specs in prop::collection::vec((1u64..6, 2usize..4), 3usize..9),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            fixed_raw in prop::collection::vec((0u8..8, 0u8..2), 1usize..5),
+            moves in prop::collection::vec((0usize..64, 0u8..2), 0usize..24),
+        ) {
+            let mode = if mode_is_freq { SimpleAssignMode::Frequency } else { SimpleAssignMode::Efficiency };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let n = specs.len();
+            let fixed = build_level0_fixed(&fixed_raw, n);
+            let ctx = make_ctx_fixed(&specs, mode, code_num, coverage_ratio, [false; 3], &fixed);
+
+            // 固定字常量贡献（级别 0、单键、无空格、equiv_table 全零）：
+            //   fixed_covered_freq = Σ freq；fixed_equiv_weighted = 0；fixed_key_presses = Σ freq×1
+            let mut exp_cov = 0u64;
+            let mut exp_presses = 0.0f64;
+            for fc in &ctx.simple_fixed_codes {
+                // 级别归属正确：码长（核心键位数）== 该级简码键位数（此处级别 0 → 1 键）
+                prop_assert_eq!(fc.li, 0, "级别 0 单键固定简码应归属级别 0");
+                prop_assert_eq!(fc.space_commit, false, "级别 0 space_commit 为 false");
+                prop_assert_eq!(fc.keys.len(), 1, "核心码长应为 1");
+                let f = ctx.char_infos[fc.ci].frequency;
+                exp_cov += f;
+                exp_presses += f as f64;
+            }
+            prop_assert_eq!(ctx.fixed_covered_freq, exp_cov, "fixed_covered_freq 不一致");
+            prop_assert_eq!(ctx.fixed_equiv_freq_sum, exp_cov, "fixed_equiv_freq_sum 不一致");
+            prop_assert!(ctx.fixed_equiv_weighted.abs() < 1e-12, "equiv_table 全零时 fixed_equiv_weighted 应为 0");
+            prop_assert!((ctx.fixed_key_presses - exp_presses).abs() < 1e-9, "fixed_key_presses 不一致");
+
+            let mut assignment = vec![0u8; ctx.num_groups];
+            let mut ev = Evaluator::new(&ctx, &assignment);
+
+            // 跨移动序列：固定字 all_assigned 恒真、绝不出现在任何桶 / 任何级别 selected。
+            let check_invariant = |ev: &Evaluator| -> Result<(), TestCaseError> {
+                let se = ev.simple_eval.as_ref().expect("simple_eval");
+                for fc in &ctx.simple_fixed_codes {
+                    prop_assert!(se.all_assigned_flags[fc.ci],
+                        "固定字 ci={} 的 all_assigned_flags 应恒为真", fc.ci);
+                    for li in 0..se.levels.len() {
+                        prop_assert!(!se.levels[li].selected[fc.ci],
+                            "固定字 ci={} 不应被任何级别 selected", fc.ci);
+                        prop_assert_eq!(se.levels[li].current_simple_code[fc.ci], -1,
+                            "固定字 ci={} 不应进入任何简码桶", fc.ci);
+                    }
+                }
+                Ok(())
+            };
+            check_invariant(&ev)?;
+            for &(gi, nk) in &moves {
+                let r = gi % ctx.num_groups;
+                assignment[r] = nk;
+                for idx in 0..ctx.group_to_chars[r].len() {
+                    let ci = ctx.group_to_chars[r][idx];
+                    ev.update_char(&ctx, &assignment, ci);
+                }
+                ev.apply_simple_for_move(&ctx, &assignment, &[r]);
+                ev.commit_simple();
+                check_invariant(&ev)?;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 任务 15.1：级别归属、一致性（21.6）与长度（22.3）校验 —— 确定性单元测试
+    // ---------------------------------------------------------------------
+
+    /// 用给定 space 配置与单条固定简码构建 ctx，返回接受的固定简码条数。
+    fn count_accepted(space: [bool; 3], ch_idx: usize, code: &str, n_roots: usize) -> usize {
+        // 单个汉字、n_roots 个根，频率 100
+        let specs = vec![(100u64, n_roots)];
+        let _ = ch_idx; // 仅一个字，索引恒 0
+        let ch = char::from_u32(0x4e00).unwrap();
+        let fixed = vec![(ch, code.to_string())];
+        let ctx = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, space, &fixed);
+        ctx.simple_fixed_codes.len()
+    }
+
+    #[test]
+    fn fixed_code_level_assignment_by_core_length() {
+        // 级别 0=1键, 级别 1=2键, 级别 2=3键（均无空格上屏）。
+        // n_roots=4 → 全码长 4，各级有效长度 1/2/3 均 < 4，长度约束满足。
+        let specs = vec![(100u64, 4usize)];
+        let ch = char::from_u32(0x4e00).unwrap();
+
+        // "a" → 级别 0
+        let ctx0 = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(ch, "a".to_string())]);
+        assert_eq!(ctx0.simple_fixed_codes.len(), 1);
+        assert_eq!(ctx0.simple_fixed_codes[0].li, 0);
+
+        // "ab" → 级别 1
+        let ctx1 = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(ch, "ab".to_string())]);
+        assert_eq!(ctx1.simple_fixed_codes.len(), 1);
+        assert_eq!(ctx1.simple_fixed_codes[0].li, 1);
+
+        // "abc" → 级别 2（有效长 3 < 全码 4）
+        let ctx2 = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(ch, "abc".to_string())]);
+        assert_eq!(ctx2.simple_fixed_codes.len(), 1);
+        assert_eq!(ctx2.simple_fixed_codes[0].li, 2);
+    }
+
+    #[test]
+    fn fixed_code_underscore_consistency_rejected() {
+        // 级别 0 space_commit=false，但固定简码带尾随下划线 "a_" → 不一致，应被拒绝。
+        assert_eq!(count_accepted([false, false, false], 0, "a_", 4), 0);
+        // 级别 0 space_commit=true，固定简码不带下划线 "a" → 不一致，应被拒绝。
+        assert_eq!(count_accepted([true, false, false], 0, "a", 4), 0);
+        // 级别 0 space_commit=true，固定简码 "a_" → 一致，应被接受（有效长 2 < 全码 4）。
+        let specs = vec![(100u64, 4usize)];
+        let ch = char::from_u32(0x4e00).unwrap();
+        let ctx = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [true, false, false], &[(ch, "a_".to_string())]);
+        assert_eq!(ctx.simple_fixed_codes.len(), 1);
+        assert!(ctx.simple_fixed_codes[0].space_commit);
+        assert_eq!(ctx.simple_fixed_codes[0].code_str, "a_");
+    }
+
+    #[test]
+    fn fixed_code_length_constraint_rejected() {
+        // 全码长度 2，级别 1（2 键）有效长度 2，不严格短于全码 → 拒绝（需求 22.3）。
+        let specs = vec![(100u64, 2usize)];
+        let ch = char::from_u32(0x4e00).unwrap();
+        let ctx = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(ch, "ab".to_string())]);
+        assert_eq!(ctx.simple_fixed_codes.len(), 0, "有效长度不短于全码应被拒绝");
+
+        // 级别 0（1 键）有效长度 1 < 全码 2 → 接受。
+        let ctx_ok = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(ch, "a".to_string())]);
+        assert_eq!(ctx_ok.simple_fixed_codes.len(), 1);
+    }
+
+    #[test]
+    fn fixed_code_invalid_char_or_unknown_hanzi_rejected() {
+        let specs = vec![(100u64, 4usize)];
+        let ch = char::from_u32(0x4e00).unwrap();
+        // 非法简码键位（数字 '1' 无法映射键位）→ 拒绝
+        let ctx_bad = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(ch, "1".to_string())]);
+        assert_eq!(ctx_bad.simple_fixed_codes.len(), 0);
+        // 汉字不在拆分表中 → 拒绝
+        let other = char::from_u32(0x9fa5).unwrap();
+        let ctx_unknown = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(other, "a".to_string())]);
+        assert_eq!(ctx_unknown.simple_fixed_codes.len(), 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // 任务 17.1：含固定简码 + 空格上屏 + 长度约束下的回归
+    //   - Property 1：增量 == 全量
+    //   - Property 2：apply + rollback round-trip
+    //   - Property 13：reconcile == 全量
+    // ---------------------------------------------------------------------
+
+    /// 逐字段断言两个 SimpleEvaluator 的简码指标与状态一致（含固定简码常量偏置）。
+    fn assert_simple_eq(ctx: &OptContext, inc: &Evaluator, full: &Evaluator, label: &str) -> Result<(), TestCaseError> {
+        let mi = inc.get_simple_metrics(ctx);
+        let mf = full.get_simple_metrics(ctx);
+        let eps = 1e-9;
+        prop_assert!((mi.weighted_freq_coverage - mf.weighted_freq_coverage).abs() < eps, "{}: coverage", label);
+        prop_assert!((mi.equiv_mean - mf.equiv_mean).abs() < eps, "{}: equiv_mean", label);
+        prop_assert!((mi.dist_deviation - mf.dist_deviation).abs() < eps, "{}: dist", label);
+        prop_assert_eq!(mi.collision_count, mf.collision_count, "{}: coll_count", label);
+        prop_assert!((mi.collision_rate - mf.collision_rate).abs() < eps, "{}: coll_rate", label);
+
+        let se_i = inc.simple_eval.as_ref().expect("inc se");
+        let se_f = full.simple_eval.as_ref().expect("full se");
+        prop_assert_eq!(&se_i.all_assigned_flags, &se_f.all_assigned_flags, "{}: all_assigned", label);
+        prop_assert_eq!(se_i.simple_collision_freq, se_f.simple_collision_freq, "{}: coll_freq", label);
+        for li in 0..se_i.levels.len() {
+            prop_assert_eq!(&se_i.levels[li].selected, &se_f.levels[li].selected, "{}: L{} selected", label, li);
+            prop_assert_eq!(&se_i.levels[li].current_simple_code, &se_f.levels[li].current_simple_code, "{}: L{} code", label, li);
+            prop_assert_eq!(se_i.levels[li].covered_freq, se_f.levels[li].covered_freq, "{}: L{} covered", label, li);
+            prop_assert!((se_i.levels[li].equiv_weighted - se_f.levels[li].equiv_weighted).abs() < eps, "{}: L{} equiv_w", label, li);
+            prop_assert!((se_i.levels[li].key_presses - se_f.levels[li].key_presses).abs() < eps, "{}: L{} presses", label, li);
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 1/2/13 回归: 含固定简码 + 空格上屏 + 长度约束
+        //
+        // 在「含固定简码、级别 1 空格上屏、长度资格过滤」的上下文下，验证：
+        //   - 增量维护（update_char + apply_simple_for_move）与对同一分配全量重建逐字段一致（Property 1）；
+        //   - 拒绝路径 apply + rollback 与移动前等价（Property 2）；
+        //   - reconcile 后逐字段等于全量重算（Property 13）。
+        // Validates: Requirements 20.7, 21.8, 21.9, 22.4 (and 1.1, 2.x, 15.x under fixed/space context)
+        #[test]
+        fn prop_fixed_regression_inc_rollback_reconcile(
+            mode_is_freq in any::<bool>(),
+            // n_roots 2..=3：code_space = code_base^max_parts 随 n_roots 指数膨胀，
+            // 限制在 ≤3（code_space ≤ code_base^3）使每次 Evaluator::new 的 O(code_space)
+            // 全量重建开销有界、整体快速（与 prop1/prop2/prop13 等重测试同口径）。
+            specs in prop::collection::vec((1u64..6, 2usize..4), 3usize..7),
+            code_num in 1usize..4,
+            coverage_pct in 50u32..=100,
+            fixed_raw in prop::collection::vec((0u8..8, 0u8..2), 0usize..4),
+            // 每步移动都做一次全量 Evaluator::new 做 oracle，故限制移动数上界以控总开销。
+            moves in prop::collection::vec((0usize..64, 0u8..2, any::<bool>()), 0usize..12),
+        ) {
+            let mode = if mode_is_freq { SimpleAssignMode::Frequency } else { SimpleAssignMode::Efficiency };
+            let coverage_ratio = coverage_pct as f64 / 100.0;
+            let n = specs.len();
+            // 固定简码置于级别 0（无空格上屏）；级别 1 开启空格上屏以纳入 space_commit 口径。
+            let space = [false, true, false];
+            let fixed = build_level0_fixed(&fixed_raw, n);
+            let ctx = make_ctx_fixed(&specs, mode, code_num, coverage_ratio, space, &fixed);
+            let n_groups = ctx.num_groups;
+
+            let mut assignment = vec![0u8; n_groups];
+            let mut ev = Evaluator::new(&ctx, &assignment);
+            prop_assert!(ev.simple_eval.is_some());
+
+            // 初始即应与全量一致
+            let ev0 = Evaluator::new(&ctx, &assignment);
+            assert_simple_eq(&ctx, &ev, &ev0, "init")?;
+
+            for (k, &(gi, nk, accept)) in moves.iter().enumerate() {
+                let r = gi % n_groups;
+                let old_key = assignment[r];
+
+                if accept {
+                    // 接受：apply + commit，并与全量比对（Property 1）
+                    assignment[r] = nk;
+                    for idx in 0..ctx.group_to_chars[r].len() {
+                        let ci = ctx.group_to_chars[r][idx];
+                        ev.update_char(&ctx, &assignment, ci);
+                    }
+                    ev.apply_simple_for_move(&ctx, &assignment, &[r]);
+                    ev.commit_simple();
+
+                    let full = Evaluator::new(&ctx, &assignment);
+                    assert_simple_eq(&ctx, &ev, &full, &format!("step{} accept", k + 1))?;
+                } else {
+                    // 拒绝：记录移动前指标 → apply → 逆转全码 + rollback → 断言与移动前一致（Property 2）
+                    let before = Evaluator::new(&ctx, &assignment); // 与当前 ev 同分配的 oracle
+                    assignment[r] = nk;
+                    for idx in 0..ctx.group_to_chars[r].len() {
+                        let ci = ctx.group_to_chars[r][idx];
+                        ev.update_char(&ctx, &assignment, ci);
+                    }
+                    ev.apply_simple_for_move(&ctx, &assignment, &[r]);
+                    // 逆转全码 + 回滚简码
+                    assignment[r] = old_key;
+                    for idx in 0..ctx.group_to_chars[r].len() {
+                        let ci = ctx.group_to_chars[r][idx];
+                        ev.update_char(&ctx, &assignment, ci);
+                    }
+                    ev.rollback_simple();
+                    assert_simple_eq(&ctx, &ev, &before, &format!("step{} reject roundtrip", k + 1))?;
+                }
+            }
+
+            // Property 13：reconcile 后逐字段等于对当前分配的全量重算
+            ev.reconcile(&ctx, &assignment);
+            let full_end = Evaluator::new(&ctx, &assignment);
+            assert_simple_eq(&ctx, &ev, &full_end, "reconcile")?;
         }
     }
 }

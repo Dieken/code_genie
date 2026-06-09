@@ -117,6 +117,10 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
 
     let mut out = String::new();
     let mut simple_assigned: HashSet<usize> = HashSet::new();
+    // 固定简码字（需求 21.10）：预先纳入 simple_assigned，防止其被优化出简路径重复选取。
+    for fc in &ctx.simple_fixed_codes {
+        simple_assigned.insert(fc.ci);
+    }
 
     // 按字频排序
     let n_chars = ctx.char_infos.len();
@@ -135,7 +139,8 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
             if simple_assigned.contains(&ci) {
                 continue;
             }
-            if let Some(code) = ctx.calc_simple_code(ci, li, assignment) {
+            // 简码长度严格短于全码（需求 22）：不合格的 (ci, li) 不出简。
+            if let Some(code) = ctx.calc_simple_code_eligible(ci, li, assignment) {
                 code_candidates
                     .entry(code)
                     .or_default()
@@ -157,9 +162,16 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
                 }
 
                 let ch = ctx.raw_splits[ci].0;
+                // 空格上屏（需求 20.5/20.6）：该级 space_commit 为真时简码末尾追加下划线 `_`。
                 let code_str: String = ctx
                     .get_simple_keys(ci, li, assignment)
-                    .map(|keys| keys.iter().map(|&k| key_to_char(k)).collect())
+                    .map(|keys| {
+                        let mut s: String = keys.iter().map(|&k| key_to_char(k)).collect();
+                        if level_cfg.space_commit {
+                            s.push('_');
+                        }
+                        s
+                    })
                     .unwrap_or_else(|| String::from("?"));
 
                 level_winners.push((ci, freq, format!("{}\t{}", ch, code_str)));
@@ -174,6 +186,14 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
             out.push_str(line);
             out.push('\n');
             simple_assigned.insert(*ci);
+        }
+
+        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留结尾下划线。
+        for fc in &ctx.simple_fixed_codes {
+            if fc.li == li {
+                let ch = ctx.raw_splits[fc.ci].0;
+                out.push_str(&format!("{}\t{}\n", ch, fc.code_str));
+            }
         }
     }
 
@@ -209,7 +229,26 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         full_code_to_chars[code].push(ci);
     }
 
-    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars);
+    // 计算首选标记：每个非空全码桶取 (最大频率, 最小 ci) 为首选字（需求 5.1/5.2），
+    // 供 Efficiency 模式排序键的 sel_len 取值。
+    let mut is_first_candidate = vec![false; n];
+    for chars in full_code_to_chars.iter() {
+        if chars.is_empty() {
+            continue;
+        }
+        let mut max_f = 0u64;
+        let mut first = usize::MAX;
+        for &ci in chars {
+            let f = ctx.char_infos[ci].frequency;
+            if f > max_f || (f == max_f && ci < first) {
+                max_f = f;
+                first = ci;
+            }
+        }
+        is_first_candidate[first] = true;
+    }
+
+    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first_candidate);
     let sm = se.get_simple_metrics(ctx);
 
     let mut out = String::new();
@@ -229,6 +268,11 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
 
     let n_chars = ctx.char_infos.len();
     let mut globally_assigned: HashSet<usize> = HashSet::new();
+    // 固定简码字（需求 21.10）：预先纳入 globally_assigned，防止其被优化出简路径重复选取；
+    // 其简码在所属级别区段按 code_str（保留结尾下划线）输出。
+    for fc in &ctx.simple_fixed_codes {
+        globally_assigned.insert(fc.ci);
+    }
 
     let mut sorted_chars: Vec<usize> = (0..n_chars).collect();
     sorted_chars.sort_by(|&a, &b| {
@@ -260,7 +304,8 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
             if globally_assigned.contains(&ci) {
                 continue;
             }
-            if let Some(code) = ctx.calc_simple_code(ci, li, assignment) {
+            // 简码长度严格短于全码（需求 22）：不合格的 (ci, li) 不出简。
+            if let Some(code) = ctx.calc_simple_code_eligible(ci, li, assignment) {
                 code_candidates
                     .entry(code)
                     .or_default()
@@ -281,9 +326,16 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
                 }
 
                 let ch = ctx.raw_splits[ci].0;
+                // 空格上屏（需求 20.5/20.6）：该级 space_commit 为真时简码末尾追加下划线 `_`。
                 let code_str: String = ctx
                     .get_simple_keys(ci, li, assignment)
-                    .map(|keys| keys.iter().map(|&k| key_to_char(k)).collect())
+                    .map(|keys| {
+                        let mut s: String = keys.iter().map(|&k| key_to_char(k)).collect();
+                        if level_cfg.space_commit {
+                            s.push('_');
+                        }
+                        s
+                    })
                     .unwrap_or_else(|| String::from("?"));
 
                 level_winners.push((ci, freq, format!("{}\t{}\t{}", ch, code_str, freq)));
@@ -299,7 +351,22 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
             globally_assigned.insert(*ci);
         }
 
-        out.push_str(&format!("# 该级简码覆盖 {} 字\n", level_winners.len()));
+        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留结尾下划线。
+        let mut fixed_count = 0usize;
+        for fc in &ctx.simple_fixed_codes {
+            if fc.li == li {
+                let ch = ctx.raw_splits[fc.ci].0;
+                let freq = ctx.char_infos[fc.ci].frequency;
+                out.push_str(&format!("{}\t{}\t{}\n", ch, fc.code_str, freq));
+                fixed_count += 1;
+            }
+        }
+
+        out.push_str(&format!(
+            "# 该级简码覆盖 {} 字（含固定简码 {} 字）\n",
+            level_winners.len() + fixed_count,
+            fixed_count
+        ));
     }
 
     fs::write(format!("{}/output-simple-codes.txt", dir), out).unwrap();
@@ -660,4 +727,132 @@ pub fn save_summary(
     }
 
     fs::write(format!("{}/summary.txt", output_dir), summary).unwrap();
+}
+
+// =========================================================================
+// 🧪 空格上屏输出表示属性测试（simple-code-perf-optimization, Property 17）
+// =========================================================================
+#[cfg(test)]
+mod space_commit_output_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep,
+        WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建单级简码（步数 1，规则 [A.a]）的 OptContext，可指定该级 space_commit。
+    /// 每个汉字含 3 个互不相同字根（各自成组），故全码长度 3 > 有效简码长度（1 或 2），
+    /// 在 space true/false 下均满足长度资格（需求 22），保证有字出简。
+    fn make_ctx_single_level(freqs: &[u64], space_commit: bool) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(freqs.len());
+        for (i, &freq) in freqs.iter().enumerate() {
+            let mut roots: Vec<String> = Vec::with_capacity(3);
+            for j in 0..3usize {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1, 2],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![SimpleCodeLevel {
+            level: 1,
+            code_num: 1,
+            rule_candidates: vec![vec![step('A')]],
+            space_commit,
+        }];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 收集 output-simple-codes.txt 中的数据行简码列（跳过注释/空行）。
+    fn read_simple_codes(path: &str) -> Vec<String> {
+        let content = fs::read_to_string(path).expect("读取简码输出文件失败");
+        let mut codes = Vec::new();
+        for line in content.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            let cols: Vec<&str> = line.split('\t').collect();
+            // 数据行格式：汉字\t简码\t字频
+            if cols.len() >= 3 {
+                codes.push(cols[1].to_string());
+            }
+        }
+        codes
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 17: 空格上屏的输出表示
+        //
+        // 对任意简码级别 li 与该级被出简的字，其输出到 output 文件的简码字符串：当 space_commit
+        // 为真时恰为「键位串 + 单个尾随下划线 `_`」，当 space_commit 为假时恰为「键位串、无尾随下划线」。
+        #[test]
+        fn prop17_space_commit_output_underscore(
+            freqs in prop::collection::vec(1u64..=200, 1..=5),
+            space_commit in any::<bool>(),
+            dir_seed in any::<u64>(),
+        ) {
+            let ctx = make_ctx_single_level(&freqs, space_commit);
+            let asg = vec![0u8; ctx.num_groups];
+
+            let dir = std::env::temp_dir()
+                .join(format!("cg_prop17_{}_{}", std::process::id(), dir_seed));
+            let dir_str = dir.to_str().unwrap().to_string();
+            fs::create_dir_all(&dir).unwrap();
+
+            save_simple_code_output(&ctx, &asg, &dir_str);
+
+            let codes = read_simple_codes(&format!("{}/output-simple-codes.txt", dir_str));
+            prop_assert!(!codes.is_empty(), "应至少有一个字出简");
+
+            for code in &codes {
+                // 末尾恰一个下划线 ⟺ space_commit 为真；其余字符不应含下划线
+                let trailing = code.ends_with('_');
+                prop_assert_eq!(trailing, space_commit,
+                    "简码 {:?} 的尾随下划线应与 space_commit={} 一致", code, space_commit);
+                let core = code.trim_end_matches('_');
+                prop_assert!(!core.contains('_'),
+                    "简码核心串不应含下划线: {:?}", code);
+                if space_commit {
+                    // 恰一个尾随下划线（核心串 + 单 '_'）
+                    prop_assert_eq!(code.len(), core.len() + 1,
+                        "space_commit=true 应恰有单个尾随下划线: {:?}", code);
+                }
+            }
+
+            // 清理临时目录
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
 }
