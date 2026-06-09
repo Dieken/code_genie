@@ -408,6 +408,20 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 - 在 `rebuild_selection` 与 `apply_move_incremental` 的「候选字入桶」步骤加入该资格判定：不合格的 `(ci, li)` 既不进入桶、也不计 `current_simple_code`，等价于 `calc_simple_code` 返回 `None` 的处理路径。
 - 固定简码若违反该约束则在加载期拒绝（需求 22.3）。
 
+#### 输出镜像评估器选择（需求 23）
+
+`src/output.rs` 的简码输出不再独立按字频重新推导，而是直接复用评估器算出的出简选择，保证
+输出方案与被优化/上报方案逐字一致：
+
+- 新增 `SimpleEvaluator::selected_ordered(ctx, is_first_candidate)`：返回实际出简的 `(li, ci)`
+  列表，按级别升序、同级按简码桶编码升序、桶内按选择排序键 `cmp_in_bucket` 排列（即分配顺序）。
+- `output.rs` 新增 `evaluator_simple_selection(ctx, assignment)`：以与 `Evaluator::new` 同口径
+  构建 `SimpleEvaluator`（同样的 `is_first_candidate` 取法）并调用 `selected_ordered`；
+  `save_simple_code_output` 复用其已构建的 `se`、`save_combined_code_output` 经该辅助构建。
+- 两个输出函数按返回的顺序输出优化出简（经 `simple_code_str` 拼接键位串并按 `space_commit`
+  追加下划线），再输出归属各级的固定简码（保留下划线）。因选择来自评估器 `selected`，efficiency
+  排序键、`sel_len`、固定占用扣减（`code_num - simple_fixed_occ`）与跨级排除全部自动一致。
+
 #### 对增量/回滚/对账的影响
 
 - 空格上屏仅改变 `simple_base_saving`（预计算常量）、`calc_simple_equiv` 的尾随空格条件、分布的空格计数与输出字符串；热路径 `apply_move_incremental` 的桶增量、快照回滚、`reconcile` 结构不变（当量/分布的空格项随出简翻转一并增减，纳入既有级别聚合增量）。
@@ -541,6 +555,14 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 *对任意* 候选字 `ci` 与级别 `li`，该字在该级出简（进入简码桶且 `current_simple_code[ci] != -1`）当且仅当其有效简码长度 `effective_simple_len(li) = 指令步数 + (space_commit ? 1 : 0)` 严格小于全码长度 `full_len(ci) = char_infos[ci].parts.len()`。任何被分配（含固定简码与退火分配）的简码，其有效长度都严格小于对应字的全码长度。
 
 **Validates: Requirements 22.1, 22.2, 22.3, 22.4**
+
+### Property 21: 输出镜像评估器选择且不超额
+
+*对任意* 分配与固定简码映射，输出文件的简码出简选择应等于评估器 `SimpleEvaluator.selected` 的
+出简集合（顺序按级别升序、桶编码升序、桶内排序键），固定简码不与之重复；且对任意级别 `li` 与
+桶编码 `code`，输出的优化出简数加固定占用 `simple_fixed_occ(li, code)` 不超过该级 `code_num`。
+
+**Validates: Requirements 23.1, 23.2, 23.3, 23.4**
 
 ## Error Handling
 

@@ -356,11 +356,14 @@ impl OptContext {
             // ============================================================
             // 固定简码处理（需求 21 / 22.3）
             // ============================================================
-            simple_fixed_occupancy = (0..n_levels)
-                .map(|li| vec![0usize; simple_level_capacity[li]])
-                .collect();
-
             if !fixed_simple_codes.is_empty() {
+                // 仅在确有固定简码时才按各级 capacity 分配占用表（无固定简码时保持空 Vec，
+                // simple_fixed_occ 访问器对空/越界统一回退 0）——避免高级别 code_base^L 容量的
+                // 无谓分配。
+                simple_fixed_occupancy = (0..n_levels)
+                    .map(|li| vec![0usize; simple_level_capacity[li]])
+                    .collect();
+
                 // 汉字 → ci 映射（取首个匹配；同字多条仅首条有效）
                 let mut char_to_ci: HashMap<char, usize> = HashMap::new();
                 for (ci, (ch, _, _)) in splits.iter().enumerate() {

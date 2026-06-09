@@ -285,6 +285,15 @@
   - [x] 17.2 构建与全部测试通过
     - 运行 `cargo build` 与 `cargo test`，确保需求 20/21/22 新增实现与测试全绿，且既有 58 lib + 2 smoke 测试无回归
 
+- [x] 18. 输出镜像评估器选择（需求 23）
+  - [x] 18.1 输出复用评估器出简选择
+    - `SimpleEvaluator` 新增 `selected_ordered`（按级别升序、桶编码升序、桶内排序键返回出简 `(li, ci)`）
+    - `src/output.rs` 新增 `evaluator_simple_selection` 与 `simple_code_str`；`save_simple_code_output` 与 `save_combined_code_output` 改为按评估器选择输出，不再按字频重新推导（自动一致 efficiency 排序/sel_len/固定占用扣减/跨级排除）
+    - _Requirements: 23.1, 23.2, 23.3, 23.4_
+  - [x] 18.2 编写输出占用回归测试
+    - 断言 output 选择对每个 (级别, 桶) 满足「优化出简 + 固定占用 ≤ code_num」，固定字不重复出简
+    - **Validates: Requirements 23.1, 23.3, 23.4**
+
 ## Task Dependency Graph
 
 ```json
@@ -319,7 +328,9 @@
     { "id": 26, "tasks": ["15.4", "15.5", "15.6"] },
     { "id": 27, "tasks": ["16.1"] },
     { "id": 28, "tasks": ["16.2"] },
-    { "id": 29, "tasks": ["17.1", "17.2"] }
+    { "id": 29, "tasks": ["17.1", "17.2"] },
+    { "id": 30, "tasks": ["18.1"] },
+    { "id": 31, "tasks": ["18.2"] }
   ]
 }
 ```

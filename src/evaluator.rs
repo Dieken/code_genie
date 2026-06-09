@@ -1384,6 +1384,39 @@ impl SimpleEvaluator {
             collision_rate: self.simple_collision_rate,
         }
     }
+
+    /// 镜像评估器的出简选择（需求 23）：返回实际出简的 `(level_idx, ci)` 列表，按级别升序、
+    /// 同级别按简码桶编码升序、桶内按选择排序键 `cmp_in_bucket`（即分配简码时的排序）排列。
+    ///
+    /// 供 output 直接复用评估器的 `selected` 状态生成输出，使输出方案与被优化方案逐字一致
+    /// （含 efficiency 模式 / sel_len / 固定占用扣减 / 跨级排除），且输出顺序与分配顺序一致。
+    /// 不含固定简码（固定简码由 `ctx.simple_fixed_codes` 单独输出）。
+    pub fn selected_ordered(
+        &self,
+        ctx: &OptContext,
+        is_first_candidate: &[bool],
+    ) -> Vec<(usize, usize)> {
+        let n_chars = ctx.char_infos.len();
+        // (li, code, ci)：仅收集实际出简的候选字。
+        let mut items: Vec<(usize, usize, usize)> = Vec::new();
+        for li in 0..self.levels.len() {
+            let lvl = &self.levels[li];
+            for ci in 0..n_chars {
+                if lvl.selected[ci] {
+                    let code = lvl.current_simple_code[ci];
+                    if code >= 0 {
+                        items.push((li, code as usize, ci));
+                    }
+                }
+            }
+        }
+        items.sort_by(|&(la, ca, a), &(lb, cb, b)| {
+            la.cmp(&lb)
+                .then(ca.cmp(&cb))
+                .then_with(|| Self::cmp_in_bucket(ctx, is_first_candidate, la, a, b))
+        });
+        items.into_iter().map(|(li, _c, ci)| (li, ci)).collect()
+    }
 }
 
 // =========================================================================
