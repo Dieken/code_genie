@@ -943,15 +943,16 @@ pub fn simulated_annealing(
 
         // === 简码延迟激活与权重渐进（任务 10.1）===
         // 激活判定（闩锁）：进度首达 p_start 或硬激活时一次性激活并独立升温（需求 8.3/12.2）。
-        // 闩锁的下一状态由纯函数 `latch_activation` 计算（需求 8.3/8.4），其语义与内联守卫一致：
-        // 当 `simple_activated == false` 时，`latch_now` 为真 ⟺ 满足激活触发条件。
-        let latch_now = latch_activation(simple_activated, p, p_start, hard_activate);
-        if simple_enabled && !simple_activated && latch_now {
+        // 短路顺序保证简码关闭时不调用 latch_activation（无每步额外计算）。
+        if simple_enabled
+            && !simple_activated
+            && latch_activation(simple_activated, p, p_start, hard_activate)
+        {
             evaluator.activate_simple(ctx, &assignment);
             // 独立于 reheat_factor 的激活升温（默认 1.0 不升温，需求 12.3/12.4）。
             // 经纯函数 `simple_activation_multiplier` 计算，仅依赖 `simple_activation_reheat`。
             temp_multiplier = simple_activation_multiplier(temp_multiplier, simple_reheat);
-            simple_activated = latch_now;
+            simple_activated = true;
 
             if thread_id == 0 {
                 println!(
@@ -1183,7 +1184,9 @@ pub fn simulated_annealing(
         }
 
         // === 周期对账：每 M 步用全量重算覆盖增量值，纠正浮点/整型漂移（需求 15.4/15.5）===
-        if step > 0 && step % reconcile_m == 0 {
+        // 仅在简码启用时进行：简码关闭时全码增量本身（重码为整型精确）无需周期全量重建，
+        // 以保持与基线一致的全码搜索行为与性能（不引入每 M 步的评估器重建开销）。
+        if simple_enabled && step > 0 && step % reconcile_m == 0 {
             evaluator.reconcile(ctx, &assignment);
             evaluator.score_dirty = true;
         }
@@ -1205,7 +1208,11 @@ pub fn simulated_annealing(
     }
 
     // === 结束强制全量校验：使最终上报指标为精确值（需求 15.6）===
-    evaluator.reconcile(ctx, &assignment);
+    // 仅简码启用时进行（与周期对账一致）；简码关闭时跳过，保持与基线一致、不引入额外重建。
+    // 最终上报指标统一由下方对 best_assignment 重建的 best_eval 给出，与此处无关。
+    if simple_enabled {
+        evaluator.reconcile(ctx, &assignment);
+    }
     // 以全量重建结果一致地重算最佳解的分量与指标（需求 11/15.6）。
     {
         let mut best_eval = Evaluator::new(ctx, &best_assignment);

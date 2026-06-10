@@ -413,7 +413,14 @@ impl Config {
             weight_equiv_cv: self.weights.full_code.equiv_cv,
             weight_distribution: self.weights.full_code.distribution,
             enable_simple_code: self.weights.simple_code.enabled,
-            weight_full_code: self.weights.simple_code.full_code_weight,
+            // 简码关闭时 weight_full_code 取 1.0：综合得分退化为纯原始全码分数（与简码引入前的
+            // 基线一致），避免用 full_code_weight(<1) 整体缩放分数而改变 SA 接受概率与全码搜索行为。
+            // 简码启用时仍取 full_code_weight，与 simple_code_weight 共同平衡两个分量。
+            weight_full_code: if self.weights.simple_code.enabled {
+                self.weights.simple_code.full_code_weight
+            } else {
+                1.0
+            },
             weight_simple_code: self.weights.simple_code.simple_code_weight,
             simple_weight_freq: self.weights.simple_code.freq,
             simple_weight_equiv: self.weights.simple_code.equiv,
