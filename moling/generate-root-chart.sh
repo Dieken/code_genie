@@ -21,6 +21,14 @@ shopt -s failglob
 }
 
 echo "Writing $1/roots.tsv ..."
+f="$1/source/config.toml"
+[ -f "$f" ] || f="$1/../source/config.toml"
+if sed -ne '/^\s*\[weights.simple_code\]/,/^\s*\[/p' "$f" | grep -qi '^\s*enabled\s*=\s*true'; then
+perl -CSDA -lanE '
+  next if /^\s*#/;
+  print "$F[0]\t$F[1]";
+  ' "$1/output-keymap.txt" > "$1/roots.tsv"
+else
 perl -CSDA -lanE '
   next unless /^(\S+)\.([UASY])/;
   $h{$1}{$2} = lc($F[1]);
@@ -40,6 +48,7 @@ perl -CSDA -lanE '
     for (@roots) { print "$_->[0]\t", ucfirst($_->[1]); }
   }
   ' "$1/output-keymap.txt" > "$1/roots.tsv"
+fi
 
 echo "Writing $1/roots-mapping.tsv ..."
 perl -CSDA -F, -lanE '
