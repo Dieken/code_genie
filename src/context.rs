@@ -442,19 +442,29 @@ impl OptContext {
                         }
                     };
 
-                    // 一致性校验（需求 21.6）：结尾下划线有无须与该级 space_commit 一致。
-                    let space_commit = simple_config.levels[li].space_commit;
-                    if space_commit != has_underscore {
-                        eprintln!(
-                            "⚠️ 警告：固定简码 \"{}\" = \"{}\" 的结尾下划线与级别 {} 的 space_commit={} 不一致，已拒绝",
-                            ch, raw_code, simple_config.levels[li].level, space_commit
+                    // 一致性校验（需求 21.6 / 确认点 4）：以固定简码自身的结尾下划线为准
+                    // （固定简码即最终输出状态，不依据级别 space_commit 重建下划线）。
+                    // - space_commit=false 但固定简码以 `_` 结尾 → 配置错误，解析期报错（panic）。
+                    // - space_commit=true 但固定简码无 `_` 结尾 → 仅警告，按固定简码原样接受。
+                    let level_space_commit = simple_config.levels[li].space_commit;
+                    if has_underscore && !level_space_commit {
+                        panic!(
+                            "固定简码 \"{}\" = \"{}\" 以下划线结尾（需空格上屏），但级别 {} 的 space_commit=false：配置错误",
+                            ch, raw_code, simple_config.levels[li].level
                         );
-                        continue;
                     }
+                    if !has_underscore && level_space_commit {
+                        eprintln!(
+                            "⚠️ 警告：级别 {} 的 space_commit=true，但固定简码 \"{}\" = \"{}\" 无结尾下划线；按固定简码原样处理（不额外添加下划线）",
+                            simple_config.levels[li].level, ch, raw_code
+                        );
+                    }
+                    // 此后一律以固定简码自身的下划线 `space` 为准（确认点 4）。
+                    let space = has_underscore;
 
                     // 长度约束（需求 22.3）：有效长度（含空格上屏）须严格小于该字全码长度。
                     let full_len = char_infos[ci].parts.len();
-                    let effective_len = core_len + if space_commit { 1 } else { 0 };
+                    let effective_len = core_len + if space { 1 } else { 0 };
                     if effective_len >= full_len {
                         eprintln!(
                             "⚠️ 警告：固定简码 \"{}\" = \"{}\" 的有效长度 {} 不小于全码长度 {}，已拒绝",
@@ -470,19 +480,9 @@ impl OptContext {
                     }
                     debug_assert!(bucket_code < simple_level_capacity[li]);
 
-                    // 占用上限校验（需求 21.7）：同一级同一简码桶的固定占用不得超过该级 code_num；
-                    // 否则「固定占用 + 优化分配」必然超额。超出者（即多个固定简码碰撞到同一桶且
-                    // 超过容量）告警并拒绝，保证 simple_fixed_occupancy[li][code] ≤ code_num。
-                    let level_code_num = simple_config.levels[li].code_num;
-                    if simple_fixed_occupancy[li][bucket_code] >= level_code_num {
-                        eprintln!(
-                            "⚠️ 警告：固定简码 \"{}\" = \"{}\" 所属级别 {} 的简码桶已被固定简码占满（code_num={}），已拒绝",
-                            ch, raw_code, simple_config.levels[li].level, level_code_num
-                        );
-                        continue;
-                    }
-
-                    // 通过校验：登记占用、常量贡献、固定字位图与输出条目。
+                    // 占用登记（需求 21.7 / 确认点 2）：固定简码一律登记，不因占用达到/超过 code_num
+                    // 而拒绝。退火端按 max(0, code_num - 占用) 出简（saturating_sub）：占满（含 code_num=0
+                    // 级别）则该桶退火出 0。固定简码即权威预分配，多条碰撞同桶时全部生效（由用户配置负责）。
                     simple_fixed_assigned[ci] = true;
                     simple_fixed_occupancy[li][bucket_code] += 1;
 
@@ -499,7 +499,7 @@ impl OptContext {
                         total_equiv += equiv_table[prev][cur];
                         prev = cur;
                     }
-                    if space_commit {
+                    if space {
                         total_equiv += equiv_table[prev][KEY_SPACE];
                     }
                     let eq = total_equiv / core_len as f64;
@@ -509,21 +509,21 @@ impl OptContext {
                     for &k in &keys {
                         fixed_key_usage[k as usize] += freq_f;
                     }
-                    if space_commit {
+                    if space {
                         fixed_key_usage[KEY_SPACE] += freq_f;
                     }
                     fixed_key_presses += freq_f * effective_len as f64;
 
-                    // 输出字符串（含空格上屏时的尾随下划线）
+                    // 输出字符串（以固定简码自身的下划线为准；不依据级别 space_commit 额外添加）。
                     let mut code_str: String = keys.iter().map(|&k| key_to_char(k)).collect();
-                    if space_commit {
+                    if space {
                         code_str.push('_');
                     }
                     simple_fixed_codes_vec.push(FixedSimpleCode {
                         ci,
                         li,
                         keys,
-                        space_commit,
+                        space_commit: space,
                         code_str,
                     });
                 }

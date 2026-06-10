@@ -5353,7 +5353,8 @@ mod fixed_simple_code_tests {
         }
     }
 
-    /// 断言：对每个级别每个桶，优化出简数 ≤ code_num - 占用数，且 占用 + 优化 ≤ code_num。
+    /// 断言（确认点 2 新语义）：每级每桶的优化出简数 ≤ max(0, code_num - 固定占用)。
+    /// 固定占用本身不受 code_num 限制（固定简码权威预分配，可达到/超过 code_num，此时退火出 0）。
     fn check_occupancy_bound(ctx: &OptContext, ev: &Evaluator) -> Result<(), TestCaseError> {
         let se = ev.simple_eval.as_ref().expect("simple_eval");
         for li in 0..se.levels.len() {
@@ -5367,9 +5368,7 @@ mod fixed_simple_code_tests {
                     .filter(|&&ci| lvl.selected[ci])
                     .count();
                 prop_assert!(sel_count <= cn.saturating_sub(occ),
-                    "级别 {} 桶 {} 优化出简数 {} 超过可选名额 {}", li, code, sel_count, cn.saturating_sub(occ));
-                prop_assert!(sel_count + occ <= cn,
-                    "级别 {} 桶 {} 固定占用 {} + 优化 {} 超过 code_num {}", li, code, occ, sel_count, cn);
+                    "级别 {} 桶 {} 优化出简数 {} 超过可选名额 max(0, {} - {})", li, code, sel_count, cn, occ);
             }
         }
         Ok(())
@@ -5492,18 +5491,29 @@ mod fixed_simple_code_tests {
     }
 
     #[test]
-    fn fixed_code_underscore_consistency_rejected() {
-        // 级别 0 space_commit=false，但固定简码带尾随下划线 "a_" → 不一致，应被拒绝。
-        assert_eq!(count_accepted([false, false, false], 0, "a_", 4), 0);
-        // 级别 0 space_commit=true，固定简码不带下划线 "a" → 不一致，应被拒绝。
-        assert_eq!(count_accepted([true, false, false], 0, "a", 4), 0);
-        // 级别 0 space_commit=true，固定简码 "a_" → 一致，应被接受（有效长 2 < 全码 4）。
+    fn fixed_code_underscore_consistency() {
         let specs = vec![(100u64, 4usize)];
         let ch = char::from_u32(0x4e00).unwrap();
+
+        // 级别 0 space_commit=true，固定简码 "a_"（一致）→ 接受，输出 "a_"。
         let ctx = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [true, false, false], &[(ch, "a_".to_string())]);
         assert_eq!(ctx.simple_fixed_codes.len(), 1);
         assert!(ctx.simple_fixed_codes[0].space_commit);
         assert_eq!(ctx.simple_fixed_codes[0].code_str, "a_");
+
+        // 级别 0 space_commit=true，固定简码 "a"（无下划线）→ 仅警告、按原样接受（确认点 4）：
+        // 输出 "a"（不额外加下划线），space_commit 字段以固定简码自身为准（false）。
+        let ctx2 = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [true, false, false], &[(ch, "a".to_string())]);
+        assert_eq!(ctx2.simple_fixed_codes.len(), 1, "space_commit=true 但无下划线应警告并接受");
+        assert!(!ctx2.simple_fixed_codes[0].space_commit);
+        assert_eq!(ctx2.simple_fixed_codes[0].code_str, "a");
+    }
+
+    #[test]
+    #[should_panic(expected = "space_commit=false")]
+    fn fixed_code_underscore_on_non_space_commit_level_panics() {
+        // 级别 0 space_commit=false，但固定简码以下划线结尾 "a_" → 配置错误，解析期 panic（确认点 4）。
+        let _ = count_accepted([false, false, false], 0, "a_", 4);
     }
 
     #[test]
@@ -5517,6 +5527,35 @@ mod fixed_simple_code_tests {
         // 级别 0（1 键）有效长度 1 < 全码 2 → 接受。
         let ctx_ok = make_ctx_fixed(&specs, SimpleAssignMode::Efficiency, 1, 1.0, [false; 3], &[(ch, "a".to_string())]);
         assert_eq!(ctx_ok.simple_fixed_codes.len(), 1);
+    }
+
+    #[test]
+    fn fixed_code_on_code_num_zero_level() {
+        // 确认点 1：级别 code_num=0 时，归属该级的固定简码仍生效（被接受、占用桶、计入指标），
+        // 且退火不再在任何桶出简（take(max(0, 0-occ)) = 0）。
+        let specs = vec![(100u64, 4usize), (90, 4), (80, 4)];
+        let ch = char::from_u32(0x4e00).unwrap();
+        let ctx = make_ctx_fixed(
+            &specs,
+            SimpleAssignMode::Efficiency,
+            0, // 所有级别 code_num=0
+            1.0,
+            [false; 3],
+            &[(ch, "a".to_string())],
+        );
+        // 固定简码被接受、归属级别 0
+        assert_eq!(ctx.simple_fixed_codes.len(), 1, "code_num=0 级别的固定简码应生效");
+        assert_eq!(ctx.simple_fixed_codes[0].li, 0);
+        // 固定字被剔除候选、计入常量覆盖
+        assert!(!ctx.simple_is_candidate[0], "固定字应被剔除候选集");
+        assert!(ctx.fixed_covered_freq >= 100, "固定字字频应计入覆盖偏置");
+
+        // 退火端：code_num=0 ⟹ 任何桶优化出简为 0
+        let asg = vec![0u8; ctx.num_groups];
+        let ev = Evaluator::new(&ctx, &asg);
+        let se = ev.simple_eval.as_ref().expect("simple_eval");
+        let any_selected = se.levels.iter().any(|lvl| lvl.selected.iter().any(|&s| s));
+        assert!(!any_selected, "code_num=0 时退火不应分配任何简码");
     }
 
     #[test]

@@ -294,6 +294,15 @@
     - 断言 output 选择对每个 (级别, 桶) 满足「优化出简 + 固定占用 ≤ code_num」，固定字不重复出简
     - **Validates: Requirements 23.1, 23.3, 23.4**
 
+- [x] 19. 固定简码语义修订（确认点 1/2/4）
+  - [x] 19.1 code_num=0 级别按需保留 + 占用不再硬拒绝 + 下划线以固定简码自身为准
+    - `config.rs::get_simple_code_config`：code_num=0 级别仅在有固定简码按码长归属时保留（需求 21.12）
+    - `context.rs` 固定简码处理：移除「占用 ≥ code_num 即拒绝」（改为 `max(0, code_num−占用)`，需求 21.7）；以固定简码自身结尾下划线为输出/长度/当量/分布依据，并做非对称校验（`space_commit=false`+下划线 → 报错；`space_commit=true`+无下划线 → 告警接受，需求 21.6）
+    - _Requirements: 21.6, 21.7, 21.12_
+  - [x] 19.2 更新/新增回归测试
+    - 调整 prop18 占用断言为 `sel ≤ max(0, code_num−占用)`；新增 code_num=0+固定简码、非对称校验（`#[should_panic]`）、`get_simple_code_config` 级别保留测试
+    - **Validates: Requirements 21.6, 21.7, 21.12**
+
 ## Task Dependency Graph
 
 ```json
@@ -330,7 +339,9 @@
     { "id": 28, "tasks": ["16.2"] },
     { "id": 29, "tasks": ["17.1", "17.2"] },
     { "id": 30, "tasks": ["18.1"] },
-    { "id": 31, "tasks": ["18.2"] }
+    { "id": 31, "tasks": ["18.2"] },
+    { "id": 32, "tasks": ["19.1"] },
+    { "id": 33, "tasks": ["19.2"] }
   ]
 }
 ```

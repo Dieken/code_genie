@@ -283,12 +283,23 @@ impl Config {
         }
     }
 
-    /// 获取简码配置（转换为内部格式）
+    /// 获取简码配置（转换为内部格式）。
+    ///
+    /// 级别保留规则（需求 21 / 确认点 1）：`code_num > 0` 的级别一律保留；`code_num == 0` 的级别
+    /// 仅在「存在按核心码长归属到该级的固定简码」时才保留——使该级的固定简码仍生效（输出并排除
+    /// 退火分配），同时不给「无固定简码的 code_num=0 级别」（如默认配置）凭空增加桶分配开销。
     pub fn get_simple_code_config(&self) -> SimpleCodeConfig {
+        // 固定简码的核心码长集合（去结尾 `_`），用于判断 code_num=0 级别是否需保留。
+        let fixed_core_lens: std::collections::HashSet<usize> = self
+            .get_fixed_simple_codes()
+            .iter()
+            .map(|(_, code)| code.trim_end_matches('_').chars().count())
+            .filter(|&l| l > 0)
+            .collect();
+
         let levels: Vec<SimpleCodeLevel> = self
             .simple_levels
             .iter()
-            .filter(|l| l.code_num > 0)
             .map(|l| {
                 let rule_candidates: Vec<Vec<SimpleCodeStep>> = l
                     .rules
@@ -304,6 +315,20 @@ impl Config {
                 }
             })
             .filter(|l| !l.rule_candidates.is_empty())
+            .filter(|l| {
+                if l.code_num > 0 {
+                    return true;
+                }
+                // code_num == 0：仅当有固定简码按码长归属到该级时保留（该级简码键位数 =
+                // 各候选规则步数的最大值，与 context 的 max_len 口径一致）。
+                let level_len = l
+                    .rule_candidates
+                    .iter()
+                    .map(|r| r.len())
+                    .max()
+                    .unwrap_or(0);
+                fixed_core_lens.contains(&level_len)
+            })
             .collect();
 
         SimpleCodeConfig { levels }
@@ -957,6 +982,35 @@ dist_max = 8.0
         assert_eq!(wc.simple_assign_mode, SimpleAssignMode::Efficiency);
         // 同时确认默认覆盖率被正确传递
         assert_eq!(wc.simple_coverage_ratio, 0.90);
+    }
+
+    #[test]
+    fn test_code_num_zero_level_kept_only_with_matching_fixed() {
+        // 确认点 1：get_simple_code_config 中 code_num=0 的级别仅在「有按码长归属到该级的
+        // 固定简码」时保留，否则丢弃（默认配置 level 1 code_num=0 无固定简码 → 丢弃）。
+        let mut cfg = Config::default();
+        // 默认 simple_levels：level 1 code_num=0(rules ["Aa"], 1 键)、level 2/3 code_num>0。
+        cfg.fixed_simple_codes = None;
+        let levels_no_fixed = cfg.get_simple_code_config().levels;
+        assert!(
+            levels_no_fixed.iter().all(|l| l.code_num > 0),
+            "无固定简码时 code_num=0 级别应被丢弃"
+        );
+
+        // 加入归属 level 1（1 键）的固定简码 "a" → 该 code_num=0 级别应保留。
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("不".to_string(), "a".to_string());
+        cfg.fixed_simple_codes = Some(map);
+        let levels_fixed = cfg.get_simple_code_config().levels;
+        assert!(
+            levels_fixed.iter().any(|l| l.code_num == 0),
+            "有归属 code_num=0 级别的固定简码时应保留该级别"
+        );
+        assert_eq!(
+            levels_fixed.len(),
+            levels_no_fixed.len() + 1,
+            "应恰好多保留一个 code_num=0 级别"
+        );
     }
 
     // -----------------------------------------------------------------------

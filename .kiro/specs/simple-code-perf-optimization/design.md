@@ -392,15 +392,16 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 #### 固定简码（需求 21）
 
 - **配置（内联 config.toml）**：在 `Config`（`src/config.rs`）新增顶层可选字段 `fixed_simple_codes: Option<BTreeMap<String, String>>`，对应 TOML 顶层内联表 `[fixed_simple_codes]`（形如 `"不" = "u"`、`"了" = "a_"`）。用 `BTreeMap` 保证遍历顺序确定。解析为 `Vec<(char, String)>`（键取首个 `char`）。两个 toml 提供默认注释掉的示例（需求 21.11）。
-- **级别归属与校验**（需求 21.5/21.6/22.3）：对每条固定简码，去除结尾 `_` 得核心码串，其键位数 `L` 决定所属级别（该级简码键位数等于 `L`）；校验「结尾是否有 `_`」与该级 `space_commit` 一致、且有效长度（含空格上屏）严格小于该字全码长度，不满足则告警并拒绝该条。核心码串经与 `calc_simple_code` 一致的编码方式转为桶编码 `code`。
+- **级别归属与校验**（需求 21.5/21.6/22.3）：对每条固定简码，去除结尾 `_` 得核心码串，其键位数 `L` 决定所属级别（该级简码键位数等于 `L`）；输出/长度/当量/分布一律以固定简码**自身的结尾下划线**为准（不依据级别 `space_commit` 重建）。一致性做非对称校验：固定简码以 `_` 结尾但级别 `space_commit=false` → 解析期 `panic` 报错；不以 `_` 结尾但级别 `space_commit=true` → 仅告警并原样接受。核心码串经与 `calc_simple_code` 一致的编码方式转为桶编码 `code`；有效长度（含自身尾随空格）须严格小于全码长度，否则告警并拒绝该条。
 - **`OptContext` 预计算新增字段**（仅启用简码时填充，退火前一次性确定，全程不变）：
   - `simple_fixed_assigned: Vec<bool>`：按 `ci` 索引，标记该字是否为固定简码字。
-  - `simple_fixed_occupancy: Vec<Vec<usize>>`：`simple_fixed_occupancy[li][code]` = 该级该桶被固定简码占用的名额数；用于把每桶优化分配名额降为 `code_num - 占用数`（需求 21.7）。
-  - 固定简码对简码指标的**常量贡献**：`fixed_covered_freq`、`fixed_equiv_weighted`、`fixed_equiv_freq_sum`、`fixed_key_usage[..]`、`fixed_key_presses`（需求 21.8/21.9）。固定简码键位（含空格上屏时的尾随空格）按字面键位计算这些量，因与分配无关而为常量，并入简码指标聚合作为固定偏置。
+  - `simple_fixed_occupancy: Vec<Vec<usize>>`：`simple_fixed_occupancy[li][code]` = 该级该桶被固定简码占用的名额数（仅在确有固定简码时分配，否则保持空 `Vec`，访问器 `simple_fixed_occ` 对空/越界回退 0）。
+  - 固定简码对简码指标的**常量贡献**：`fixed_covered_freq`、`fixed_equiv_weighted`、`fixed_equiv_freq_sum`、`fixed_key_usage[..]`、`fixed_key_presses`（需求 21.8/21.9）。固定简码键位（含其自身下划线对应的尾随空格）按字面键位计算这些量，因与分配无关而为常量，并入简码指标聚合作为固定偏置。
 - **候选字解耦**（需求 21.3/21.4）：候选字集合仍按 `simple_coverage_ratio` 在全集汉字上选取；选取完成后，从 `simple_candidate_chars` 与 `simple_is_candidate` 中剔除 `simple_fixed_assigned` 为真的字，使其不进入任何桶、不参与退火分配。
-- **出简语义**（需求 21.8）：固定简码字在 `SimpleEvaluator` 初始化时即置 `all_assigned_flags[ci] = true` 且永不翻转，故在简码重码统计中始终作为「已出简」从全码桶排除（与现有 `bucket_collision_contrib_of` 的 `!assigned[ci]` 判定天然兼容）；其覆盖率/当量/分布贡献由上述常量偏置体现。
-- **桶选取改造**（需求 21.7）：`rebuild_selection` / `do_incremental_selection` 在某级某桶选取前 `code_num` 个出简候选时，可选名额改为 `code_num - simple_fixed_occupancy[li][code]`（下限 0）。该占用为常量，热路径与回滚不受影响。
-- **输出**（需求 21.10）：`src/output.rs` 在各级输出固定简码字（保留结尾 `_`），并将其计入 `globally_assigned` 以免重复输出。
+- **出简语义**（需求 21.8）：固定简码字在 `SimpleEvaluator` 初始化时即置 `all_assigned_flags[ci] = true` 且永不翻转，故在简码重码统计中始终作为「已出简」从全码桶排除；其覆盖率/当量/分布贡献由上述常量偏置体现。
+- **桶选取与占用**（需求 21.7）：固定简码一律登记、不因占用达到/超过 `code_num` 而拒绝（固定简码为权威预分配）；`rebuild_selection` / `do_incremental_selection` 选取出简时桶可选名额为 `code_num.saturating_sub(simple_fixed_occ(li, code))`，即 `max(0, code_num − 占用)`，占满（含 `code_num=0` 级别）则该桶退火出 0。该占用为常量，热路径与回滚不受影响。
+- **`code_num=0` 级别保留**（需求 21.12）：`get_simple_code_config` 保留「有固定简码按码长归属到其上」的 `code_num=0` 级别（使其固定简码生效），丢弃无固定简码归属的 `code_num=0` 级别（避免无谓桶分配）；保留的 `code_num=0` 级别退火出简恒为 0（`max(0, 0 − 占用)`）。
+- **输出**（需求 21.10）：`src/output.rs` 在各级输出固定简码字（保留其自身结尾 `_`），并计入选择以免重复输出。
 
 #### 简码长度严格短于全码（需求 22）
 
@@ -540,13 +541,13 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 
 ### Property 18: 固定简码与候选字集合解耦且占用名额
 
-*对任意* 字频分布、覆盖率阈值与固定简码映射，候选字集合的「按覆盖率选取」结果应与无固定简码时完全一致；剔除步骤后，候选字集合恰为「该覆盖率前缀」去掉固定简码字；且对任意级别 `li` 与桶编码 `code`，该桶经退火分配的出简数不超过 `code_num - simple_fixed_occupancy[li][code]`，「固定占用 + 优化分配」不超过 `code_num`。
+*对任意* 字频分布、覆盖率阈值与固定简码映射，候选字集合的「按覆盖率选取」结果应与无固定简码时完全一致；剔除步骤后，候选字集合恰为「该覆盖率前缀」去掉固定简码字；且对任意级别 `li` 与桶编码 `code`，该桶经退火分配的出简数不超过 `max(0, code_num - simple_fixed_occupancy[li][code])`；固定占用数本身不受 `code_num` 限制（固定简码为权威预分配，可达到/超过 `code_num`，此时该桶退火出 0）。
 
 **Validates: Requirements 21.3, 21.4, 21.7**
 
 ### Property 19: 固定简码的恒定出简贡献
 
-*对任意* 分配与任意一串移动序列，固定简码字的 `all_assigned_flags` 恒为真（始终从全码桶的简码重码统计中排除）；且固定简码对简码覆盖率、加权当量、分布偏差的贡献为不随分配变化的常量。固定简码的级别归属须与其结尾下划线（与该级 `space_commit`）及长度约束一致，不一致项被拒绝。
+*对任意* 分配与任意一串移动序列，固定简码字的 `all_assigned_flags` 恒为真（始终从全码桶的简码重码统计中排除）；且固定简码对简码覆盖率、加权当量、分布偏差的贡献为不随分配变化的常量。固定简码的输出与长度/当量/分布以其自身结尾下划线为准；下划线与级别 `space_commit` 的一致性按非对称规则处理（`space_commit=false` 且有下划线 → 报错；`space_commit=true` 且无下划线 → 告警并原样接受）。
 
 **Validates: Requirements 21.5, 21.6, 21.8, 21.9**
 
