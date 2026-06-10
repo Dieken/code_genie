@@ -1720,7 +1720,11 @@ impl Evaluator {
                 self.bucket_max_freq[old_code] = mf;
                 self.bucket_first[old_code] = first;
                 self.is_first_candidate[first] = true;
-                self.simple_is_first_dirty.push(first);
+                // 仅在简码激活时记录首选翻转（resort 种子）；简码关闭/激活前不记录，
+                // 避免该缓冲在纯全码路径上无限增长（apply_simple_for_move 才会清空它）。
+                if self.simple_active {
+                    self.simple_is_first_dirty.push(first);
+                }
             }
         }
 
@@ -1754,14 +1758,20 @@ impl Evaluator {
         if becomes_first {
             if prev_first != usize::MAX {
                 self.is_first_candidate[prev_first] = false;
-                self.simple_is_first_dirty.push(prev_first);
+                if self.simple_active {
+                    self.simple_is_first_dirty.push(prev_first);
+                }
             }
             self.bucket_first[new_code] = ci;
             self.is_first_candidate[ci] = true;
-            self.simple_is_first_dirty.push(ci);
+            if self.simple_active {
+                self.simple_is_first_dirty.push(ci);
+            }
         } else {
             self.is_first_candidate[ci] = false;
-            self.simple_is_first_dirty.push(ci);
+            if self.simple_active {
+                self.simple_is_first_dirty.push(ci);
+            }
         }
         if freq > self.bucket_max_freq[new_code] {
             self.bucket_max_freq[new_code] = freq;
@@ -2180,6 +2190,9 @@ impl Evaluator {
     pub fn rebuild_simple(&mut self, ctx: &OptContext, assignment: &[u8]) {
         // 观测计数：记录一次经主评估器入口触发的全量重建。
         self.full_rebuild_calls += 1;
+        // 全量重建已从零重算全部首选/出简状态，残留的增量「首选翻转」resort 种子作废；
+        // 在此清空，防止 warmup/coordinate_descent 等只走 rebuild_simple 的路径上该缓冲累积增长。
+        self.simple_is_first_dirty.clear();
         let code_to_chars = &self.code_to_chars;
         let is_first_candidate = &self.is_first_candidate;
         if let Some(ref mut se) = self.simple_eval {
@@ -2660,6 +2673,34 @@ mod first_candidate_tests {
             expected[first] = true;
         }
         expected
+    }
+
+    // Feature: simple-code-perf-optimization, 防回归：简码关闭时 update_char 不累积 resort 缓冲。
+    // 关闭简码（simple_active=false）时，热路径每步的首选翻转不应推入 simple_is_first_dirty，
+    // 否则该缓冲在纯全码优化过程中无限增长，拖慢全码路径。
+    #[test]
+    fn disabled_simple_does_not_grow_resort_buffer() {
+        let allowed: [u8; 4] = [0, 1, 2, 3];
+        let ctx = make_ctx(&[5u64, 4, 3, 2, 1], &allowed);
+        let n = 5usize;
+        let mut assignment = vec![0u8; n];
+        let mut ev = Evaluator::new(&ctx, &assignment);
+        assert!(!ev.simple_active, "简码关闭时 simple_active 应为 false");
+        assert!(ev.simple_eval.is_none(), "简码关闭时不应有简码评估器");
+
+        let mut rng = thread_rng();
+        for step in 0..3000usize {
+            let r = step % n;
+            let nk = (step % 4) as u8;
+            // 高温接受率高，充分驱动 update_char 的首选维护路径。
+            ev.try_move(&ctx, &mut assignment, r, nk, 1e18, &mut rng);
+        }
+        assert_eq!(
+            ev.simple_is_first_dirty.len(),
+            0,
+            "简码关闭时 simple_is_first_dirty 不应增长（实际 {}）",
+            ev.simple_is_first_dirty.len()
+        );
     }
 
     proptest! {
