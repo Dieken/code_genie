@@ -313,14 +313,14 @@ struct SimpleSnapshot {
 
 ```text
 p = step / total_steps
-p_start = simple_start_progress        # 默认 0.6
+p_start = simple_start_progress        # 默认 0.4
 p_ramp  = simple_ramp_progress         # 默认 0.1
 W = weight_simple_code                 # 目标简码权重
 
 # 激活（闩锁, 需求 8.3/8.4）
 if (not simple_activated) and (p >= p_start or hard_activate):
     evaluator.activate_simple(ctx, assignment)   # 一次全量构建（需求 8.6）
-    temp_multiplier *= simple_activation_reheat   # 独立升温（需求 12, 默认 1.0 不升温）
+    temp_multiplier *= simple_activation_reheat   # 独立升温（需求 12, 默认 1.2）
     simple_activated = true
 
 # 有效权重曲线（smoothstep, 需求 9）
@@ -359,9 +359,9 @@ for step in 0..steps:
 
 | 配置项 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `simple_start_progress` | f64 | 0.6 | 简码计算激活进度阈值 |
+| `simple_start_progress` | f64 | 0.4 | 简码计算激活进度阈值 |
 | `simple_ramp_progress` | f64 | 0.1 | 权重从 0 渐进到 W 的进度长度 |
-| `simple_activation_reheat` | f64 | 1.0 | 激活当刻升温倍率（1.0 不升温，独立于 reheat_factor） |
+| `simple_activation_reheat` | f64 | 1.2 | 激活当刻升温倍率（独立于 reheat_factor；合理范围 `[1.0, temp_start/base_temp(p_start)]` 动态校验） |
 | `simple_coverage_ratio` | f64 | 0.90 | 候选字累计字频覆盖率阈值 |
 | `reconcile_interval_ratio` | f64 | 0.05 | 周期对账间隔比例，`M = floor(total_steps × ratio)`，`M ≥ 1` |
 | `simple_assign_mode` | String | "efficiency" | 桶内出简排序模式："frequency" 或 "efficiency" |
@@ -657,3 +657,49 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 ### 性能验证（非功能）
 
 - 以小/中规模方案对比改造前后单步耗时与整体退火吞吐（万步/分钟），确认开启简码优化后单步成本回落到 O(受影响字数) 量级，验证本特性的性能目标。
+
+## 激活后最优解重定价、激活时机校验与分数日志增强（需求 26/27/28）
+
+本节为 22:43 简码开启运行日志暴露的「激活后最优解冻结」问题及其相关调参/告警/日志改进的设计。
+
+### 激活时重定价最优解（需求 26）
+
+**问题**：延迟激活前 `simple_active == false`，`simple_score_component` 返回 0，故激活前捕获的最优解 `best_simple_score = 0`。激活后用 `best_total = weight_full·best_full_score + w_eff·best_simple_score` 比较时，`best_simple_score` 仍是过期的 0，使该解综合代价被低估、成为「不可战胜的幽灵最优」，激活后最优解永久冻结、简码不再被优化。
+
+**设计**：在 `simulated_annealing` 主循环的激活分支内（紧随 `evaluator.activate_simple(...)` 之后、设 `simple_activated = true` 附近），对**当前 `best_assignment`** 重新计算真实简码分量并刷新最优解记录：
+
+```text
+evaluator.activate_simple(ctx, &assignment)
+# === 需求 26：激活时重定价 best ===
+best_eval = Evaluator::new(ctx, &best_assignment)      # 急切构建，simple_active=true, current_simple_weight=w_target
+best_full_score   = best_eval.full_score_component(ctx)
+best_simple_score = best_eval.simple_score_component(ctx)   # 真实简码分量（不再是 0）
+best_metrics        = best_eval.get_metrics(ctx)
+best_simple_metrics = best_eval.get_simple_metrics(ctx)
+best_score = best_total(weight_full, best_full_score, w_eff, best_simple_score)
+```
+
+- 一次性（激活仅发生一次，闩锁保证），代价 O(简码全量构建)，不引入逐步开销（需求 26.4）。
+- 重定价后，后续 `best_recomputed` 比较基准包含真实简码分量，激活后综合更优的方案可正常成为新最优解（需求 26.3）。
+- `enable_simple_code == false` 时激活分支不触发，最优解维护与基线一致（需求 26.5）。
+- 注意：此处 `best_assignment` 与当前 `assignment` 可能不同，故需对 `best_assignment` 单独构建评估器，而非复用主 `evaluator`。
+
+### 激活时机默认值与动态校验告警（需求 27）
+
+**默认值调整（需求 27.1/27.2）**：`default_simple_start_progress` 由 `0.6` 改为 `0.4`（配合默认 `ramp=0.1`，权重在 p=0.4→0.5 渐进到 W，恰在舒适区中心达标）；`default_simple_activation_reheat` 由 `1.0` 改为 `1.2`（激活瞬间温和升温，适应目标函数突变）。代码内置默认、`config.toml.example`、`moling/config.toml` 三者同步并附注释（需求 18.4）。
+
+**动态判据**：降温曲线舒适区进度 `comfort_progress = ln(comfort_temp/temp_start) / ln(temp_end/temp_start)`；激活基温 `base_temp(p_start) = schedule.get((p_start·total_steps) as usize, total_steps)`。`validate_simple_activation` 已持有 `&mut self`，可访问 `self.annealing`（`temp_start/temp_end/comfort_temp/comfort_width`）与 `total_steps`，在现有钳制之后追加三条校验（均不写死常量，需求 27.6）：
+
+| 判据 | 处理 | 合理范围 / 建议值（动态） |
+|---|---|---|
+| `simple_activation_reheat < 1.0` | 钳制为 1.0 + 告警（需求 27.3） | — |
+| `simple_activation_reheat > reheat_hi` | 告警（不钳制，需求 27.4） | 合理范围 `[1.0, reheat_hi]`，`reheat_hi = temp_start/base_temp(p_start)`；推荐 `clamp(comfort_temp/base_temp(p_start), 1.0, reheat_hi)` |
+| `simple_start_progress > comfort_progress`（激活基温 < comfort_temp，落在冷却尾段） | 告警（不钳制，需求 27.5） | 区间 `[comfort_progress − comfort_width, comfort_progress]`，推荐 `comfort_progress − comfort_width/2` |
+
+`reheat_hi` 与 `reheat_rec` 完全由 `temp_start`、`base_temp(p_start)`、`comfort_temp` 动态决定：激活越早（`base_temp(p_start)` 越高）`reheat_hi` 越小、可升温空间越小；激活越晚（基温越低）则 `reheat_hi` 越大、且推荐升温越高以把激活温度抬回 `comfort_temp`。实现上为复用降温曲线，`validate_simple_activation` 内按 `self.annealing` 构建一个临时 `TemperatureSchedule` 求 `base_temp(p_start)`，或直接以解析式 `comfort_progress` 与单调性判断（`p_start > comfort_progress ⟺ base_temp(p_start) < comfort_temp`）。`enable_simple_code == false` 时跳过全部校验（需求 27.7）。
+
+### 分数分量日志增强（需求 28）
+
+- 新增 `Evaluator::score_components(ctx) -> (total, weight_full·full, w_eff·simple)`（或就地用 `full_score_component`/`simple_score_component` 与当前权重合成），供下列日志点统一输出「综合 / 全码分量 / 简码分量」：`[T0] 初始化完成`、`[T0] 最终爬山改进`、`[T0] 坐标下降精炼`、`[T0] 最终得分`，以及最终结果块的「综合得分」（需求 28.1-28.4）。
+- 新增 `Evaluator::get_simple_metric_scores(ctx) -> SimpleMetricScores`，镜像 `get_metric_scores`：对简码五项子指标（重码数、重码率、覆盖率、加权当量、分布偏差）分别返回 `子权重 × 子指标 × 简码缩放因子` 的加权子分数；其和等于简码总分（需求 28.6）。最终结果块「简码」部分按 `(分: X)` 风格逐项输出（需求 28.5）。
+- 全码相关日志的内容与数值保持不变；`enable_simple_code == false` 时简码分量与子分数显示为 0 或按既有方式省略（需求 28.7）。

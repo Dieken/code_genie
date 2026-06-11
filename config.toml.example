@@ -75,9 +75,9 @@ equiv = 0.2              # 当量权重
 dist = 0.2               # 分布偏差权重
 
 # 简码评估性能优化：激活、权重渐进、候选字与对账配置
-simple_start_progress = 0.6      # 简码计算激活进度阈值（进度 = 当前步/总步数，默认 0.6）
+simple_start_progress = 0.4      # 简码计算激活进度阈值（进度 = 当前步/总步数；建议落在舒适区前沿，默认 0.4）
 simple_ramp_progress = 0.1       # 有效权重从 0 渐进到目标权重的进度长度（默认 0.1）
-simple_activation_reheat = 1.0   # 激活当刻温度升温倍率（默认 1.0 不升温，独立于 reheat_factor）
+simple_activation_reheat = 1.2   # 激活当刻温度升温倍率（独立于 reheat_factor；合理范围 [1.0, temp_start/激活基温]，默认 1.2）
 simple_coverage_ratio = 0.90     # 候选字累计字频覆盖率阈值（默认 0.90）
 reconcile_interval_ratio = 0.05  # 周期对账间隔比例，M = floor(total_steps × ratio)，M ≥ 1（默认 0.05）
 simple_assign_mode = "efficiency" # 桶内出简排序模式："frequency" 或 "efficiency"（默认 "efficiency"）

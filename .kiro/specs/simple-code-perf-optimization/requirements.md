@@ -350,3 +350,51 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 4. THE 激活时一次性重建的首选字结果 SHALL 与「自始至终对每步移动增量维护首选字」在激活时刻的状态完全一致（正确性保证）。
 5. THE 「激活前不维护、激活时重建」策略 SHALL 成立，因为激活前没有任何读者读取首选标记（`has_simple_impact` 在 `!simple_active` 时短路返回 false，简码分量贡献为 0），且其重建开销为 O(字数)，远小于激活前在每步移动里反复增量维护的累计开销。
 6. WHERE 简码整体关闭（`enable_simple_code == false`），THE 全码优化的行为、逻辑与单步热路径性能 SHALL 与基线版本 `27fcc6d` 保持一致（仅允许日志层面的差异）。
+
+### 需求 26：简码激活时重定价最优解（修复最优解冻结）
+
+**用户故事：** 作为优化器使用者，我希望简码激活后最优解能真实反映其简码分量，从而让激活后的简码优化移动能够更新最优解，而不是被一个「简码记为 0」的过期最优解永久压制。
+
+#### 背景
+
+延迟激活前 `simple_active == false`，`simple_score_component` 返回 0，故此阶段捕获的最优解其 `best_simple_score` 被存为 0。激活后比较用 `best_total = weight_full·best_full_score + w_eff·best_simple_score`，其中 `best_simple_score` 仍是过期的 0，使该最优解的综合代价被系统性低估、成为「不可战胜的幽灵最优」；激活后任何真实方案（含真实简码分量）都比它差，最优解从此冻结，简码实际不再被优化（见 22:43 运行日志：激活后 🏆最优 长期停在 `0.0631 / 简码:0.0000`）。
+
+#### 验收标准
+
+1. WHEN 简码计算被激活（`activate_simple` 由延迟激活闩锁触发），THE 退火器 SHALL 为当前 `best_assignment` 重新计算其真实简码分量并写回 `best_simple_score`，使最优解的综合代价 `best_total` 反映真实简码分数。
+2. THE 重定价 SHALL 同步更新 `best_full_score`、`best_metrics`、`best_simple_metrics` 与 `best_score`，使最优解的各项记录与重定价后的 `best_assignment` 一致。
+3. WHEN 重定价完成后，THE 退火器 SHALL 以重定价后的 `best_total` 作为后续「是否更新最优解」的比较基准，使激活后综合得分更优的方案能够正常成为新的最优解。
+4. THE 重定价 SHALL 为一次性操作（仅在激活那一刻执行一次），其代价为 O(简码全量构建)，不引入逐步开销。
+5. WHERE 简码整体关闭（`enable_simple_code == false`），THE 重定价逻辑 SHALL 不被触发，最优解维护与基线一致（零变化）。
+
+### 需求 27：激活时机与升温的默认值调整及动态校验告警
+
+**用户故事：** 作为优化器使用者，我希望简码激活默认发生在仍有足够退火温度的阶段，并在激活相关参数不合理时收到基于实际降温曲线动态计算的告警与建议值，从而让简码获得有效的优化空间。
+
+#### 背景
+
+当激活点落在降温曲线的冷却尾段（`base_temp(p_start) < comfort_temp`，等价于 `p_start > comfort_progress`）时，简码几乎没有腾挪空间。降温曲线的舒适区进度 `comfort_progress = ln(comfort_temp / temp_start) / ln(temp_end / temp_start)`，舒适区以 `comfort_progress` 为中心、`comfort_width` 为高斯标准差。
+
+#### 验收标准
+
+1. THE 默认值 SHALL 调整为 `simple_start_progress = 0.4`、`simple_activation_reheat = 1.2`（激活落在舒适区前沿、并在激活瞬间给一个温和升温脉冲以适应目标函数突变）；`simple_ramp_progress` 默认值保持 `0.1`（权重在 p=0.4→0.5 渐进到 W，在舒适区中心附近达标）。
+2. THE 上述默认值调整 SHALL 同步到代码内置默认值、`config.toml.example` 与 `moling/config.toml`（忽略 `code_genie2/`），并保持三者一致（需求 18.4），且在两个 toml 中对 `simple_start_progress` 与 `simple_activation_reheat` 附简要注释说明取值含义与推荐区间。
+3. WHEN `simple_activation_reheat < 1.0`，THE 优化器 SHALL 将其钳制为 `1.0` 并输出告警（升温倍率小于 1 等于激活即降温，属误配）。
+4. THE 优化器 SHALL 基于降温曲线动态计算 `simple_activation_reheat` 的合理范围 `[reheat_lo, reheat_hi]`，其中 `reheat_hi = temp_start / base_temp(p_start)`（升温脉冲不超过初始温度，否则摧毁已退火的全码解），`reheat_lo = 1.0`；并给出推荐值 `reheat_rec = clamp(comfort_temp / base_temp(p_start), 1.0, reheat_hi)`（使激活温度恰好回升到舒适温度）。WHEN `simple_activation_reheat` 超出 `[reheat_lo, reheat_hi]`（即 `> reheat_hi`，`< reheat_lo` 已由 27.3 钳制），THE 优化器 SHALL 输出告警并在告警中给出动态算出的合理范围与推荐值；该判据 SHALL 不钳制上界，仅提示。
+5. WHEN `simple_start_progress > comfort_progress`（等价于激活基温低于 `comfort_temp`，激活落在冷却尾段），THE 优化器 SHALL 输出告警，提示简码激活温度过低、优化空间有限，并给出基于降温曲线动态算出的建议区间 `[comfort_progress − comfort_width, comfort_progress]`（推荐值 `comfort_progress − comfort_width/2`）；该判据 SHALL 不钳制，仅提示。
+6. THE 上述所有告警的阈值、合理范围与建议值 SHALL 基于 `temp_start`、`temp_end`、`comfort_temp`、`comfort_width`、`total_steps` 与 `simple_start_progress` 在运行时动态计算（经 `TemperatureSchedule` 求 `base_temp(p_start)` 与 `comfort_progress = ln(comfort_temp/temp_start)/ln(temp_end/temp_start)`），SHALL NOT 写死任何具体温度或进度常量。
+7. WHERE 简码整体关闭（`enable_simple_code == false`），THE 上述激活相关校验与告警 SHALL 不触发。
+
+### 需求 28：分数分量日志增强
+
+**用户故事：** 作为优化器使用者，我希望在初始化、最终精炼与最终结果处都能看到「综合得分 / 全码分量 / 简码分量」的拆分，以及简码各子指标的子分数，从而便于观察简码优化的实际效果与各指标贡献。
+
+#### 验收标准
+
+1. WHEN 输出 `[T0] 初始化完成`，THE 优化器 SHALL 像 `[T0] 进度` 行一样追加输出综合得分及其全码分量、简码分量。
+2. WHEN 输出 `[T0] 最终爬山改进` 与 `[T0] 坐标下降精炼`，THE 优化器 SHALL 追加输出对应得分的综合 / 全码分量 / 简码分量。
+3. WHEN 输出 `[T0] 最终得分`，THE 优化器 SHALL 追加输出综合 / 全码分量 / 简码分量。
+4. WHEN 输出最终结果块的「综合得分」，THE 优化器 SHALL 同时输出其全码分量与简码分量。
+5. WHEN 输出最终结果块的「简码」部分，THE 优化器 SHALL 在保留简码总分的同时，为每个简码子指标（重码数、重码率、覆盖率、加权当量、分布偏差）输出其加权子分数，呈现方式与「全码」块的 `(分: X)` 一致。
+6. THE 简码各子分数之和（按简码子权重与简码缩放因子加权）SHALL 与所报告的简码总分一致（口径自洽）。
+7. WHERE 简码整体关闭（`enable_simple_code == false`），THE 新增的简码分量与简码子分数 SHALL 显示为 0 或按既有方式省略，且不改变全码相关日志的内容与数值。

@@ -20,9 +20,9 @@ enum Expected {
 }
 
 const EXPECTED_ITEMS: &[(&str, Expected)] = &[
-    ("simple_start_progress", Expected::Float(0.6)),
+    ("simple_start_progress", Expected::Float(0.4)),
     ("simple_ramp_progress", Expected::Float(0.1)),
-    ("simple_activation_reheat", Expected::Float(1.0)),
+    ("simple_activation_reheat", Expected::Float(1.2)),
     ("simple_coverage_ratio", Expected::Float(0.90)),
     ("reconcile_interval_ratio", Expected::Float(0.05)),
     ("simple_assign_mode", Expected::Str("efficiency")),

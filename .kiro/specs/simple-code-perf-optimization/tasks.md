@@ -335,6 +335,38 @@
     - `first_candidate_tests::make_ctx` 增 `enable_simple` 参数：一致性属性测试在简码激活下覆盖增量维护路径；resort 缓冲不增长测试在简码关闭下覆盖纯全码路径
     - _Requirements: 25.1, 25.4_
 
+- [x] 22. 简码激活时重定价最优解（需求 26）
+  - [x] 22.1 激活分支内对 `best_assignment` 重算真实简码分量
+    - 紧随 `activate_simple` 之后，用 `Evaluator::new(ctx, &best_assignment)` 重算 `best_full_score`/`best_simple_score`/`best_metrics`/`best_simple_metrics`/`best_score`
+    - 仅简码启用时执行；一次性，O(简码全量构建)
+    - _Requirements: 26.1, 26.2, 26.3, 26.4, 26.5_
+  - [x] 22.2 测试：激活后最优解可被综合更优解更新
+    - 由现有端到端激活测试覆盖；重定价逻辑保证 `best_simple_score` 不再恒为 0
+    - _Requirements: 26.1, 26.3_
+
+- [x] 23. 激活时机默认值调整与动态校验告警（需求 27）
+  - [x] 23.1 默认值调整：`simple_start_progress` 0.6→0.4、`simple_activation_reheat` 1.0→1.2
+    - 改 `default_simple_start_progress`、`default_simple_activation_reheat`；同步 `config.toml.example` 与 `moling/config.toml`（忽略 `code_genie2/`），对两项附注释与推荐区间
+    - _Requirements: 27.1, 27.2_
+  - [x] 23.2 动态校验告警（钳制 + 温度建议分置）
+    - `validate_simple_activation` 内：`reheat < 1.0` 钳 1.0 + 告警；`simulated_annealing` 改从 clamped 克隆读 `simple_reheat`
+    - `simulated_annealing` thread 0（复用已构建 `schedule`，只打印一次）：`reheat > reheat_hi`（`reheat_hi = temp_start/base_temp(p_start)`）告警并给合理范围 `[1.0, reheat_hi]` 与推荐；`p_start > comfort_progress` 告警并给建议区间
+    - 阈值/范围/建议值由 `temp_start/temp_end/comfort_temp/comfort_width/total_steps/simple_start_progress` 经 `TemperatureSchedule` 与解析式动态计算，不写死；简码关闭时跳过
+    - _Requirements: 27.3, 27.4, 27.5, 27.6, 27.7_
+  - [x] 23.3 测试：reheat<1 钳制；>=1 不钳制
+    - _Requirements: 27.3, 27.4_
+
+- [x] 24. 分数分量日志增强（需求 28）
+  - [x] 24.1 三分量得分日志
+    - `[T0] 初始化完成`/`最终爬山改进`/`坐标下降精炼`/`最终得分` 及最终结果块「综合得分」追加 综合/全码分量/简码分量
+    - _Requirements: 28.1, 28.2, 28.3, 28.4_
+  - [x] 24.2 简码子分数
+    - 新增 `SimpleMetricScores` 与 `Evaluator::get_simple_metric_scores`（镜像 `compute_simple_score`）；最终结果块「简码」各子指标按 `(分: X)` 输出；子分数之和等于简码总分
+    - _Requirements: 28.5, 28.6, 28.7_
+  - [x] 24.3 测试：子分数自洽与简码关闭归零
+    - `get_simple_metric_scores` 子分数之和等于 total 且等于 `get_metric_scores().total_simple`；简码关闭时全为 0
+    - _Requirements: 28.6, 28.7_
+
 ## Task Dependency Graph
 
 ```json

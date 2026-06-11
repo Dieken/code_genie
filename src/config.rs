@@ -76,13 +76,13 @@ pub struct SimpleCodeWeights {
     pub collision_rate: f64,
 
     // ---- 简码评估性能优化新增项（需求 17/18） ----
-    /// 简码计算激活进度阈值（默认 0.6）
+    /// 简码计算激活进度阈值（默认 0.4）
     #[serde(default = "default_simple_start_progress")]
     pub simple_start_progress: f64,
     /// 权重从 0 渐进到 W 的进度长度（默认 0.1）
     #[serde(default = "default_simple_ramp_progress")]
     pub simple_ramp_progress: f64,
-    /// 激活当刻升温倍率（默认 1.0，不升温，独立于 reheat_factor）
+    /// 激活当刻升温倍率（默认 1.2，独立于 reheat_factor）
     #[serde(default = "default_simple_activation_reheat")]
     pub simple_activation_reheat: f64,
     /// 候选字累计字频覆盖率阈值（默认 0.90）
@@ -96,9 +96,9 @@ pub struct SimpleCodeWeights {
     pub simple_assign_mode: String,
 }
 
-fn default_simple_start_progress() -> f64 { 0.6 }
+fn default_simple_start_progress() -> f64 { 0.4 }
 fn default_simple_ramp_progress() -> f64 { 0.1 }
-fn default_simple_activation_reheat() -> f64 { 1.0 }
+fn default_simple_activation_reheat() -> f64 { 1.2 }
 fn default_simple_coverage_ratio() -> f64 { 0.90 }
 fn default_reconcile_interval_ratio() -> f64 { 0.05 }
 fn default_simple_assign_mode() -> String { "efficiency".to_string() }
@@ -475,6 +475,15 @@ impl Config {
                 clamped_ramp
             );
             sc.simple_ramp_progress = clamped_ramp;
+        }
+
+        // 激活升温倍率小于 1 等于「激活即降温」，属误配；钳制为 1.0（需求 27.3）。
+        if sc.simple_activation_reheat < 1.0 {
+            eprintln!(
+                "⚠️ 警告：simple_activation_reheat < 1.0 (当前: {:.3})，钳制为 1.0",
+                sc.simple_activation_reheat
+            );
+            sc.simple_activation_reheat = 1.0;
         }
 
         // (start, ramp) == (0, 0) → 从开始即硬激活（兼容档，需求 13.5）
@@ -934,9 +943,9 @@ dist_max = 8.0
         // 应解析成功且全部取既定默认值（需求 4.1/7.2/8.2/9.1/12.1/17.1）
         let cfg: Config = toml::from_str(minimal_config_prefix()).expect("解析失败");
         let sc = &cfg.weights.simple_code;
-        assert_eq!(sc.simple_start_progress, 0.6);
+        assert_eq!(sc.simple_start_progress, 0.4);
         assert_eq!(sc.simple_ramp_progress, 0.1);
-        assert_eq!(sc.simple_activation_reheat, 1.0);
+        assert_eq!(sc.simple_activation_reheat, 1.2);
         assert_eq!(sc.simple_coverage_ratio, 0.90);
         assert_eq!(sc.reconcile_interval_ratio, 0.05);
         assert_eq!(sc.simple_assign_mode, "efficiency");
@@ -1068,5 +1077,23 @@ dist_max = 8.0
             let expected_hard = start_after_neg == 0.0 && ramp_after_neg == 0.0;
             prop_assert_eq!(hard, expected_hard);
         }
+    }
+
+    // 需求 27.3：simple_activation_reheat < 1.0 应被钳制为 1.0 并告警。
+    #[test]
+    fn test_reheat_below_one_clamped_to_one() {
+        let mut cfg = Config::default();
+        cfg.weights.simple_code.simple_activation_reheat = 0.5;
+        cfg.validate_simple_activation();
+        assert_eq!(
+            cfg.weights.simple_code.simple_activation_reheat, 1.0,
+            "reheat < 1.0 应被钳制为 1.0（需求 27.3）"
+        );
+
+        // >= 1.0 的值不被钳制（上界仅告警、不钳制，需求 27.4）。
+        let mut cfg2 = Config::default();
+        cfg2.weights.simple_code.simple_activation_reheat = 3.0;
+        cfg2.validate_simple_activation();
+        assert_eq!(cfg2.weights.simple_code.simple_activation_reheat, 3.0);
     }
 }

@@ -847,18 +847,18 @@ pub fn simulated_annealing(
     let simple_enabled = ctx.enable_simple_code && !ctx.simple_config.levels.is_empty();
     // 钳制激活/渐进配置并取得硬激活标记。`validate_simple_activation` 需 `&mut self`，
     // 而本函数仅持有 `&Config`，故克隆一份 cfg 调用校验，不修改入参（最小改动）。
-    let (p_start, p_ramp, hard_activate) = {
+    let (p_start, p_ramp, hard_activate, simple_reheat) = {
         let mut cfg_clamped = cfg.clone();
         let hard = cfg_clamped.validate_simple_activation();
         (
             cfg_clamped.weights.simple_code.simple_start_progress,
             cfg_clamped.weights.simple_code.simple_ramp_progress,
             hard,
+            cfg_clamped.weights.simple_code.simple_activation_reheat,
         )
     };
     // 目标简码权重 W、激活升温倍率（独立于 reheat_factor）、对账间隔比例。
     let w_target = ctx.weights.weight_simple_code;
-    let simple_reheat = cfg.weights.simple_code.simple_activation_reheat;
     let reconcile_ratio = cfg.weights.simple_code.reconcile_interval_ratio;
     let weight_full = ctx.weights.weight_full_code;
 
@@ -894,9 +894,12 @@ pub fn simulated_annealing(
 
         let m = &best_metrics;
         let scores = evaluator.get_metric_scores(ctx);
+        // 三分量（需求 28.1）：初始化阶段简码尚未激活，简码分量为 0。
+        let init_full_comp = weight_full * best_full_score;
+        let init_simple_comp = 0.0;
         println!(
-            "   [T0] 初始化完成 | 得分: {:.4} | 重码: {}({:.4}) 重码率: {:.4}%({:.4}) 当量: {:.4}({:.4}) CV: {:.4}({:.4}) 分布: {:.4}({:.4})",
-            best_score,
+            "   [T0] 初始化完成 | 得分: {:.4} (全码:{:.4} 简码:{:.4}) | 重码: {}({:.4}) 重码率: {:.4}%({:.4}) 当量: {:.4}({:.4}) CV: {:.4}({:.4}) 分布: {:.4}({:.4})",
+            best_score, init_full_comp, init_simple_comp,
             m.collision_count, scores.collision_count,
             m.collision_rate * 100.0, scores.collision_rate,
             m.equiv_mean, scores.equivalence,
@@ -924,6 +927,47 @@ pub fn simulated_annealing(
 
     if thread_id == 0 {
         schedule.print_preview(steps);
+
+        // === 激活时机/升温的动态校验告警（需求 27.4/27.5/27.6）===
+        // 阈值与建议值全部由降温曲线动态算出，不写死。仅 thread 0 输出一次。
+        if simple_enabled {
+            let ts = cfg.annealing.temp_start;
+            let te = cfg.annealing.temp_end;
+            let ct = cfg.annealing.comfort_temp;
+            let cw = cfg.annealing.comfort_width;
+            // 舒适区进度 comfort_progress = ln(comfort_temp/temp_start)/ln(temp_end/temp_start)
+            let comfort_progress = if ts <= te || ct >= ts {
+                0.0
+            } else if ct <= te {
+                1.0
+            } else {
+                (ct / ts).ln() / (te / ts).ln()
+            };
+            // 激活基温 base_temp(p_start)
+            let bt = schedule.get(((p_start * steps as f64) as usize).min(steps), steps);
+
+            // (1) 升温脉冲过大：base_temp(p_start) × reheat 超过初温，会摧毁已退火的全码解（需求 27.4）。
+            if bt > 0.0 {
+                let reheat_hi = ts / bt;
+                let reheat_rec = (ct / bt).clamp(1.0, reheat_hi.max(1.0));
+                if simple_reheat > reheat_hi {
+                    eprintln!(
+                        "⚠️ 警告：simple_activation_reheat={:.2} 过大，激活温度 {:.2e}×{:.2}={:.2e} 超过初温 {:.2e}，将摧毁已退火的全码解；合理范围 [1.0, {:.2}]，推荐 {:.2}",
+                        simple_reheat, bt, simple_reheat, bt * simple_reheat, ts, reheat_hi, reheat_rec
+                    );
+                }
+            }
+
+            // (2) 激活点过晚：p_start 越过舒适区中心（基温 < comfort_temp），简码优化空间有限（需求 27.5）。
+            if p_start > comfort_progress {
+                let lo = (comfort_progress - cw).max(0.0);
+                let rec = (comfort_progress - cw / 2.0).max(0.0);
+                eprintln!(
+                    "⚠️ 警告：simple_start_progress={:.3} 偏晚（激活基温 {:.2e} < 舒适温度 {:.2e}，已进入冷却尾段），简码优化空间有限；建议区间 [{:.3}, {:.3}]，推荐 {:.3}",
+                    p_start, bt, ct, lo, comfort_progress, rec
+                );
+            }
+        }
     }
 
     let mut temp_multiplier = 1.0f64;
@@ -985,6 +1029,33 @@ pub fn simulated_annealing(
             // 经纯函数 `simple_activation_multiplier` 计算，仅依赖 `simple_activation_reheat`。
             temp_multiplier = simple_activation_multiplier(temp_multiplier, simple_reheat);
             simple_activated = true;
+
+            // === 需求 26：激活时重定价最优解 ===
+            // 激活前 simple_active=false，simple_score_component 返回 0，故此前捕获的最优解
+            // best_simple_score 被存为 0；激活后若不重定价，该解的综合代价被系统性低估、成为
+            // 「不可战胜的幽灵最优」，使最优解永久冻结、简码不再被优化。此处对当前 best_assignment
+            // 重算真实简码分量并刷新最优解记录（一次性，O(简码全量构建)）。
+            // 注意：best_assignment 可能与当前 assignment 不同，需单独构建评估器。
+            {
+                let mut best_eval = Evaluator::new(ctx, &best_assignment);
+                best_eval.simple_active = true;
+                best_eval.current_simple_weight = w_target;
+                best_eval.score_dirty = true;
+                best_eval.full_score_dirty = true;
+                best_full_score = best_eval.full_score_component(ctx);
+                best_simple_score = best_eval.simple_score_component(ctx);
+                best_metrics = best_eval.get_metrics(ctx);
+                best_simple_metrics = best_eval.get_simple_metrics(ctx);
+                // 以激活当刻的有效权重合成 best_score，保持与后续逐步比较口径一致。
+                let w_eff_now = w_simple_eff(p, p_start, p_ramp, w_target);
+                best_score = Evaluator::best_total(
+                    weight_full,
+                    best_full_score,
+                    w_eff_now,
+                    best_simple_score,
+                );
+                last_best_score = best_score;
+            }
 
             if thread_id == 0 {
                 println!(
@@ -1279,12 +1350,15 @@ pub fn simulated_annealing(
     if final_score < best_score {
         best_assignment = final_assignment;
         best_score = final_score;
-        let eval = Evaluator::new(ctx, &best_assignment);
+        let mut eval = Evaluator::new(ctx, &best_assignment);
         best_metrics = eval.get_metrics(ctx);
         best_simple_metrics = eval.get_simple_metrics(ctx);
 
         if thread_id == 0 {
-            println!("   [T0] 最终爬山改进 → 得分: {:.4}", best_score);
+            // 三分量（需求 28.2）：与精炼内部评估器同口径（weight_full·full + w_target·simple）。
+            let fc = weight_full * eval.full_score_component(ctx);
+            let sc = w_target * eval.simple_score_component(ctx);
+            println!("   [T0] 最终爬山改进 → 得分: {:.4} (全码:{:.4} 简码:{:.4})", best_score, fc, sc);
         }
     }
 
@@ -1295,18 +1369,31 @@ pub fn simulated_annealing(
         if cd_score < best_score {
             best_assignment = cd_assignment;
             best_score = cd_score;
-            let eval = Evaluator::new(ctx, &best_assignment);
+            let mut eval = Evaluator::new(ctx, &best_assignment);
             best_metrics = eval.get_metrics(ctx);
             best_simple_metrics = eval.get_simple_metrics(ctx);
 
             if thread_id == 0 {
-                println!("   [T0] 坐标下降精炼: {:.4} → {:.4}", score_before_cd, best_score);
+                // 三分量（需求 28.2）。
+                let fc = weight_full * eval.full_score_component(ctx);
+                let sc = w_target * eval.simple_score_component(ctx);
+                println!(
+                    "   [T0] 坐标下降精炼: {:.4} → {:.4} (全码:{:.4} 简码:{:.4})",
+                    score_before_cd, best_score, fc, sc
+                );
             }
         }
     }
 
     if thread_id == 0 {
-        println!("   [T0] 最终得分: {:.4} 重码: {}", best_score, best_metrics.collision_count);
+        // 三分量（需求 28.3）。
+        let mut eval = Evaluator::new(ctx, &best_assignment);
+        let fc = weight_full * eval.full_score_component(ctx);
+        let sc = w_target * eval.simple_score_component(ctx);
+        println!(
+            "   [T0] 最终得分: {:.4} (全码:{:.4} 简码:{:.4}) 重码: {}",
+            best_score, fc, sc, best_metrics.collision_count
+        );
     }
 
     (best_assignment, best_score, best_metrics, best_simple_metrics)
@@ -1571,8 +1658,8 @@ mod activation_reheat_tests {
     fn test_activation_reheat_default_and_independent_field() {
         let cfg = Config::default();
         assert_eq!(
-            cfg.weights.simple_code.simple_activation_reheat, 1.0,
-            "simple_activation_reheat 默认应为 1.0（不升温，需求 12.1）"
+            cfg.weights.simple_code.simple_activation_reheat, 1.2,
+            "simple_activation_reheat 默认应为 1.2（激活温和升温，需求 27.1）"
         );
         // 两者是不同字段、不同默认值，证明配置层面相互独立（需求 12.3）。
         assert_eq!(cfg.annealing.reheat_factor, 1.25);

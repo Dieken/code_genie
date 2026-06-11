@@ -212,6 +212,18 @@ pub struct MetricScores {
     pub total: f64,
 }
 
+/// 简码各子指标的分数分量（用于日志输出，需求 28.5/28.6）。
+/// 各子分数之和等于 `total`（简码总分，未乘综合权重 weight_simple_code）。
+#[derive(Clone, Copy, Default)]
+pub struct SimpleMetricScores {
+    pub freq: f64,
+    pub equiv: f64,
+    pub dist: f64,
+    pub collision_count: f64,
+    pub collision_rate: f64,
+    pub total: f64,
+}
+
 /// 简码评估指标
 #[derive(Clone, Copy, Default)]
 pub struct SimpleMetrics {

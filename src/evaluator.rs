@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 
 use crate::context::OptContext;
 use crate::types::{
-    KeyDistConfig, MetricScores, Metrics, SimpleAssignMode, SimpleMetrics, EQUIV_TABLE_SIZE,
+    KeyDistConfig, MetricScores, Metrics, SimpleAssignMode, SimpleMetricScores, SimpleMetrics, EQUIV_TABLE_SIZE,
     KEY_SPACE,
 };
 
@@ -2213,6 +2213,49 @@ impl Evaluator {
         }
     }
 
+    /// 获取简码各子指标的分数分量（需求 28.5/28.6），镜像 `SimpleEvaluator::compute_simple_score`
+    /// 的分项拆解。各子分数之和等于简码总分（`total`，未乘综合权重 `weight_simple_code`）。
+    /// 简码未启用或无评估器时返回全 0（需求 28.7）。
+    pub fn get_simple_metric_scores(&self, ctx: &OptContext) -> SimpleMetricScores {
+        if !ctx.enable_simple_code || self.simple_eval.is_none() {
+            return SimpleMetricScores::default();
+        }
+        let sm = self.get_simple_metrics(ctx);
+        let w = &ctx.weights;
+        let sc = &ctx.scale_config;
+        let (freq, equiv, dist, cc, cr) = if ctx.targets_config.simple_code.enabled {
+            let t = &ctx.targets_config.simple_code;
+            let lw = t.low_weight;
+            let comp = |v: f64, target: f64, s: f64, weight: f64| -> f64 {
+                let d = (v - target).max(0.0) * s;
+                weight * (d + d * d + lw * (v * s))
+            };
+            (
+                comp(1.0 - sm.weighted_freq_coverage, 1.0 - t.freq, sc.simple_freq, w.simple_weight_freq),
+                comp(sm.equiv_mean, t.equiv, sc.simple_equiv, w.simple_weight_equiv),
+                comp(sm.dist_deviation, t.dist, sc.simple_dist, w.simple_weight_dist),
+                comp(sm.collision_count as f64, t.collision_count, sc.simple_collision_count, w.simple_weight_collision_count),
+                comp(sm.collision_rate, t.collision_rate, sc.simple_collision_rate, w.simple_weight_collision_rate),
+            )
+        } else {
+            (
+                w.simple_weight_freq * (1.0 - sm.weighted_freq_coverage) * sc.simple_freq,
+                w.simple_weight_equiv * sm.equiv_mean * sc.simple_equiv,
+                w.simple_weight_dist * sm.dist_deviation * sc.simple_dist,
+                w.simple_weight_collision_count * (sm.collision_count as f64) * sc.simple_collision_count,
+                w.simple_weight_collision_rate * sm.collision_rate * sc.simple_collision_rate,
+            )
+        };
+        SimpleMetricScores {
+            freq,
+            equiv,
+            dist,
+            collision_count: cc,
+            collision_rate: cr,
+            total: freq + equiv + dist + cc + cr,
+        }
+    }
+
     /// 检查是否有简码影响
     pub fn has_simple_impact(&self, ctx: &OptContext, group: usize) -> bool {
         // 简码未激活时（延迟激活早期探索阶段，需求 8.5/10.2）简码分量贡献恒为 0，
@@ -2843,6 +2886,47 @@ mod first_candidate_tests {
                 prop_assert_eq!(n_true, n_nonempty);
             }
         }
+    }
+
+    // 需求 28.6：简码各子分数之和等于简码总分，且等于综合算分里的 total_simple（口径自洽）。
+    #[test]
+    fn test_simple_metric_scores_sum_consistency() {
+        let allowed: [u8; 4] = [0, 1, 2, 3];
+        let ctx = make_ctx(&[9u64, 7, 5, 3, 2, 1], &allowed, true);
+        let n = 6usize;
+        let assignment = vec![0u8, 1, 2, 3, 0, 1];
+        let mut ev = Evaluator::new(&ctx, &assignment);
+        assert!(ev.simple_eval.is_some(), "简码启用时应有简码评估器");
+
+        let sub = ev.get_simple_metric_scores(&ctx);
+        let sum = sub.freq + sub.equiv + sub.dist + sub.collision_count + sub.collision_rate;
+        assert!(
+            (sum - sub.total).abs() < 1e-9,
+            "简码子分数之和 {} 应等于 total {}",
+            sum, sub.total
+        );
+
+        // 与综合算分的 total_simple 同口径（均为未乘 weight_simple_code 的简码总分）。
+        let total_simple = ev.get_metric_scores(&ctx).total_simple;
+        assert!(
+            (sub.total - total_simple).abs() < 1e-9,
+            "get_simple_metric_scores.total {} 应等于 get_metric_scores.total_simple {}",
+            sub.total, total_simple
+        );
+    }
+
+    // 需求 28.7：简码关闭时简码子分数全为 0。
+    #[test]
+    fn test_simple_metric_scores_zero_when_disabled() {
+        let allowed: [u8; 4] = [0, 1, 2, 3];
+        let ctx = make_ctx(&[5u64, 4, 3, 2, 1], &allowed, false);
+        let assignment = vec![0u8; 5];
+        let ev = Evaluator::new(&ctx, &assignment);
+        let sub = ev.get_simple_metric_scores(&ctx);
+        assert_eq!(sub.total, 0.0);
+        assert_eq!(sub.freq, 0.0);
+        assert_eq!(sub.equiv, 0.0);
+        assert_eq!(sub.dist, 0.0);
     }
 }
 
