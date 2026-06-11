@@ -99,7 +99,7 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 
 1. THE 主评估器 SHALL 为每个汉字维护首选标记 `is_first_candidate`，该标记表示该汉字是否为其全码桶中的首选字。
 2. THE 首选标记 `is_first_candidate` SHALL 仅依赖全码桶，且与简码分配无关。
-3. WHEN 一个汉字所在的全码桶因移动发生变化，THE 主评估器 SHALL 增量更新受影响汉字的首选标记 `is_first_candidate`。
+3. WHEN 一个汉字所在的全码桶因移动发生变化且简码已激活（`simple_active == true`），THE 主评估器 SHALL 增量更新受影响汉字的首选标记 `is_first_candidate`；WHILE 简码未激活（关闭或延迟激活前），THE 主评估器 SHALL 跳过首选标记维护以保持全码热路径基线性能（见需求 25）。
 4. WHEN 简码效率模式需要选重键长 `sel_len`，THE 简码评估器 SHALL 在 `is_first_candidate` 为真时取 `sel_len = 0`、为假时取 `sel_len = 1`。
 
 ### 需求 6：简码桶内局部排序策略
@@ -337,3 +337,16 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 2. THE 优化器 SHALL 使输出的简码顺序与评估器分配简码的顺序一致：按级别升序、同级别按简码桶编码升序、桶内按选择排序键 `cmp_in_bucket`。
 3. WHERE 某简码桶被固定简码占用，THE 优化器 SHALL 使该桶输出的优化出简数不超过 `code_num` 减去固定占用，且「固定占用 + 优化出简」不超过 `code_num`。
 4. THE 优化器 SHALL 在输出文件中保留固定简码及其结尾下划线，且不与优化出简重复。
+
+### 需求 25：首选字维护仅在简码激活时进行（保持全码路径基线性能）
+
+**用户故事：** 作为优化器使用者，我希望简码关闭或尚未激活时，全码优化热路径不为简码维护任何额外状态，从而使全码优化的行为、逻辑与性能与基线版本完全一致。
+
+#### 验收标准
+
+1. WHILE `simple_active == false`（简码关闭或延迟激活前），THE 主评估器 SHALL 在 `update_char` 中跳过首选字（`is_first_candidate`/`bucket_first`）的全部维护，仅维护全码桶聚合（`bucket_freq_sum`/`bucket_max_freq`/碰撞计数等），其行为与基线版本逐字节等价。
+2. WHEN `update_char` 在 `simple_active == false` 下需要重扫桶最大频率，THE 主评估器 SHALL 使用仅求最大频率的 `rescan_bucket_max`（不跟踪首选字），而非求 (max, 首选) 的 `rescan_bucket_first`。
+3. WHEN 简码计算被激活（`activate_simple`），THE 主评估器 SHALL 在构建 `SimpleEvaluator` 之前，据当前 `code_to_chars` 一次性全量重建 `is_first_candidate`/`bucket_first`，使其反映激活时刻的分配。
+4. THE 激活时一次性重建的首选字结果 SHALL 与「自始至终对每步移动增量维护首选字」在激活时刻的状态完全一致（正确性保证）。
+5. THE 「激活前不维护、激活时重建」策略 SHALL 成立，因为激活前没有任何读者读取首选标记（`has_simple_impact` 在 `!simple_active` 时短路返回 false，简码分量贡献为 0），且其重建开销为 O(字数)，远小于激活前在每步移动里反复增量维护的累计开销。
+6. WHERE 简码整体关闭（`enable_simple_code == false`），THE 全码优化的行为、逻辑与单步热路径性能 SHALL 与基线版本 `27fcc6d` 保持一致（仅允许日志层面的差异）。

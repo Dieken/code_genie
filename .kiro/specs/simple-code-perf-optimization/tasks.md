@@ -322,6 +322,19 @@
     - 校准变为「全码优化 0 次简码构建 + 观测 1 次」；Init 共用 `multi_start_init` 自动同样受益，仅保留 SA 主循环自身一次必要 `Evaluator::new`
     - _Requirements: 24.2, 24.6, 24.7, 24.8_
 
+- [x] 21. 首选字维护仅在简码激活时进行，消除全码路径回归（需求 25）
+  - [x] 21.1 `update_char` 首选字维护门控
+    - 移除/插入两分支的 `is_first_candidate`/`bucket_first` 维护改为仅 `simple_active` 为真时执行
+    - 新增仅求最大频率的 `rescan_bucket_max`；`simple_active` 为假时移除分支用它、插入分支只更新 max（与基线 `27fcc6d` 逐字节等价）
+    - _Requirements: 25.1, 25.2, 25.6_
+  - [x] 21.2 激活时一次性重建首选字
+    - 新增 `rebuild_first_candidates(ctx)`，在 `activate_simple` 置 `simple_active=true` 且构建 `SimpleEvaluator` 之前调用
+    - 因激活前无人读取首选标记（`has_simple_impact` 短路），重建结果与全程增量维护在激活时刻一致
+    - _Requirements: 25.3, 25.4, 25.5_
+  - [x] 21.3 测试覆盖
+    - `first_candidate_tests::make_ctx` 增 `enable_simple` 参数：一致性属性测试在简码激活下覆盖增量维护路径；resort 缓冲不增长测试在简码关闭下覆盖纯全码路径
+    - _Requirements: 25.1, 25.4_
+
 ## Task Dependency Graph
 
 ```json

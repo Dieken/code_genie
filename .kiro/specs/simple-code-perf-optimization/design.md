@@ -118,9 +118,10 @@ pub struct Evaluator {
 
 方法变更：
 
-- `update_char`：在现有全码桶 swap_remove/插入逻辑之后，增量维护 `is_first_candidate` 与 `bucket_first`（结合 `bucket_max_freq` / `rescan_bucket_max`，见数据模型）。
+- `update_char`：在现有全码桶 swap_remove/插入逻辑之后，**仅当 `simple_active` 为真时**增量维护 `is_first_candidate` 与 `bucket_first`（结合 `rescan_bucket_first`）；`simple_active` 为假时仅维护 `bucket_max_freq`（用 `rescan_bucket_max`），保持全码热路径基线性能（需求 25）。
 - `compute_score` / `get_score`：合成公式改为 `weight_full_code * full_score + current_simple_weight * simple_score`，其中未激活时 `current_simple_weight` 与 `simple_score` 均为 0（需求 9.5/10.3）。
-- 新增 `activate_simple(ctx, assignment)`：构建 `SimpleEvaluator` 并置 `simple_active = true`（一次性，需求 8.6）。
+- 新增 `activate_simple(ctx, assignment)`：先调用 `rebuild_first_candidates(ctx)` 一次性重建首选字（因激活前不增量维护，需求 25.3），再构建 `SimpleEvaluator` 并置 `simple_active = true`（一次性，需求 8.6）。
+- 新增 `rebuild_first_candidates(ctx)`：据当前 `code_to_chars` 全量重算 `is_first_candidate`/`bucket_first`，供激活时调用（需求 25.3/25.4）。
 - 新增 `reconcile(ctx, assignment)`：全量重算全码聚合与简码指标并覆盖增量值（需求 15.5）。
 - 新增 `apply_simple_for_move(ctx, assignment, groups)`：在 `try_move`/`try_swap` 内替换原 `rebuild_simple` 调用点，走增量 + 快照路径；拒绝/回滚分支改为调用 `simple_eval.rollback()`（需求 2）。
 - 新增 `best_total(weight_full, weight_simple_eff)` 辅助：用分量与给定权重 O(1) 合成（需求 11.2/11.3）。
@@ -200,12 +201,14 @@ fn cmp_in_bucket(a, b):
 
 定义：`is_first_candidate[ci]` 表示 `ci` 是否为其全码桶 `code_to_chars[code]` 中的首选字。首选字取桶内「最大频率」者，并列取最小 `ci`，保证确定性（与 `bucket_max_freq` 语义对齐，仅依赖全码桶、与简码分配无关，需求 5.1/5.2）。
 
-在 `update_char` 现有桶维护点增量更新（需求 5.3）：
+**维护门控（需求 25，性能关键）**：首选字 `is_first_candidate`/`bucket_first` 仅在 `simple_active == true` 时增量维护；简码关闭或延迟激活前（`simple_active == false`）`update_char` **完全跳过**这部分维护——因为此阶段没有任何读者读取首选标记（`has_simple_impact` 在 `!simple_active` 时短路返回 false，`sel_len` 不被计算）。这样简码关闭时全码热路径与基线版本 `27fcc6d` 逐字节等价，不引入任何回归。
+
+在 `update_char` 现有桶维护点，**当 `simple_active` 为真时**增量更新（需求 5.3/25.1）：
 
 ```text
 # 从 old_code 桶移除 ci 之后：
 if bucket_first[old_code] == ci:
-    重扫 old_code 桶求 (max_freq, 最小 ci) → 新 first
+    重扫 old_code 桶求 (max_freq, 最小 ci) → 新 first       # rescan_bucket_first
     翻转受影响字的 is_first_candidate（旧 first=ci 置 false, 新 first 置 true）
 # 向 new_code 桶加入 ci 之后：
 if new_code 桶为空之前 or freq(ci) > bucket_max_freq(new_code)
@@ -215,7 +218,11 @@ else:
     is_first_candidate[ci] = false
 ```
 
-重扫只在「移除的恰是首选字」时发生，与现有 `rescan_bucket_max` 触发时机一致，复用其遍历（可合并为一次 `rescan_bucket_first` 返回 `(max_freq, first_ci)`），不引入额外全量扫描。
+**当 `simple_active` 为假时**，`update_char` 仅维护 `bucket_max_freq`：移除分支用仅求最大频率的 `rescan_bucket_max`（不跟踪首选字，需求 25.2），插入分支只在 `freq > bucket_max_freq` 时更新最大频率，与基线行为一致。
+
+**激活时一次性重建（需求 25.3/25.4）**：由于激活前不增量维护首选字，`activate_simple` 在置 `simple_active = true` 并构建 `SimpleEvaluator` **之前**，调用 `rebuild_first_candidates(ctx)` 据当前 `code_to_chars` 一次性全量重算 `is_first_candidate`/`bucket_first`（开销 O(字数)，约一万余次，远小于激活前在每步移动里反复增量维护的累计开销）。该重建必须先于 `SimpleEvaluator::new`（其构造读取 `is_first_candidate`）。因激活前无人读取首选标记，「激活前不维护 + 激活时重建」与「全程增量维护」在激活时刻的状态完全一致（正确性保证）。
+
+激活后，重扫只在「移除的恰是首选字」时发生，与 `bucket_max_freq` 重扫时机一致，合并为一次 `rescan_bucket_first` 返回 `(max_freq, first_ci)`，不引入额外全量扫描。
 
 ### 简码增量更新算法（核心）
 
