@@ -334,6 +334,10 @@
   - [x] 21.3 测试覆盖
     - `first_candidate_tests::make_ctx` 增 `enable_simple` 参数：一致性属性测试在简码激活下覆盖增量维护路径；resort 缓冲不增长测试在简码关闭下覆盖纯全码路径
     - _Requirements: 25.1, 25.4_
+  - [x] 21.4 resort 种子只登记候选字（性能优化）
+    - `update_char` 三处首选翻转登记加 `if ctx.simple_is_candidate[...]` 守卫，只 push 候选字，缩小 `apply_simple_for_move` 的种子扫描；与「push 全部、apply 时过滤」行为等价
+    - 由 prop1（增量=全量）、prop3（首选一致）、b1（stage2 局部）现有属性测试保证正确性
+    - _Requirements: 25.1_
 
 - [x] 22. 简码激活时重定价最优解（需求 26）
   - [x] 22.1 激活分支内对 `best_assignment` 重算真实简码分量

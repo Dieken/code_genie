@@ -224,6 +224,8 @@ else:
 
 激活后，重扫只在「移除的恰是首选字」时发生，与 `bucket_max_freq` 重扫时机一致，合并为一次 `rescan_bucket_first` 返回 `(max_freq, first_ci)`，不引入额外全量扫描。
 
+**resort 种子只登记候选字（性能优化）**：`simple_is_first_dirty` 仅被 `apply_simple_for_move` 用作 resort 种子，而种子只对候选字（`ctx.simple_is_candidate[ci]`）有意义。因此 `update_char` 的三处首选翻转登记加 `if ctx.simple_is_candidate[...]` 守卫，只 push 候选字——避免非候选字白白堆入缓冲、增大每次 `apply_simple_for_move` 的种子扫描。该改动与「push 全部、apply 时过滤候选」行为等价（apply 内本就有候选过滤），纯性能优化。
+
 ### 简码增量更新算法（核心）
 
 当退火移动组 `r` 且 `has_simple_impact(r)` 为真且简码已激活时，对受影响候选字集合 `A = group_to_simple_affected_candidate[r]` 执行：

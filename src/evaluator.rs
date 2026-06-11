@@ -1762,7 +1762,11 @@ impl Evaluator {
                 self.bucket_first[old_code] = first;
                 self.is_first_candidate[first] = true;
                 // 记录首选翻转（resort 种子）；apply_simple_for_move 才会清空它。
-                self.simple_is_first_dirty.push(first);
+                // 仅候选字才会被 apply_simple_for_move 用作 resort 种子，故只 push 候选字，
+                // 避免非候选字白白堆入缓冲、增大种子扫描（性能优化，行为等价）。
+                if ctx.simple_is_candidate[first] {
+                    self.simple_is_first_dirty.push(first);
+                }
             } else {
                 self.bucket_max_freq[old_code] = self.rescan_bucket_max(ctx, old_code);
             }
@@ -1800,14 +1804,20 @@ impl Evaluator {
             if becomes_first {
                 if prev_first != usize::MAX {
                     self.is_first_candidate[prev_first] = false;
-                    self.simple_is_first_dirty.push(prev_first);
+                    if ctx.simple_is_candidate[prev_first] {
+                        self.simple_is_first_dirty.push(prev_first);
+                    }
                 }
                 self.bucket_first[new_code] = ci;
                 self.is_first_candidate[ci] = true;
-                self.simple_is_first_dirty.push(ci);
+                if ctx.simple_is_candidate[ci] {
+                    self.simple_is_first_dirty.push(ci);
+                }
             } else {
                 self.is_first_candidate[ci] = false;
-                self.simple_is_first_dirty.push(ci);
+                if ctx.simple_is_candidate[ci] {
+                    self.simple_is_first_dirty.push(ci);
+                }
             }
         }
         if freq > self.bucket_max_freq[new_code] {
