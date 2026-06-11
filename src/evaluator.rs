@@ -1674,6 +1674,23 @@ impl Evaluator {
         (max_f, first)
     }
 
+    /// 重新扫描桶的最大频率（仅 max，不跟踪首选字）。
+    ///
+    /// 供简码未激活/关闭的纯全码热路径使用：此时无需维护首选字
+    /// `is_first_candidate`/`bucket_first`，仅需 `bucket_max_freq` 用于重码频率统计，
+    /// 行为与基线版本（27fcc6d）的 `rescan_bucket_max` 完全一致。
+    #[inline]
+    fn rescan_bucket_max(&self, ctx: &OptContext, code: usize) -> u64 {
+        let mut max_f = 0u64;
+        for &ci in &self.code_to_chars[code] {
+            let f = ctx.char_infos[ci].frequency;
+            if f > max_f {
+                max_f = f;
+            }
+        }
+        max_f
+    }
+
     /// 计算桶的重码频率（仅用于 SimpleEvaluator 等非热路径）
     #[inline]
     fn bucket_cf_static(ctx: &OptContext, chars: &[usize]) -> u64 {
@@ -1731,21 +1748,23 @@ impl Evaluator {
 
         // 更新旧桶的频率统计与首选字（需求 5.3）
         self.bucket_freq_sum[old_code] -= freq;
-        // 如果移除的是 max（含恰为首选字的情况），需要重扫求新的 (max, 首选)
+        // 如果移除的是 max（含恰为首选字的情况），需要重扫。
+        // 简码激活时维护 (max, 首选)；未激活/简码关闭时仅维护 max（基线行为，性能不退化）。
         if freq >= self.bucket_max_freq[old_code] {
             if self.code_to_chars[old_code].is_empty() {
                 self.bucket_max_freq[old_code] = 0;
-                self.bucket_first[old_code] = usize::MAX;
-            } else {
+                if self.simple_active {
+                    self.bucket_first[old_code] = usize::MAX;
+                }
+            } else if self.simple_active {
                 let (mf, first) = self.rescan_bucket_first(ctx, old_code);
                 self.bucket_max_freq[old_code] = mf;
                 self.bucket_first[old_code] = first;
                 self.is_first_candidate[first] = true;
-                // 仅在简码激活时记录首选翻转（resort 种子）；简码关闭/激活前不记录，
-                // 避免该缓冲在纯全码路径上无限增长（apply_simple_for_move 才会清空它）。
-                if self.simple_active {
-                    self.simple_is_first_dirty.push(first);
-                }
+                // 记录首选翻转（resort 种子）；apply_simple_for_move 才会清空它。
+                self.simple_is_first_dirty.push(first);
+            } else {
+                self.bucket_max_freq[old_code] = self.rescan_bucket_max(ctx, old_code);
             }
         }
 
@@ -1770,27 +1789,24 @@ impl Evaluator {
         self.code_to_chars[new_code].push(ci);
         self.char_bucket_pos[ci] = new_pos;
         self.bucket_freq_sum[new_code] += freq;
-        // 加入新桶后增量维护首选字（需求 5.3）：取插入前的桶状态判定
-        let prev_first = self.bucket_first[new_code];
-        let prev_max = self.bucket_max_freq[new_code];
-        let becomes_first = prev_first == usize::MAX
-            || freq > prev_max
-            || (freq == prev_max && ci < prev_first);
-        if becomes_first {
-            if prev_first != usize::MAX {
-                self.is_first_candidate[prev_first] = false;
-                if self.simple_active {
+        // 加入新桶后增量维护首选字（需求 5.3）：取插入前的桶状态判定。
+        // 仅在简码激活时维护；未激活/简码关闭时跳过整段（基线行为，仅下方更新 max）。
+        if self.simple_active {
+            let prev_first = self.bucket_first[new_code];
+            let prev_max = self.bucket_max_freq[new_code];
+            let becomes_first = prev_first == usize::MAX
+                || freq > prev_max
+                || (freq == prev_max && ci < prev_first);
+            if becomes_first {
+                if prev_first != usize::MAX {
+                    self.is_first_candidate[prev_first] = false;
                     self.simple_is_first_dirty.push(prev_first);
                 }
-            }
-            self.bucket_first[new_code] = ci;
-            self.is_first_candidate[ci] = true;
-            if self.simple_active {
+                self.bucket_first[new_code] = ci;
+                self.is_first_candidate[ci] = true;
                 self.simple_is_first_dirty.push(ci);
-            }
-        } else {
-            self.is_first_candidate[ci] = false;
-            if self.simple_active {
+            } else {
+                self.is_first_candidate[ci] = false;
                 self.simple_is_first_dirty.push(ci);
             }
         }
@@ -2354,6 +2370,15 @@ impl Evaluator {
         if self.simple_active {
             return;
         }
+        let will_activate = self.simple_eval.is_some()
+            || (ctx.enable_simple_code && !ctx.simple_config.levels.is_empty());
+        // 激活前 `is_first_candidate`/`bucket_first` 未做增量维护（性能优化：激活前无人读取，
+        // 见 has_simple_impact 在 !simple_active 时短路）。在此一次性全量重建，使其反映当前
+        // assignment——开销为 O(字数)，远小于激活前在每步移动里反复增量维护的累计开销。
+        // 必须在下方构建 `SimpleEvaluator` 之前完成（其构造会读取 is_first_candidate）。
+        if will_activate {
+            self.rebuild_first_candidates(ctx);
+        }
         if self.simple_eval.is_none()
             && ctx.enable_simple_code
             && !ctx.simple_config.levels.is_empty()
@@ -2370,6 +2395,34 @@ impl Evaluator {
             self.simple_active = true;
             self.score_dirty = true;
             self.full_score_dirty = true;
+        }
+    }
+
+    /// 全量重建所有全码桶的首选字标记（`is_first_candidate`/`bucket_first`）。
+    ///
+    /// 首选字取桶内最大频率者，频率并列时取最小 ci（需求 5.1/5.2），与 `Evaluator::new`
+    /// 的初始化一致。供 `activate_simple` 在激活时调用：因激活前不增量维护首选字
+    /// （纯全码热路径性能优化），需在激活那一刻据当前 `code_to_chars` 一次性重算。
+    fn rebuild_first_candidates(&mut self, ctx: &OptContext) {
+        for v in self.is_first_candidate.iter_mut() {
+            *v = false;
+        }
+        for code in 0..self.code_to_chars.len() {
+            if self.code_to_chars[code].is_empty() {
+                self.bucket_first[code] = usize::MAX;
+                continue;
+            }
+            let mut max_f = 0u64;
+            let mut first = usize::MAX;
+            for &ci in &self.code_to_chars[code] {
+                let f = ctx.char_infos[ci].frequency;
+                if f > max_f || (f == max_f && ci < first) {
+                    max_f = f;
+                    first = ci;
+                }
+            }
+            self.bucket_first[code] = first;
+            self.is_first_candidate[first] = true;
         }
     }
 
@@ -2625,17 +2678,22 @@ impl Evaluator {
 #[cfg(test)]
 mod first_candidate_tests {
     use super::*;
-    use crate::config::{Config, TargetsConfig};
+    use crate::config::TargetsConfig;
     use crate::context::OptContext;
-    use crate::types::{KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, EQUIV_TABLE_SIZE};
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep,
+        WeightConfig, EQUIV_TABLE_SIZE,
+    };
     use proptest::prelude::*;
     use rand::thread_rng;
     use std::collections::HashMap;
 
     /// 构建最小 OptContext：每个频率对应一个动态组，每组含 1 个字根、1 个单部件汉字。
-    /// 不同组的汉字被分到同一键位时即产生重码（全码桶）。关闭简码以简化上下文构造，
-    /// 从而验证首选标记仅依赖全码桶、与简码分配无关。
-    fn make_ctx(freqs: &[u64], allowed: &[u8]) -> OptContext {
+    /// 不同组的汉字被分到同一键位时即产生重码（全码桶）。`enable_simple` 控制是否启用简码：
+    /// 启用时附带一个 `"Aa"` 规则的简码级别（使主评估器持有 `SimpleEvaluator` 且
+    /// `simple_active=true`，从而走首选字增量维护路径）；关闭时简码级别留空（`simple_eval=None`）。
+    /// 首选标记仅依赖全码桶、与简码分配无关。
+    fn make_ctx(freqs: &[u64], allowed: &[u8], enable_simple: bool) -> OptContext {
         let n = freqs.len();
         let mut groups = Vec::with_capacity(n);
         let mut splits = Vec::with_capacity(n);
@@ -2651,9 +2709,24 @@ mod first_candidate_tests {
         let fixed_roots: HashMap<String, u8> = HashMap::new();
         let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
         let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
-        let mut cfg = Config::default();
-        cfg.weights.simple_code.enabled = false; // 关闭简码，简化上下文构造
-        let weights = cfg.get_weight_config();
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = enable_simple;
+        weights.simple_coverage_ratio = 1.0;
+        let simple_config = if enable_simple {
+            SimpleCodeConfig {
+                levels: vec![SimpleCodeLevel {
+                    level: 1,
+                    code_num: 1,
+                    rule_candidates: vec![vec![SimpleCodeStep {
+                        root_selector: 'A',
+                        code_selector: 'a',
+                    }]],
+                    space_commit: false,
+                }],
+            }
+        } else {
+            SimpleCodeConfig { levels: vec![] }
+        };
         OptContext::new(
             &splits,
             &fixed_roots,
@@ -2661,7 +2734,7 @@ mod first_candidate_tests {
             equiv_table,
             key_dist,
             ScaleConfig::default(),
-            SimpleCodeConfig { levels: vec![] },
+            simple_config,
             weights,
             TargetsConfig::default(),
         )
@@ -2702,7 +2775,7 @@ mod first_candidate_tests {
     #[test]
     fn disabled_simple_does_not_grow_resort_buffer() {
         let allowed: [u8; 4] = [0, 1, 2, 3];
-        let ctx = make_ctx(&[5u64, 4, 3, 2, 1], &allowed);
+        let ctx = make_ctx(&[5u64, 4, 3, 2, 1], &allowed, false);
         let n = 5usize;
         let mut assignment = vec![0u8; n];
         let mut ev = Evaluator::new(&ctx, &assignment);
@@ -2739,7 +2812,7 @@ mod first_candidate_tests {
             moves in prop::collection::vec((0usize..16, 0u8..4), 0usize..40),
         ) {
             let allowed: [u8; 4] = [0, 1, 2, 3];
-            let ctx = make_ctx(&freqs, &allowed);
+            let ctx = make_ctx(&freqs, &allowed, true);
             let n = freqs.len();
             let mut assignment = vec![0u8; n];
             let mut ev = Evaluator::new(&ctx, &assignment);
