@@ -535,14 +535,31 @@ fn try_triple_swap(
 // =========================================================================
 
 /// 增强版爬山：结合冲突导向的邻域操作
+///
+/// `disable_simple` 区分调用上下文（需求 24）：
+/// - `true`（Init/校准预热）：用 `Evaluator::new_full_only` 跳过急切 `SimpleEvaluator` 构建，
+///   `has_simple_impact` 恒为 false，消除 try_move/try_swap 的简码增量开销，并省去每候选
+///   被丢弃的全量简码构建。该路径产物仅为 `Vec<u8>`，评估器被丢弃，简码对结果零贡献。
+/// - `false`（SA 结尾最终精炼）：保持简码激活，沿用算子内部的增量简码更新
+///   （try_move/try_swap/try_triple_swap 已走 apply_simple_for_move + commit/rollback），
+///   使精炼分数与主循环 best_score 同口径（全码+简码），接受判定正确。
 fn enhanced_hill_climb(
     ctx: &OptContext,
     init: Vec<u8>,
     rng: &mut ThreadRng,
     max_steps: usize,
+    disable_simple: bool,
 ) -> (Vec<u8>, f64) {
     let mut assignment = init;
-    let mut evaluator = Evaluator::new(ctx, &assignment);
+    // disable_simple=true（Init/校准）：用 new_full_only 跳过急切 SimpleEvaluator 构建，
+    // 消除 warmup 每候选被丢弃的全量简码构建开销（需求 24）。simple_eval=None ⟹
+    // simple_active=false、current_simple_weight=0.0，has_simple_impact 恒 false。
+    // disable_simple=false（最终精炼）：用 new 急切构建并保持激活，走增量简码。
+    let mut evaluator = if disable_simple {
+        Evaluator::new_full_only(ctx, &assignment)
+    } else {
+        Evaluator::new(ctx, &assignment)
+    };
     let n = assignment.len();
     if n == 0 {
         return (assignment, evaluator.get_score(ctx));
@@ -614,18 +631,29 @@ fn hill_climb_warmup(
     init: Vec<u8>,
     rng: &mut ThreadRng,
     max_steps: usize,
+    disable_simple: bool,
 ) -> (Vec<u8>, f64) {
-    enhanced_hill_climb(ctx, init, rng, max_steps)
+    enhanced_hill_climb(ctx, init, rng, max_steps, disable_simple)
 }
 
 // =========================================================================
 // 坐标下降
 // =========================================================================
 
-fn coordinate_descent(ctx: &OptContext, init: Vec<u8>) -> (Vec<u8>, f64) {
+fn coordinate_descent(ctx: &OptContext, init: Vec<u8>, disable_simple: bool) -> (Vec<u8>, f64) {
     let mut assignment = init;
     let n = assignment.len();
-    let mut evaluator = Evaluator::new(ctx, &assignment);
+    // disable_simple=true（Init/校准起点精炼）：用 new_full_only 跳过急切 SimpleEvaluator 构建
+    //   （需求 24）；simple_eval=None ⟹ has_simple_impact 恒 false ⟹ needs_simple 恒 false，
+    //   三处 `if needs_simple` 分支均不执行，全码桶维护逻辑不变，产物仅为 Vec<u8>。
+    // disable_simple=false（SA 结尾最终精炼）：用 new 急切构建并保持激活，前向探测/回滚/
+    //   应用最优均走**增量**简码（apply_simple_for_move + rollback_simple/commit_simple），
+    //   不再 rebuild_simple 全量重建，使精炼分数与主循环 best_score 同口径（全码+简码）。
+    let mut evaluator = if disable_simple {
+        Evaluator::new_full_only(ctx, &assignment)
+    } else {
+        Evaluator::new(ctx, &assignment)
+    };
     let mut improved = true;
 
     while improved {
@@ -660,8 +688,9 @@ fn coordinate_descent(ctx: &OptContext, init: Vec<u8>) -> (Vec<u8>, f64) {
                 for &ci in &ctx.group_to_chars[gi] {
                     evaluator.update_char(ctx, &assignment, ci);
                 }
+                // 增量简码：应用本次移动的简码影响（pending，未提交）
                 if needs_simple {
-                    evaluator.rebuild_simple(ctx, &assignment);
+                    evaluator.apply_simple_for_move(ctx, &assignment, &[gi]);
                 }
                 evaluator.score_dirty = true;
                 let score = evaluator.get_score(ctx);
@@ -685,8 +714,9 @@ fn coordinate_descent(ctx: &OptContext, init: Vec<u8>) -> (Vec<u8>, f64) {
                 for &ci in &ctx.group_to_chars[gi] {
                     evaluator.update_char(ctx, &assignment, ci);
                 }
+                // 增量简码：回滚至移动前快照（不触发全量重建）
                 if needs_simple {
-                    evaluator.rebuild_simple(ctx, &assignment);
+                    evaluator.rollback_simple();
                 }
                 evaluator.cached_score = current_score;
                 evaluator.score_dirty = false;
@@ -708,8 +738,10 @@ fn coordinate_descent(ctx: &OptContext, init: Vec<u8>) -> (Vec<u8>, f64) {
                 for &ci in &ctx.group_to_chars[gi] {
                     evaluator.update_char(ctx, &assignment, ci);
                 }
+                // 增量简码：应用并提交本次最优移动的简码影响
                 if needs_simple {
-                    evaluator.rebuild_simple(ctx, &assignment);
+                    evaluator.apply_simple_for_move(ctx, &assignment, &[gi]);
+                    evaluator.commit_simple();
                 }
                 evaluator.score_dirty = true;
                 improved = true;
@@ -759,7 +791,7 @@ pub fn multi_start_init(ctx: &OptContext, cfg: &Config, thread_id: usize) -> Vec
             }
         };
 
-        let (refined, score) = hill_climb_warmup(ctx, candidate, &mut rng, warmup_steps);
+        let (refined, score) = hill_climb_warmup(ctx, candidate, &mut rng, warmup_steps, true);
 
         if score < best_score {
             best_score = score;
@@ -777,7 +809,7 @@ pub fn multi_start_init(ctx: &OptContext, cfg: &Config, thread_id: usize) -> Vec
     let best = best_assignment.unwrap();
 
     if n <= 500 {
-        let (polished, polished_score) = coordinate_descent(ctx, best.clone());
+        let (polished, polished_score) = coordinate_descent(ctx, best.clone(), true);
         if thread_id == 0 {
             println!(
                 "   [Init T0] 坐标下降: {:.4} → {:.4}",
@@ -1238,8 +1270,11 @@ pub fn simulated_annealing(
     }
 
     let final_warmup_steps = (n_groups * 50).max(5000).min(100_000);
+    // 最终精炼传 disable_simple=false：保持简码激活、走增量更新（需求 24）。
+    // 简码启用时内部评估器 current_simple_weight = w_target，使 final_score 与 best_score
+    // 同口径（全码+简码），接受判定正确；简码关闭时该参数无效（路径与基线一致）。
     let (final_assignment, final_score) =
-        hill_climb_warmup(ctx, best_assignment.clone(), &mut rng, final_warmup_steps);
+        hill_climb_warmup(ctx, best_assignment.clone(), &mut rng, final_warmup_steps, false);
 
     if final_score < best_score {
         best_assignment = final_assignment;
@@ -1255,7 +1290,8 @@ pub fn simulated_annealing(
 
     if n_groups <= 500 {
         let score_before_cd = best_score;
-        let (cd_assignment, cd_score) = coordinate_descent(ctx, best_assignment.clone());
+        // 最终精炼传 disable_simple=false：坐标下降保持简码激活、走增量（需求 24）。
+        let (cd_assignment, cd_score) = coordinate_descent(ctx, best_assignment.clone(), false);
         if cd_score < best_score {
             best_assignment = cd_assignment;
             best_score = cd_score;

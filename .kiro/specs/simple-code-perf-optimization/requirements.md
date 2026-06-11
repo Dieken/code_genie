@@ -312,6 +312,21 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 3. THE 优化器 SHALL 对固定简码施加同一约束：IF 某固定简码的有效长度（含空格上屏）大于或等于对应字的全码长度，THEN THE 优化器 SHALL 输出告警并拒绝该条固定简码。
 4. THE 该长度约束 SHALL 在退火优化前由静态预计算确定，并在全量重建与增量更新两条路径上保持一致。
 
+### 需求 24：warmup/坐标下降按调用上下文区分简码（Init/校准关闭、最终精炼增量）
+
+**用户故事：** 作为优化器使用者，我希望多起点初始化（warmup）与坐标下降在「Init/校准」上下文不做任何简码计算以消除全量重建开销，而在「SA 结尾最终精炼」上下文保持简码以增量方式持续更新，使精炼分数与主循环最佳分同口径、接受判定正确。
+
+#### 验收标准
+
+1. THE `enhanced_hill_climb`（含 `hill_climb_warmup`）与 `coordinate_descent` SHALL 接受一个 `disable_simple: bool` 参数以区分调用上下文：`true` 表示 Init/校准预热，`false` 表示 SA 结尾最终精炼。
+2. WHEN `disable_simple == true` 且简码已启用，THE 优化器 SHALL 通过 `Evaluator::new_full_only`（`build_simple=false`）构建评估器，**跳过急切 `SimpleEvaluator` 构建**，使 `simple_eval = None`、`simple_active=false`、`current_simple_weight=0.0`，整个过程不执行任何简码计算（`has_simple_impact` 恒为 false，`coordinate_descent` 的 probe-then-revert 循环不进入简码分支），分配决策退化为纯全码（与 SA 主循环 `p < p_start` 阶段语义一致）。
+3. WHEN `disable_simple == false` 且简码已启用，THE 优化器 SHALL 通过 `Evaluator::new` 保持急切构建的 `SimpleEvaluator` 激活状态（`simple_active=true`、`current_simple_weight=weight_simple_code`），并在 probe/回滚/应用最优三处均以**增量**方式更新简码（`coordinate_descent` 使用 `apply_simple_for_move` + `rollback_simple`/`commit_simple`，禁止调用 `rebuild_simple`；`enhanced_hill_climb` 沿用算子内置的 try_move/try_swap/try_triple_swap 增量简码）。
+4. WHERE 最终精炼以 `disable_simple == false` 运行，THE 精炼返回分数 SHALL 与 SA 主循环 `best_score` 同口径（均为 `weight_full_code·full + weight_simple_code·simple`），从而使「`final_score < best_score`」「`cd_score < best_score`」的接受判定在简码维度上正确，不会以纯全码分误判。
+5. THE 调用上下文 SHALL 按如下绑定：`multi_start_init` 内部的 `hill_climb_warmup`（×候选数）与 `coordinate_descent` 传 `true`；`simulated_annealing` 结尾最终精炼的 `hill_climb_warmup` 与 `coordinate_descent` 传 `false`。
+6. THE 上述改动 SHALL 不影响这两个函数的全码计算逻辑、分配结果质量及行为；当简码整体关闭（`enable_simple_code=false`）时 `disable_simple` 参数无实际效果，`new_full_only` 与 `new` 均产出 `simple_eval=None`，两条路径均与基线一致（零变化）。
+7. THE 校准阶段的 `smart_init` SHALL 同样受益：校准用的初始分配经 `disable_simple=true` 的全码引导生成（全程零简码构建），校准完成后 `initial_eval = Evaluator::new(...)` 重建时由急切构建的 `SimpleEvaluator` 提供**唯一一次**全量简码指标观测（ScaleConfig 观测来源），语义正确。
+8. THE `new_full_only` 优化 SHALL 消除 `multi_start_init` 中被丢弃的急切简码构建（每候选一次 + 坐标下降一次，约 `候选数+1` 次/阶段）：校准阶段因此「全码优化 0 次简码构建 + 观测 1 次」；Init 阶段（`simulated_annealing` → `multi_start_init`）同样消除这些被丢弃构建，仅保留 `multi_start_init` 返回后 SA 主循环自身的**一次**必要 `Evaluator::new`（延迟激活的工作评估器）。
+
 ### 需求 23：输出镜像评估器的出简选择
 
 **用户故事：** 作为方案设计者，我希望输出文件的简码方案与评估器优化所用的出简选择完全一致，从而保证交付方案与被优化、被上报的指标相对应。

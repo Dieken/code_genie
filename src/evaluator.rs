@@ -1497,8 +1497,28 @@ pub struct Evaluator {
 }
 
 impl Evaluator {
-    /// 创建新的评估器
+    /// 创建新的评估器（急切构建简码评估器，向后兼容入口）。
     pub fn new(ctx: &OptContext, assignment: &[u8]) -> Self {
+        Self::new_impl(ctx, assignment, true)
+    }
+
+    /// 创建「仅全码」评估器：跳过急切 `SimpleEvaluator` 构建（需求 24）。
+    ///
+    /// 供 `disable_simple == true` 的调用上下文（Init/校准的 warmup 与坐标下降）使用：
+    /// 这些路径产物仅为 `Vec<u8>`、评估器用完即弃，简码对结果零贡献，无需付出
+    /// `SimpleEvaluator::new` 的全量构建开销。构建后 `simple_eval = None`，
+    /// 故 `simple_active = false`、`current_simple_weight = 0.0`，`has_simple_impact`
+    /// 恒为 `false`，综合得分退化为纯全码 `weight_full_code · full_score`。
+    ///
+    /// 与「先 `new` 再置 `simple_active=false`」相比，本入口额外省去了被丢弃的
+    /// 全量简码构建（warmup 每候选一次，约 50 次/阶段），是校准/Init 阶段的主要提速点。
+    /// 简码整体关闭（`enable_simple_code=false`）时本入口与 `new` 完全等价（都为 None）。
+    pub fn new_full_only(ctx: &OptContext, assignment: &[u8]) -> Self {
+        Self::new_impl(ctx, assignment, false)
+    }
+
+    /// 评估器构造实现。`build_simple` 为 false 时跳过急切 `SimpleEvaluator` 构建（需求 24）。
+    fn new_impl(ctx: &OptContext, assignment: &[u8], build_simple: bool) -> Self {
         let n = ctx.char_infos.len();
         let cs = ctx.code_space;
         let mut code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
@@ -1582,7 +1602,7 @@ impl Evaluator {
             0.0
         };
 
-        let simple_eval = if ctx.enable_simple_code && !ctx.simple_config.levels.is_empty() {
+        let simple_eval = if build_simple && ctx.enable_simple_code && !ctx.simple_config.levels.is_empty() {
             Some(SimpleEvaluator::new(ctx, assignment, &code_to_chars, &is_first_candidate))
         } else {
             None
@@ -1591,6 +1611,7 @@ impl Evaluator {
         // 向后兼容（back-compat）决策：
         // `Evaluator::new` 仍按 `enable_simple_code` 急切（eager）构建 `SimpleEvaluator`，
         // 因此既有测试（prop1/2/3/4/5/6/7/11/14 等）仍能在 `new` 后断言 `simple_eval.is_some()`。
+        // （`new_full_only` 显式传 `build_simple=false` 跳过该构建，仅供 disable_simple 上下文，需求 24。）
         // 急切构建时直接置 `simple_active = true` 且 `current_simple_weight = weight_simple_code`，
         // 使 `compute_score` 与旧公式
         // `weight_full_code * full_score + weight_simple_code * simple_score` 完全等价；

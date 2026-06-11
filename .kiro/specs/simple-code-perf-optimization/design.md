@@ -423,7 +423,38 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
   追加下划线），再输出归属各级的固定简码（保留下划线）。因选择来自评估器 `selected`，efficiency
   排序键、`sel_len`、固定占用扣减（`code_num - simple_fixed_occ`）与跨级排除全部自动一致。
 
+#### warmup 与坐标下降按调用上下文区分简码（需求 24）
+
+`enhanced_hill_climb`（=`hill_climb_warmup`）与 `coordinate_descent` 被**两类上下文**复用，必须区别对待，因此各增一个 `disable_simple: bool` 参数：
+
+**上下文 A — Init / 校准预热（`disable_simple=true`）**
+
+`multi_start_init`（被 Init 与校准用的 `smart_init` 调用）的输出仅为 `Vec<u8>` 分配，其评估器实例用完即弃，简码计算对结果零贡献：
+
+- **Init**：warmup 找到的 best_assignment 被 SA 主循环用 `Evaluator::new` 重建并从 `simple_active=false` 开始延迟激活；
+- **校准**：warmup 产出的初始分配，由校准段 `initial_eval = Evaluator::new(temp_ctx, initial_assignment)` 重建时急切构建的 `SimpleEvaluator` 提供**唯一一次**全量简码观测（ScaleConfig 观测来源）。
+
+故 `disable_simple=true` 时改用 `Evaluator::new_full_only`（`build_simple=false`），**直接跳过急切 `SimpleEvaluator` 构建**：`simple_eval = None` ⟹ `simple_active=false` / `current_simple_weight=0.0`，`has_simple_impact` 恒为 `false`，`coordinate_descent` 的 probe-then-revert 循环不进入简码分支（消除旧实现每次探测两次的全量重建），`try_move`/`try_swap`/`try_triple_swap` 的简码增量也短路。分配决策退化为纯全码，与 SA 主循环 `p < p_start` 阶段语义一致。
+
+> **关键提速点**：仅事后置 `simple_active=false`（旧做法）并不能省去 `Evaluator::new` 内部的急切 `SimpleEvaluator::new` 全量构建——而 `multi_start_init` 按候选数循环（约 50 次/阶段）外加一次坐标下降，会产生约 `候选数+1` 次**被丢弃**的全量简码构建。`new_full_only` 从构造入口就跳过该构建，使校准/Init 真正做到「全码优化期间零简码构建」。Init 与校准共用 `multi_start_init`，故两者**同时**受益；Init 仅保留 `multi_start_init` 返回后 SA 主循环自身的一次必要 `Evaluator::new`（延迟激活的工作评估器）。
+
+**上下文 B — SA 结尾最终精炼（`disable_simple=false`）**
+
+最终精炼直接作用于 SA 产出的 `best_assignment`，其结果**会被采纳为最终方案**，因此必须连续地以简码维度精炼，不能关掉简码、也不能用全量 `rebuild_simple`：
+
+- 保持 `Evaluator::new` 急切构建的 `SimpleEvaluator` 激活（`simple_active=true`、`current_simple_weight=weight_simple_code`）；
+- `coordinate_descent` 的前向探测、回滚、应用最优三处改用**增量**简码：探测用 `apply_simple_for_move(ctx, assignment, &[gi])`（pending，不提交）→ 评分 → 回滚用 `rollback_simple()`；应用最优用 `apply_simple_for_move` + `commit_simple()`，镜像 `try_move` 结构，禁用 `rebuild_simple`；
+- `enhanced_hill_climb` 沿用其算子内置的增量简码（`try_move`/`try_swap` 走 `Evaluator` 增量；`try_triple_swap` 走 `apply_simple_for_move` + `commit/rollback`）。
+
+**评分口径一致性（关键正确性）**：`disable_simple=false` 时内部评估器的 `current_simple_weight = weight_simple_code`，使 `get_score` 返回 `weight_full·full + weight_simple·simple`，与 SA 主循环结尾重算的 `best_score`（经 `best_total` 用同一 `w_target` 合成）同口径。于是 `final_score < best_score`、`cd_score < best_score` 的接受判定在简码维度上正确。若误用 `disable_simple=true`（如历史 commit `e16ab24` 的无条件关闭），精炼分数会退化为纯全码分，与含简码的 `best_score` 比较即「拿苹果比橘子」，导致错误接受/拒绝。
+
+**调用点绑定**：`multi_start_init` 内两处传 `true`；`simulated_annealing` 结尾两处传 `false`。
+
+**简码关闭零影响**：所有简码相关分支都在 `ctx.enable_simple_code` / `simple_active` 守卫内；`enable_simple_code=false` 时 `disable_simple` 参数无实际效果，两条路径均与基线一致。
+
 #### 对增量/回滚/对账的影响
+
+
 
 - 空格上屏仅改变 `simple_base_saving`（预计算常量）、`calc_simple_equiv` 的尾随空格条件、分布的空格计数与输出字符串；热路径 `apply_move_incremental` 的桶增量、快照回滚、`reconcile` 结构不变（当量/分布的空格项随出简翻转一并增减，纳入既有级别聚合增量）。
 - 固定简码引入的均为退火前静态量（候选集剔除、桶占用、常量偏置、固定字 `all_assigned` 恒真、长度资格）；增量选择只在「优化候选字」上进行，固定字不参与移动，故 Property 1/2/13 的增量=全量、回滚 round-trip、对账=全量在「含固定简码、空格上屏与长度约束」的上下文下同样成立（全量与增量都读取同一套静态预计算）。

@@ -303,6 +303,25 @@
     - 调整 prop18 占用断言为 `sel ≤ max(0, code_num−占用)`；新增 code_num=0+固定简码、非对称校验（`#[should_panic]`）、`get_simple_code_config` 级别保留测试
     - **Validates: Requirements 21.6, 21.7, 21.12**
 
+- [x] 20. warmup 与坐标下降按调用上下文区分简码（需求 24）
+  - [x] 20.1 `enhanced_hill_climb`/`hill_climb_warmup` 增 `disable_simple` 参数
+    - 签名加 `disable_simple: bool`；`Evaluator::new` 后仅当 `ctx.enable_simple_code && disable_simple` 才置 `simple_active=false; current_simple_weight=0.0; score_dirty=true`
+    - `disable_simple=false` 时保持简码激活，沿用算子内置增量（try_move/try_swap/try_triple_swap）
+    - _Requirements: 24.1, 24.2, 24.3, 24.6_
+  - [x] 20.2 `coordinate_descent` 增 `disable_simple` 参数，精炼上下文走增量简码
+    - 签名加 `disable_simple: bool`；`disable_simple=true` 时置零关闭（probe 循环 `has_simple_impact` 短路，消除 ~3840 次全量重建）
+    - `disable_simple=false` 时三处（前向探测/回滚/应用最优）改用增量：`apply_simple_for_move` + `rollback_simple`/`commit_simple`，**移除全部 `rebuild_simple`**
+    - _Requirements: 24.1, 24.2, 24.3, 24.6_
+  - [x] 20.3 调用点绑定与评分口径
+    - `multi_start_init` 内两处传 `true`（Init/校准关闭）；`simulated_annealing` 结尾最终精炼两处传 `false`（增量简码）
+    - 验证最终精炼 `final_score`/`cd_score` 与 `best_score` 同口径（均含 `weight_simple_code`），修正历史 commit `e16ab24` 的纯全码误判
+    - _Requirements: 24.4, 24.5, 24.7_
+  - [x] 20.4 `Evaluator::new_full_only` 跳过急切简码构建
+    - 重构 `Evaluator::new` → `new_impl(ctx, assignment, build_simple)`；新增 `new_full_only`（`build_simple=false`，`simple_eval=None`）
+    - `enhanced_hill_climb`/`coordinate_descent` 在 `disable_simple=true` 时改用 `new_full_only`，消除 warmup 每候选被丢弃的全量简码构建（约 `候选数+1` 次/阶段）
+    - 校准变为「全码优化 0 次简码构建 + 观测 1 次」；Init 共用 `multi_start_init` 自动同样受益，仅保留 SA 主循环自身一次必要 `Evaluator::new`
+    - _Requirements: 24.2, 24.6, 24.7, 24.8_
+
 ## Task Dependency Graph
 
 ```json
@@ -341,7 +360,8 @@
     { "id": 30, "tasks": ["18.1"] },
     { "id": 31, "tasks": ["18.2"] },
     { "id": 32, "tasks": ["19.1"] },
-    { "id": 33, "tasks": ["19.2"] }
+    { "id": 33, "tasks": ["19.2"] },
+    { "id": 34, "tasks": ["20.1", "20.2"] }
   ]
 }
 ```
