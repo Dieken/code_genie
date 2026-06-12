@@ -398,3 +398,24 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 5. WHEN 输出最终结果块的「简码」部分，THE 优化器 SHALL 在保留简码总分的同时，为每个简码子指标（重码数、重码率、覆盖率、加权当量、分布偏差）输出其加权子分数，呈现方式与「全码」块的 `(分: X)` 一致。
 6. THE 简码各子分数之和（按简码子权重与简码缩放因子加权）SHALL 与所报告的简码总分一致（口径自洽）。
 7. WHERE 简码整体关闭（`enable_simple_code == false`），THE 新增的简码分量与简码子分数 SHALL 显示为 0 或按既有方式省略，且不改变全码相关日志的内容与数值。
+
+### 需求 29：简码全局聚合标量增量维护（消除每步跨级重聚合）
+
+**用户故事：** 作为优化器使用者，我希望简码激活后每步评估不再对各级别聚合做全量重加，从而进一步降低简码热路径的单步固定开销、提升后半程退火吞吐。
+
+#### 背景
+
+`SimpleEvaluator::get_simple_metrics` 当前在每次调用时跨级别重新聚合：标量和（`covered_freq`/`equiv_weighted`/`equiv_freq_sum`/`key_presses`）为 O(级数)，而 `total_key_usage[k] = Σ_级 level.key_usage[k]` 为 **O(级数 × 键数)**。该聚合是与"本次移动多局部"无关的固定开销，每个"影响候选字"的移动都付一次（经 `apply_simple_for_move → compute_simple_score`）。各级别标量本身已增量维护，浪费仅在于每步的跨级重加。
+
+本需求只覆盖"全局聚合标量增量维护"（方向 A）；分布偏差自身的增量化（方向 B）为后续可选增强，依赖本需求产出的全局 `key_usage[]`/`key_presses`，不在本需求范围内。
+
+#### 验收标准
+
+1. THE 简码评估器 SHALL 维护一组全局聚合量 `global_covered_freq`、`global_equiv_weighted`、`global_equiv_freq_sum`、`global_key_usage[EQUIV_TABLE_SIZE]`、`global_key_presses`，其值恒等于"各级别对应聚合之和 + 固定简码常量偏置"。
+2. THE 全局聚合量 SHALL 在简码评估器构建（全量重建）时一次性据各级别聚合与固定简码常量初始化。
+3. WHEN 某级别的聚合量（`covered_freq`/`equiv_weighted`/`equiv_freq_sum`/`key_usage[k]`/`key_presses`）在增量更新中发生变化，THE 简码评估器 SHALL 以同一增量同步更新对应的全局聚合量，使全局量与"逐级求和 + 固定偏置"始终一致。
+4. THE `get_simple_metrics` SHALL 直接读取全局聚合量计算 `coverage`、`equiv_mean` 与分布偏差，SHALL NOT 在每次调用时跨级别重新求和 `key_usage[]` 或标量。
+5. WHEN 一次移动被拒绝或回滚，THE 简码评估器 SHALL 将全局聚合量一并还原至移动前的值（与现有快照/回滚机制一致，不触发全量重建）。
+6. THE 本优化 SHALL 为行为等价改造：在任意分配下，`get_simple_metrics` 返回的覆盖率、当量、分布偏差、简码重码与改造前逐字段一致（由增量=全量一致性属性测试覆盖）。
+7. WHERE 简码整体关闭或未激活（`simple_eval` 为 `None` 或 `simple_active == false`），THE 本改造 SHALL 无任何效果，全码路径行为、性能与基线一致。
+8. THE 周期对账（`reconcile`）与结束强制全量校验 SHALL 同样重建并校正全局聚合量，使其在长程优化中不累积漂移。

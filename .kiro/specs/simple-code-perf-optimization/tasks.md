@@ -371,6 +371,20 @@
     - `get_simple_metric_scores` 子分数之和等于 total 且等于 `get_metric_scores().total_simple`；简码关闭时全为 0
     - _Requirements: 28.6, 28.7_
 
+- [x] 25. 简码全局聚合标量增量维护（需求 29，方向 A）
+  - [x] 25.1 新增全局聚合字段并在全量重建时初始化
+    - `SimpleEvaluator` 增 `g_covered_freq/g_equiv_weighted/g_equiv_freq_sum/g_key_usage[]/g_key_presses`；新增 `recompute_global_aggregates`，在 `rebuild_internal` 末尾按 `Σ_级 + 固定常量` 填充（覆盖 `new`/`full_rebuild`/`reconcile`）
+    - _Requirements: 29.1, 29.2, 29.8_
+  - [x] 25.2 增量同步与读取改造
+    - `select_char`/`deselect_contrib_only`/`refresh_char` 对全局量施加与级别相同的 Δ；`get_simple_metrics` 改为直接读全局量，删除跨级求和与固定偏置相加
+    - _Requirements: 29.3, 29.4_
+  - [x] 25.3 回滚纳入全局量
+    - `SimpleSnapshot` 增 5 个全局量字段；`snapshot_aggregates` 整存、`rollback` 整体写回（`g_key_usage` 为定长数组，O(键数)）
+    - _Requirements: 29.5_
+  - [x] 25.4 一致性测试
+    - 新增 `test_global_aggregates_equal_sum_of_levels_plus_fixed`：move 序列（含接受/回滚）后断言 `g_* == Σ_级 + 固定`；prop1（增量=全量）、prop13（reconcile=全量）保持全绿；简码关闭零影响
+    - _Requirements: 29.6, 29.7, 29.8_
+
 ## Task Dependency Graph
 
 ```json

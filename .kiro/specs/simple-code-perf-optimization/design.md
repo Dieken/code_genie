@@ -705,3 +705,30 @@ best_score = best_total(weight_full, best_full_score, w_eff, best_simple_score)
 - 新增 `Evaluator::score_components(ctx) -> (total, weight_full·full, w_eff·simple)`（或就地用 `full_score_component`/`simple_score_component` 与当前权重合成），供下列日志点统一输出「综合 / 全码分量 / 简码分量」：`[T0] 初始化完成`、`[T0] 最终爬山改进`、`[T0] 坐标下降精炼`、`[T0] 最终得分`，以及最终结果块的「综合得分」（需求 28.1-28.4）。
 - 新增 `Evaluator::get_simple_metric_scores(ctx) -> SimpleMetricScores`，镜像 `get_metric_scores`：对简码五项子指标（重码数、重码率、覆盖率、加权当量、分布偏差）分别返回 `子权重 × 子指标 × 简码缩放因子` 的加权子分数；其和等于简码总分（需求 28.6）。最终结果块「简码」部分按 `(分: X)` 风格逐项输出（需求 28.5）。
 - 全码相关日志的内容与数值保持不变；`enable_simple_code == false` 时简码分量与子分数显示为 0 或按既有方式省略（需求 28.7）。
+
+## 简码全局聚合标量增量维护（需求 29）
+
+**问题**：`SimpleEvaluator::get_simple_metrics` 每次调用都跨级别重聚合——标量和 O(级数)、`total_key_usage[k] = Σ_级 level.key_usage[k]` 为 O(级数 × 键数)，再叠加分布偏差的 O(键数)。各级别标量本已增量维护，浪费在每步的跨级重加。该开销与移动局部性无关，是 `apply_simple_for_move` 的固定大头。
+
+**设计（方向 A）**：在 `SimpleEvaluator` 增加全局聚合字段，恒等于"各级别聚合之和 + 固定简码常量偏置"：
+
+```rust
+struct SimpleEvaluator {
+    // ... 现有字段 ...
+    global_covered_freq: u64,
+    global_equiv_weighted: f64,
+    global_equiv_freq_sum: u64,
+    global_key_usage: [f64; EQUIV_TABLE_SIZE],
+    global_key_presses: f64,
+}
+```
+
+- **初始化（需求 29.2）**：在全量重建（`full_rebuild`/构造）末尾，按 `Σ_级 + 固定常量` 一次性填充全局量。
+- **增量同步（需求 29.3）**：当前更新各级别 `covered_freq/equiv_weighted/equiv_freq_sum/key_usage[k]/key_presses` 的少数内部点（出简选择翻转、桶成员变化导致的覆盖/当量/键用量变化），在写入级别 Δ 的同时对全局量施加同一 Δ。最干净的做法是把"级别聚合的读改写"集中到统一的小helper（如 `add_level_aggregate(li, dcov, dequiv_w, dequiv_f, dkey_usage_deltas, dpresses)`），由其同时改级别与全局，避免遗漏同步点。
+- **读取（需求 29.4）**：`get_simple_metrics` 改为直接读 `global_*`（已含固定偏置）计算 coverage/equiv_mean，并用 `global_key_usage[]`/`global_key_presses` 算分布偏差；删除跨级求和循环。
+- **回滚（需求 29.5）**：把 5 个全局量纳入移动快照（`SimpleSnapshot`），`snapshot_aggregates` 在移动起始整存、`rollback` 整体写回。`g_key_usage` 为定长数组 `[f64; EQUIV_TABLE_SIZE]`（键数 31），整存整取为 O(键数)，与一个级别聚合快照同阶，开销可忽略。
+- **对账（需求 29.8）**：`reconcile` 走 `Evaluator::new` 整体重建，天然重算全局量；无需额外处理。
+
+**正确性**：行为等价（数值不变），由 Property 1（增量=全量逐字段一致）、Property 13（reconcile=全量）覆盖；新增针对全局聚合的一致性断言（move 序列后 `global_* == Σ_级 + 固定`）。
+
+**范围**：本节只做方向 A。分布偏差自身增量化（方向 B）依赖此处的 `global_key_usage[]`/`global_key_presses`，作为后续可选增强，需处理"`global_key_presses` 变化时所有键 pct 漂移、退回 O(键数) 重算"的分母耦合，另行评估。

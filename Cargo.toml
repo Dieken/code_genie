@@ -23,6 +23,13 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
+# Profiling 专用：继承 release 的优化，但保留调试符号以便火焰图/采样器解析函数名。
+# panic = "unwind" 让部分采样器（dtrace/Instruments）回溯更稳。仅用于性能分析，不影响 release。
+[profile.profiling]
+inherits = "release"
+debug = true
+panic = "unwind"
+
 [[bin]]
 name = "code_genie"
 path = "src/main.rs"

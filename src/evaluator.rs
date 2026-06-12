@@ -125,6 +125,12 @@ struct SimpleSnapshot {
     bucket_snaps_len: usize,
     /// 移动起始的全部级别聚合标量快照（回滚整体写回）。
     aggregates: Vec<LevelAggregateSnapshot>,
+    /// 移动起始的全局聚合标量快照（需求 29.5，回滚整体写回）。
+    g_covered_freq: u64,
+    g_equiv_weighted: f64,
+    g_equiv_freq_sum: u64,
+    g_key_usage: [f64; EQUIV_TABLE_SIZE],
+    g_key_presses: f64,
     /// `current_simple_code` 撤销日志：(li, ci, 修改前 code)，逆序回放。
     undo_code: Vec<(usize, usize, i64)>,
     /// `selected` 撤销日志：(li, ci, 修改前 selected)，逆序回放。
@@ -164,6 +170,14 @@ pub struct SimpleEvaluator {
     /// 用于在增量更新时检测移动组所触碰的全码桶（旧编码 ∪ 新编码），定位需要重算
     /// 简码重码的全码桶（需求 14.2/14.3）。全量重建时从当前分配重新填充。
     last_full_codes: Vec<usize>,
+    /// 全局简码聚合标量（需求 29）：恒等于「各级别对应聚合之和 + 固定简码常量偏置」。
+    /// `get_simple_metrics` 直接读取这些量，避免每步跨级重加 O(级数×键数)。
+    /// 在 select/deselect/refresh 处与级别聚合同步增量更新，并纳入移动快照回滚。
+    g_covered_freq: u64,
+    g_equiv_weighted: f64,
+    g_equiv_freq_sum: u64,
+    g_key_usage: [f64; EQUIV_TABLE_SIZE],
+    g_key_presses: f64,
     /// 缓存的简码得分
     cached_simple_score: f64,
     /// 得分是否需要重新计算
@@ -278,6 +292,11 @@ impl SimpleEvaluator {
             simple_collision_rate: 0.0,
             bucket_collision_contrib: vec![(0usize, 0u64); full_code_to_chars.len()],
             last_full_codes: vec![0usize; n_chars],
+            g_covered_freq: 0,
+            g_equiv_weighted: 0.0,
+            g_equiv_freq_sum: 0,
+            g_key_usage: [0.0; EQUIV_TABLE_SIZE],
+            g_key_presses: 0.0,
             cached_simple_score: 0.0,
             simple_score_dirty: true,
             key_buf: Vec::new(),
@@ -335,7 +354,34 @@ impl SimpleEvaluator {
             self.last_full_codes[ci] = ctx.calc_code_only(ci, assignment);
         }
 
+        // 据各级别聚合 + 固定简码常量偏置，一次性重算全局聚合（需求 29.2/29.8）。
+        self.recompute_global_aggregates(ctx);
+
         self.simple_score_dirty = true;
+    }
+
+    /// 据各级别聚合 + 固定简码常量偏置，全量重算全局聚合标量（需求 29.2）。
+    /// 供全量重建（构造 / `full_rebuild`）与对账后调用，使全局量与「逐级求和 + 固定偏置」一致。
+    fn recompute_global_aggregates(&mut self, ctx: &OptContext) {
+        let mut cov = ctx.fixed_covered_freq;
+        let mut ew = ctx.fixed_equiv_weighted;
+        let mut ef = ctx.fixed_equiv_freq_sum;
+        let mut kp = ctx.fixed_key_presses;
+        let mut ku = ctx.fixed_key_usage;
+        for level in &self.levels {
+            cov += level.covered_freq;
+            ew += level.equiv_weighted;
+            ef += level.equiv_freq_sum;
+            kp += level.key_presses;
+            for k in 0..EQUIV_TABLE_SIZE {
+                ku[k] += level.key_usage[k];
+            }
+        }
+        self.g_covered_freq = cov;
+        self.g_equiv_weighted = ew;
+        self.g_equiv_freq_sum = ef;
+        self.g_key_presses = kp;
+        self.g_key_usage = ku;
     }
 
     /// 将候选字 `ci` 在级别 `li` 的简码键位写入复用缓冲 `key_buf`（去堆分配），并在该级
@@ -868,6 +914,15 @@ impl SimpleEvaluator {
         }
         lvl.sel_keys_len[ci] = n as u8;
         lvl.key_presses += freq_f * klen as f64;
+
+        // 全局聚合同步（需求 29.3）：与上面级别聚合施加相同 Δ。
+        self.g_covered_freq += freq;
+        self.g_equiv_freq_sum += freq;
+        self.g_equiv_weighted += eq * freq_f;
+        for i in 0..n {
+            self.g_key_usage[self.key_buf[i] as usize] += freq_f;
+        }
+        self.g_key_presses += freq_f * klen as f64;
     }
 
     /// 取消选中 `ci` 于级别 `li`（原生落选）：翻转 `selected`/`all_assigned_flags`，
@@ -898,6 +953,16 @@ impl SimpleEvaluator {
             lvl.key_usage[k as usize] -= freq_f;
         }
         lvl.key_presses -= freq_f * klen as f64;
+
+        // 全局聚合同步（需求 29.3）：sel_equiv/sel_keys 在 deselect 中不被改写，可在 lvl 借用结束后回读。
+        self.g_covered_freq -= freq;
+        self.g_equiv_freq_sum -= freq;
+        self.g_equiv_weighted -= self.levels[li].sel_equiv[ci] * freq_f;
+        for i in 0..klen {
+            let k = self.levels[li].sel_keys[ci][i];
+            self.g_key_usage[k as usize] -= freq_f;
+        }
+        self.g_key_presses -= freq_f * klen as f64;
     }
 
     /// 刷新仍选中字 `ci` 在级别 `li` 的「值型」贡献（当量/键位），用于其简码编码因移动而变化
@@ -913,6 +978,11 @@ impl SimpleEvaluator {
         let klen = if has_keys { self.key_buf.len() } else { 0 };
         debug_assert!(klen <= SIMPLE_KEYS_CAP, "简码键位数超出 SIMPLE_KEYS_CAP");
         let n = klen.min(SIMPLE_KEYS_CAP);
+
+        // 捕获旧值型贡献（全局聚合同步用）：refresh 会改写 sel_equiv/sel_keys，故须在改写前读取。
+        let g_old_equiv = self.levels[li].sel_equiv[ci];
+        let g_old_len = self.levels[li].sel_keys_len[ci] as usize;
+        let g_old_keys = self.levels[li].sel_keys[ci];
 
         let lvl = &mut self.levels[li];
         // 撤销项：记录旧贡献缓存
@@ -941,6 +1011,17 @@ impl SimpleEvaluator {
         }
         lvl.sel_keys_len[ci] = n as u8;
         lvl.key_presses += freq_f * klen as f64;
+
+        // 全局聚合同步（需求 29.3）：covered_freq/equiv_freq_sum 不变（字仍选中、字频不变）；
+        // 当量与键用量按「减旧值型贡献、加新值型贡献」同步。
+        self.g_equiv_weighted += (eq - g_old_equiv) * freq_f;
+        for i in 0..g_old_len {
+            self.g_key_usage[g_old_keys[i] as usize] -= freq_f;
+        }
+        for i in 0..n {
+            self.g_key_usage[self.key_buf[i] as usize] += freq_f;
+        }
+        self.g_key_presses += freq_f * (klen as f64 - g_old_len as f64);
     }
 
     /// 对单个脏桶做局部重排并重选前 `code_num` 个出简，检测出简翻转，更新聚合与跨级标记，
@@ -1138,6 +1219,12 @@ impl SimpleEvaluator {
                 key_presses: lvl.key_presses,
             });
         }
+        // 全局聚合标量快照（需求 29.5）。
+        self.snapshot.g_covered_freq = self.g_covered_freq;
+        self.snapshot.g_equiv_weighted = self.g_equiv_weighted;
+        self.snapshot.g_equiv_freq_sum = self.g_equiv_freq_sum;
+        self.snapshot.g_key_usage = self.g_key_usage;
+        self.snapshot.g_key_presses = self.g_key_presses;
     }
 
     /// 提交本次增量：清空快照缓冲（确认增量结果，需求 2.1）。
@@ -1179,6 +1266,12 @@ impl SimpleEvaluator {
                 lvl.key_usage = s.key_usage;
                 lvl.key_presses = s.key_presses;
             }
+            // 1b) 全局聚合标量整体写回（需求 29.5）
+            self.g_covered_freq = self.snapshot.g_covered_freq;
+            self.g_equiv_weighted = self.snapshot.g_equiv_weighted;
+            self.g_equiv_freq_sum = self.snapshot.g_equiv_freq_sum;
+            self.g_key_usage = self.snapshot.g_key_usage;
+            self.g_key_presses = self.snapshot.g_key_presses;
 
             // 2) 触碰桶成员/freq_sum 整存整取（仅有效前缀）
             for i in 0..self.snapshot.bucket_snaps_len {
@@ -1317,31 +1410,12 @@ impl SimpleEvaluator {
 
     /// 获取简码评估指标
     pub fn get_simple_metrics(&self, ctx: &OptContext) -> SimpleMetrics {
-        let mut total_covered = 0u64;
-        let mut total_equiv_weighted = 0.0f64;
-        let mut total_equiv_freq = 0u64;
-        let mut total_key_usage = [0.0f64; EQUIV_TABLE_SIZE];
-        let mut total_key_presses = 0.0f64;
-
-        for level in &self.levels {
-            total_covered += level.covered_freq;
-            total_equiv_weighted += level.equiv_weighted;
-            total_equiv_freq += level.equiv_freq_sum;
-            for k in 0..EQUIV_TABLE_SIZE {
-                total_key_usage[k] += level.key_usage[k];
-            }
-            total_key_presses += level.key_presses;
-        }
-
-        // 固定简码常量偏置（需求 21.8/21.9）：固定字不进入任何级别聚合，其对覆盖率/当量/
-        // 分布的贡献为不随分配变化的常量，在此并入聚合，使指标与「固定字按字面简码出简」语义一致。
-        total_covered += ctx.fixed_covered_freq;
-        total_equiv_weighted += ctx.fixed_equiv_weighted;
-        total_equiv_freq += ctx.fixed_equiv_freq_sum;
-        for k in 0..EQUIV_TABLE_SIZE {
-            total_key_usage[k] += ctx.fixed_key_usage[k];
-        }
-        total_key_presses += ctx.fixed_key_presses;
+        // 直接读取全局聚合（需求 29.4，已含固定简码常量偏置），不再每步跨级重加。
+        let total_covered = self.g_covered_freq;
+        let total_equiv_weighted = self.g_equiv_weighted;
+        let total_equiv_freq = self.g_equiv_freq_sum;
+        let total_key_usage = &self.g_key_usage;
+        let total_key_presses = self.g_key_presses;
 
         let coverage = if ctx.total_frequency > 0 {
             total_covered as f64 / ctx.total_frequency as f64
@@ -4413,6 +4487,59 @@ mod rollback_roundtrip_tests {
             weights,
             TargetsConfig::default(),
         )
+    }
+
+    // 需求 29.1/29.3/29.5：经一串移动（含接受/回滚）后，简码全局聚合标量应恒等于
+    // 「各级别对应聚合之和 + 固定简码常量偏置」。
+    #[test]
+    fn test_global_aggregates_equal_sum_of_levels_plus_fixed() {
+        let ctx = make_ctx(
+            &[(9, 2), (7, 2), (5, 2), (4, 1), (3, 2), (2, 1), (1, 2)],
+            SimpleAssignMode::Efficiency,
+            1,
+            1.0,
+        );
+        let n = ctx.num_groups;
+        let mut assignment = vec![0u8; n];
+        let mut ev = Evaluator::new(&ctx, &assignment);
+        assert!(ev.simple_eval.is_some());
+
+        let check = |ev: &Evaluator| {
+            let se = ev.simple_eval.as_ref().unwrap();
+            let mut cov = ctx.fixed_covered_freq;
+            let mut ew = ctx.fixed_equiv_weighted;
+            let mut ef = ctx.fixed_equiv_freq_sum;
+            let mut kp = ctx.fixed_key_presses;
+            let mut ku = ctx.fixed_key_usage;
+            for lvl in &se.levels {
+                cov += lvl.covered_freq;
+                ew += lvl.equiv_weighted;
+                ef += lvl.equiv_freq_sum;
+                kp += lvl.key_presses;
+                for k in 0..EQUIV_TABLE_SIZE {
+                    ku[k] += lvl.key_usage[k];
+                }
+            }
+            assert_eq!(se.g_covered_freq, cov, "g_covered_freq 与级别和不一致");
+            assert_eq!(se.g_equiv_freq_sum, ef, "g_equiv_freq_sum 与级别和不一致");
+            assert!((se.g_equiv_weighted - ew).abs() < 1e-6, "g_equiv_weighted 漂移");
+            assert!((se.g_key_presses - kp).abs() < 1e-6, "g_key_presses 漂移");
+            for k in 0..EQUIV_TABLE_SIZE {
+                assert!((se.g_key_usage[k] - ku[k]).abs() < 1e-6, "g_key_usage[{k}] 漂移");
+            }
+        };
+
+        check(&ev);
+        let mut rng = rand::thread_rng();
+        for step in 0..2000usize {
+            let r = step % n;
+            let nk = (step % 2) as u8;
+            ev.try_move(&ctx, &mut assignment, r, nk, 1e18, &mut rng);
+            if step % 50 == 0 {
+                check(&ev);
+            }
+        }
+        check(&ev);
     }
 
     /// 单个级别的可比较状态快照（用于逐字段精确比对）。
