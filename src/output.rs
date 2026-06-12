@@ -101,6 +101,59 @@ pub fn write_keymap_output(
     }
 }
 
+/// 复用评估器的出简选择（需求 23）：构建 `SimpleEvaluator` 并返回按分配顺序排列的
+/// `(level_idx, ci)` 出简列表，使各 output 文件与被优化方案逐字一致。简码未启用或无级别时
+/// 返回空列表。`is_first_candidate` 与 `Evaluator::new` / `save_simple_code_output` 同口径
+/// （每个非空全码桶取「最大频率、最小 ci」为首选字，供 efficiency 排序键的 sel_len 取值）。
+fn evaluator_simple_selection(ctx: &OptContext, assignment: &[u8]) -> Vec<(usize, usize)> {
+    if !ctx.enable_simple_code || ctx.simple_config.levels.is_empty() {
+        return Vec::new();
+    }
+    let n = ctx.char_infos.len();
+    let cs = ctx.code_space;
+    let mut full_code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
+    for ci in 0..n {
+        full_code_to_chars[ctx.calc_code_only(ci, assignment)].push(ci);
+    }
+    let mut is_first = vec![false; n];
+    for chars in full_code_to_chars.iter() {
+        if chars.is_empty() {
+            continue;
+        }
+        let mut max_f = 0u64;
+        let mut first = usize::MAX;
+        for &ci in chars {
+            let f = ctx.char_infos[ci].frequency;
+            if f > max_f || (f == max_f && ci < first) {
+                max_f = f;
+                first = ci;
+            }
+        }
+        is_first[first] = true;
+    }
+    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first);
+    se.selected_ordered(ctx, &is_first)
+}
+
+/// 某出简字的简码键位串（需求 20.5/20.6）：键位转字符；该级 `space_commit` 为真时追加结尾下划线。
+fn simple_code_str(
+    ctx: &OptContext,
+    ci: usize,
+    li: usize,
+    assignment: &[u8],
+    space_commit: bool,
+) -> String {
+    ctx.get_simple_keys(ci, li, assignment)
+        .map(|keys| {
+            let mut s: String = keys.iter().map(|&k| key_to_char(k)).collect();
+            if space_commit {
+                s.push('_');
+            }
+            s
+        })
+        .unwrap_or_else(|| String::from("?"))
+}
+
 /// 保存简码+全码编码文件
 pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
     // 构建根名到键位的映射
@@ -116,9 +169,8 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
     }
 
     let mut out = String::new();
-    let mut simple_assigned: HashSet<usize> = HashSet::new();
 
-    // 按字频排序
+    // 按字频排序（供下方全码部分输出）
     let n_chars = ctx.char_infos.len();
     let mut sorted_chars: Vec<usize> = (0..n_chars).collect();
     sorted_chars.sort_by(|&a, &b| {
@@ -127,53 +179,26 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
             .cmp(&ctx.char_infos[a].frequency)
     });
 
-    // 简码部分 - 与 save_simple_code_output 完全相同的逻辑
+    // 简码部分（需求 23）：镜像评估器出简选择，按分配顺序（级别升序、桶内排序键）输出，
+    // 与被优化方案逐字一致（含 efficiency 模式 / sel_len / 固定占用扣减 / 跨级排除）。
+    let ordered = evaluator_simple_selection(ctx, assignment);
+    let n_levels = ctx.simple_config.levels.len();
+    let mut per_level: Vec<Vec<usize>> = vec![Vec::new(); n_levels];
+    for (li, ci) in ordered {
+        per_level[li].push(ci);
+    }
     for (li, level_cfg) in ctx.simple_config.levels.iter().enumerate() {
-        let mut code_candidates: HashMap<usize, Vec<(usize, u64)>> = HashMap::new();
-
-        for &ci in &sorted_chars {
-            if simple_assigned.contains(&ci) {
-                continue;
-            }
-            if let Some(code) = ctx.calc_simple_code(ci, li, assignment) {
-                code_candidates
-                    .entry(code)
-                    .or_default()
-                    .push((ci, ctx.char_infos[ci].frequency));
-            }
+        for &ci in &per_level[li] {
+            let ch = ctx.raw_splits[ci].0;
+            let code_str = simple_code_str(ctx, ci, li, assignment, level_cfg.space_commit);
+            out.push_str(&format!("{}\t{}\n", ch, code_str));
         }
-
-        // 收集该级别所有获胜者
-        let mut level_winners: Vec<(usize, u64, String)> = Vec::new();
-
-        for (_code, candidates) in &code_candidates {
-            let mut count = 0;
-            for &(ci, freq) in candidates {
-                if count >= level_cfg.code_num {
-                    break;
-                }
-                if simple_assigned.contains(&ci) {
-                    continue;
-                }
-
-                let ch = ctx.raw_splits[ci].0;
-                let code_str: String = ctx
-                    .get_simple_keys(ci, li, assignment)
-                    .map(|keys| keys.iter().map(|&k| key_to_char(k)).collect())
-                    .unwrap_or_else(|| String::from("?"));
-
-                level_winners.push((ci, freq, format!("{}\t{}", ch, code_str)));
-                count += 1;
+        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留结尾下划线。
+        for fc in &ctx.simple_fixed_codes {
+            if fc.li == li {
+                let ch = ctx.raw_splits[fc.ci].0;
+                out.push_str(&format!("{}\t{}\n", ch, fc.code_str));
             }
-        }
-
-        // 按字频排序输出
-        level_winners.sort_by(|a, b| b.1.cmp(&a.1));
-
-        for (ci, _, line) in &level_winners {
-            out.push_str(line);
-            out.push('\n');
-            simple_assigned.insert(*ci);
         }
     }
 
@@ -209,7 +234,26 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         full_code_to_chars[code].push(ci);
     }
 
-    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars);
+    // 计算首选标记：每个非空全码桶取 (最大频率, 最小 ci) 为首选字（需求 5.1/5.2），
+    // 供 Efficiency 模式排序键的 sel_len 取值。
+    let mut is_first_candidate = vec![false; n];
+    for chars in full_code_to_chars.iter() {
+        if chars.is_empty() {
+            continue;
+        }
+        let mut max_f = 0u64;
+        let mut first = usize::MAX;
+        for &ci in chars {
+            let f = ctx.char_infos[ci].frequency;
+            if f > max_f || (f == max_f && ci < first) {
+                max_f = f;
+                first = ci;
+            }
+        }
+        is_first_candidate[first] = true;
+    }
+
+    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first_candidate);
     let sm = se.get_simple_metrics(ctx);
 
     let mut out = String::new();
@@ -228,14 +272,16 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
     out.push_str("#\n");
 
     let n_chars = ctx.char_infos.len();
-    let mut globally_assigned: HashSet<usize> = HashSet::new();
 
-    let mut sorted_chars: Vec<usize> = (0..n_chars).collect();
-    sorted_chars.sort_by(|&a, &b| {
-        ctx.char_infos[b]
-            .frequency
-            .cmp(&ctx.char_infos[a].frequency)
-    });
+    // 镜像评估器出简选择（需求 23）：直接复用上面已构建的 `se` 的 selected 状态，
+    // 按分配顺序（级别升序、桶内排序键）输出，使输出方案与被优化方案逐字一致。
+    let _ = n_chars;
+    let ordered = se.selected_ordered(ctx, &is_first_candidate);
+    let n_levels = ctx.simple_config.levels.len();
+    let mut per_level: Vec<Vec<usize>> = vec![Vec::new(); n_levels];
+    for (li, ci) in ordered {
+        per_level[li].push(ci);
+    }
 
     for (li, level_cfg) in ctx.simple_config.levels.iter().enumerate() {
         let rules_str: String = level_cfg
@@ -254,52 +300,30 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         ));
         out.push_str("# 汉字\t简码\t字频\n");
 
-        let mut code_candidates: HashMap<usize, Vec<(usize, u64)>> = HashMap::new();
-
-        for &ci in &sorted_chars {
-            if globally_assigned.contains(&ci) {
-                continue;
-            }
-            if let Some(code) = ctx.calc_simple_code(ci, li, assignment) {
-                code_candidates
-                    .entry(code)
-                    .or_default()
-                    .push((ci, ctx.char_infos[ci].frequency));
-            }
+        // 优化出简：镜像评估器 selected（含 efficiency 排序 / sel_len / 占用扣减 / 跨级排除）。
+        for &ci in &per_level[li] {
+            let ch = ctx.raw_splits[ci].0;
+            let freq = ctx.char_infos[ci].frequency;
+            let code_str = simple_code_str(ctx, ci, li, assignment, level_cfg.space_commit);
+            out.push_str(&format!("{}\t{}\t{}\n", ch, code_str, freq));
         }
 
-        let mut level_winners: Vec<(usize, u64, String)> = Vec::new();
-
-        for (_code, candidates) in &code_candidates {
-            let mut count = 0;
-            for &(ci, freq) in candidates {
-                if count >= level_cfg.code_num {
-                    break;
-                }
-                if globally_assigned.contains(&ci) {
-                    continue;
-                }
-
-                let ch = ctx.raw_splits[ci].0;
-                let code_str: String = ctx
-                    .get_simple_keys(ci, li, assignment)
-                    .map(|keys| keys.iter().map(|&k| key_to_char(k)).collect())
-                    .unwrap_or_else(|| String::from("?"));
-
-                level_winners.push((ci, freq, format!("{}\t{}\t{}", ch, code_str, freq)));
-                count += 1;
+        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留结尾下划线。
+        let mut fixed_count = 0usize;
+        for fc in &ctx.simple_fixed_codes {
+            if fc.li == li {
+                let ch = ctx.raw_splits[fc.ci].0;
+                let freq = ctx.char_infos[fc.ci].frequency;
+                out.push_str(&format!("{}\t{}\t{}\n", ch, fc.code_str, freq));
+                fixed_count += 1;
             }
         }
 
-        level_winners.sort_by(|a, b| b.1.cmp(&a.1));
-
-        for (ci, _, line) in &level_winners {
-            out.push_str(line);
-            out.push('\n');
-            globally_assigned.insert(*ci);
-        }
-
-        out.push_str(&format!("# 该级简码覆盖 {} 字\n", level_winners.len()));
+        out.push_str(&format!(
+            "# 该级简码覆盖 {} 字（含固定简码 {} 字）\n",
+            per_level[li].len() + fixed_count,
+            fixed_count
+        ));
     }
 
     fs::write(format!("{}/output-simple-codes.txt", dir), out).unwrap();
@@ -660,4 +684,236 @@ pub fn save_summary(
     }
 
     fs::write(format!("{}/summary.txt", output_dir), summary).unwrap();
+}
+
+// =========================================================================
+// 🧪 空格上屏输出表示属性测试（simple-code-perf-optimization, Property 17）
+// =========================================================================
+#[cfg(test)]
+mod space_commit_output_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep,
+        WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建单级简码（步数 1，规则 [A.a]）的 OptContext，可指定该级 space_commit。
+    /// 每个汉字含 3 个互不相同字根（各自成组），故全码长度 3 > 有效简码长度（1 或 2），
+    /// 在 space true/false 下均满足长度资格（需求 22），保证有字出简。
+    fn make_ctx_single_level(freqs: &[u64], space_commit: bool) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(freqs.len());
+        for (i, &freq) in freqs.iter().enumerate() {
+            let mut roots: Vec<String> = Vec::with_capacity(3);
+            for j in 0..3usize {
+                let root = format!("r{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1, 2],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![SimpleCodeLevel {
+            level: 1,
+            code_num: 1,
+            rule_candidates: vec![vec![step('A')]],
+            space_commit,
+        }];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 收集 output-simple-codes.txt 中的数据行简码列（跳过注释/空行）。
+    fn read_simple_codes(path: &str) -> Vec<String> {
+        let content = fs::read_to_string(path).expect("读取简码输出文件失败");
+        let mut codes = Vec::new();
+        for line in content.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            let cols: Vec<&str> = line.split('\t').collect();
+            // 数据行格式：汉字\t简码\t字频
+            if cols.len() >= 3 {
+                codes.push(cols[1].to_string());
+            }
+        }
+        codes
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: simple-code-perf-optimization, Property 17: 空格上屏的输出表示
+        //
+        // 对任意简码级别 li 与该级被出简的字，其输出到 output 文件的简码字符串：当 space_commit
+        // 为真时恰为「键位串 + 单个尾随下划线 `_`」，当 space_commit 为假时恰为「键位串、无尾随下划线」。
+        #[test]
+        fn prop17_space_commit_output_underscore(
+            freqs in prop::collection::vec(1u64..=200, 1..=5),
+            space_commit in any::<bool>(),
+            dir_seed in any::<u64>(),
+        ) {
+            let ctx = make_ctx_single_level(&freqs, space_commit);
+            let asg = vec![0u8; ctx.num_groups];
+
+            let dir = std::env::temp_dir()
+                .join(format!("cg_prop17_{}_{}", std::process::id(), dir_seed));
+            let dir_str = dir.to_str().unwrap().to_string();
+            fs::create_dir_all(&dir).unwrap();
+
+            save_simple_code_output(&ctx, &asg, &dir_str);
+
+            let codes = read_simple_codes(&format!("{}/output-simple-codes.txt", dir_str));
+            prop_assert!(!codes.is_empty(), "应至少有一个字出简");
+
+            for code in &codes {
+                // 末尾恰一个下划线 ⟺ space_commit 为真；其余字符不应含下划线
+                let trailing = code.ends_with('_');
+                prop_assert_eq!(trailing, space_commit,
+                    "简码 {:?} 的尾随下划线应与 space_commit={} 一致", code, space_commit);
+                let core = code.trim_end_matches('_');
+                prop_assert!(!core.contains('_'),
+                    "简码核心串不应含下划线: {:?}", code);
+                if space_commit {
+                    // 恰一个尾随下划线（核心串 + 单 '_'）
+                    prop_assert_eq!(code.len(), core.len() + 1,
+                        "space_commit=true 应恰有单个尾随下划线: {:?}", code);
+                }
+            }
+
+            // 清理临时目录
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+// =========================================================================
+// 🧪 output 镜像评估器选择 + 固定占用回归测试（simple-code-perf-optimization, 需求 23 / Finding A）
+// =========================================================================
+#[cfg(test)]
+mod output_selection_mirror_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use std::collections::HashMap;
+
+    /// 单级简码（步数 1，规则 [A.a]）、每字 2 根（全码长 2 > 简码长 1）、允许键位 [0,1]，
+    /// 可指定 code_num 与固定简码映射。assignment 全 0 时各字首根均解析为键 0，故所有候选字
+    /// 的级别 0 简码落入同一桶（编码 = encode([0])），便于构造「固定占用 + 优化」竞争同桶。
+    fn make_ctx(freqs: &[u64], code_num: usize, fixed: &[(char, String)]) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(freqs.len());
+        for (i, &f) in freqs.iter().enumerate() {
+            let r0 = format!("r{i}_0");
+            let r1 = format!("r{i}_1");
+            groups.push(RootGroup { roots: vec![r0.clone()], allowed_keys: vec![0, 1] });
+            groups.push(RootGroup { roots: vec![r1.clone()], allowed_keys: vec![0, 1] });
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, vec![r0, r1], f));
+        }
+        let levels = vec![SimpleCodeLevel {
+            level: 1,
+            code_num,
+            rule_candidates: vec![vec![SimpleCodeStep { root_selector: 'A', code_selector: 'a' }]],
+            space_commit: false,
+        }];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        weights.simple_assign_mode = SimpleAssignMode::Frequency;
+        OptContext::new_with_fixed(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+            fixed,
+        )
+    }
+
+    /// 对 evaluator_simple_selection 的结果，按 (级别, 简码桶) 统计优化出简数，断言
+    /// 「优化出简 + 固定占用 ≤ code_num」恒成立（Finding A：output 不得超额出简）。
+    fn assert_occupancy(ctx: &OptContext, asg: &[u8]) {
+        let sel = evaluator_simple_selection(ctx, asg);
+        let mut opt: HashMap<(usize, usize), usize> = HashMap::new();
+        for (li, ci) in &sel {
+            // 固定字不应出现在优化选择中
+            assert!(!ctx.simple_fixed_assigned[*ci], "固定字不应在优化出简中: ci={}", ci);
+            let code = ctx.calc_simple_code(*ci, *li, asg).expect("出简字必有简码");
+            *opt.entry((*li, code)).or_default() += 1;
+        }
+        for ((li, code), &cnt) in &opt {
+            let occ = ctx.simple_fixed_occ(*li, *code);
+            let cn = ctx.simple_config.levels[*li].code_num;
+            assert!(cnt + occ <= cn,
+                "级别 {} 桶 {}: 优化 {} + 固定 {} 超过 code_num {}", li, code, cnt, occ, cn);
+        }
+    }
+
+    #[test]
+    fn fixed_occupancy_caps_output_selection() {
+        // 4 字（freq 100/90/80/70），assignment 全 0 ⟹ 级别 0 简码均落入同一桶。
+        let freqs = [100u64, 90, 80, 70];
+        // 固定简码：把「一」(0x4e00) 固定为 "a"(键 0)，占用该桶。
+        let fixed = vec![('\u{4e00}', "a".to_string())];
+
+        // code_num = 1：固定占满该桶 ⟹ 优化出简数为 0（output 不得再选字进同桶）。
+        let ctx1 = make_ctx(&freqs, 1, &fixed);
+        let asg = vec![0u8; ctx1.num_groups];
+        assert_occupancy(&ctx1, &asg);
+        let sel1 = evaluator_simple_selection(&ctx1, &asg);
+        assert!(sel1.is_empty(), "code_num=1 且固定占满时不应有优化出简，实际 {:?}", sel1.len());
+
+        // code_num = 2：固定占 1 ⟹ 优化出简恰 1。
+        let ctx2 = make_ctx(&freqs, 2, &fixed);
+        let asg2 = vec![0u8; ctx2.num_groups];
+        assert_occupancy(&ctx2, &asg2);
+        let sel2 = evaluator_simple_selection(&ctx2, &asg2);
+        assert_eq!(sel2.len(), 1, "code_num=2 且固定占 1 时优化出简应恰为 1");
+
+        // 无固定简码、code_num = 1：优化出简恰 1（基线对照）。
+        let ctx0 = make_ctx(&freqs, 1, &[]);
+        let asg0 = vec![0u8; ctx0.num_groups];
+        assert_occupancy(&ctx0, &asg0);
+        let sel0 = evaluator_simple_selection(&ctx0, &asg0);
+        assert_eq!(sel0.len(), 1, "无固定简码、code_num=1 时优化出简应恰为 1");
+    }
 }

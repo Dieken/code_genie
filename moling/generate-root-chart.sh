@@ -8,6 +8,10 @@ shopt -s failglob
 [ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
 [ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
 
+# 默认开启潇明的空格简码
+[ "${USE_XIAOMING_RULE:-}" = 1 ] && [ -z "${ENABLE_SPACE_SHORTCODE:-}" ] && export ENABLE_SPACE_SHORTCODE=1
+
+
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=typer
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=../../typer
 [ -d "$TYPER_ROOT/scripts" ] || {
@@ -21,7 +25,15 @@ shopt -s failglob
 }
 
 echo "Writing $1/roots.tsv ..."
-true || perl -CSDA -lanE '
+f="$1/source/config.toml"
+[ -f "$f" ] || f="$1/../source/config.toml"
+if sed -ne '/^\s*\[weights.simple_code\]/,/^\s*\[/p' "$f" | grep -qi '^\s*enabled\s*=\s*true'; then
+perl -CSDA -lanE '
+  next if /^\s*#/;
+  print "$F[0]\t$F[1]";
+  ' "$1/output-keymap.txt" > "$1/roots.tsv"
+else
+perl -CSDA -lanE '
   next unless /^(\S+)\.([UASY])/;
   $h{$1}{$2} = lc($F[1]);
   END {
@@ -40,12 +52,7 @@ true || perl -CSDA -lanE '
     for (@roots) { print "$_->[0]\t", ucfirst($_->[1]); }
   }
   ' "$1/output-keymap.txt" > "$1/roots.tsv"
-
-# prepare-inputs.sh 里已经将字根后缀从 ASY 改成 012
-perl -CSDA -lanE '
-  next if /^\s*#/;
-  print "$F[0]\t$F[1]";
-  ' "$1/output-keymap.txt" > "$1/roots.tsv"
+fi
 
 echo "Writing $1/roots-mapping.tsv ..."
 perl -CSDA -F, -lanE '
@@ -263,6 +270,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             if ($ENV{USE_XIAOMING_RULE}) {
                 if (length($v->{code}) == 3) {                  # 字根字
+                    next unless $ENV{ENABLE_SPACE_SHORTCODE};
                     $s = substr($v->{code}, 0, 1) . "_";        # 只可能是二简 A_
                 } else {                                        # 二根及以上根字，全码长一定 >= 4
                     if ($i == 2) {                              # 二简 AA

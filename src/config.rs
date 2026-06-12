@@ -3,9 +3,10 @@
 // =========================================================================
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::fs;
 
-use crate::types::{SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep, WeightConfig};
+use crate::types::{SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep, WeightConfig};
 
 // =========================================================================
 // 📋 配置结构体定义
@@ -21,6 +22,11 @@ pub struct Config {
     pub simple_levels: Vec<SimpleLevelConfig>,
     pub scale: Option<ScaleConfigToml>,    // 可选，缺失则完全依赖 calibrate
     pub targets: Option<TargetsConfig>,    // 可选，缺失则使用默认（disabled）
+    /// 固定简码映射（需求 21）：顶层内联表 `[fixed_simple_codes]`，形如 `"不" = "u"`、
+    /// `"了" = "a_"`。键为汉字、值为字面简码串（可选以 `_` 结尾表示空格上屏）。
+    /// 缺失时为 None。用 `BTreeMap` 保证遍历顺序确定。
+    #[serde(default)]
+    pub fixed_simple_codes: Option<BTreeMap<String, String>>,
 }
 
 /// 文件路径配置
@@ -68,7 +74,34 @@ pub struct SimpleCodeWeights {
     pub dist: f64,
     pub collision_count: f64,
     pub collision_rate: f64,
+
+    // ---- 简码评估性能优化新增项（需求 17/18） ----
+    /// 简码计算激活进度阈值（默认 0.4）
+    #[serde(default = "default_simple_start_progress")]
+    pub simple_start_progress: f64,
+    /// 权重从 0 渐进到 W 的进度长度（默认 0.1）
+    #[serde(default = "default_simple_ramp_progress")]
+    pub simple_ramp_progress: f64,
+    /// 激活当刻升温倍率（默认 1.2，独立于 reheat_factor）
+    #[serde(default = "default_simple_activation_reheat")]
+    pub simple_activation_reheat: f64,
+    /// 候选字累计字频覆盖率阈值（默认 0.90）
+    #[serde(default = "default_simple_coverage_ratio")]
+    pub simple_coverage_ratio: f64,
+    /// 周期对账间隔比例，M = floor(total_steps × ratio)，M ≥ 1（默认 0.05）
+    #[serde(default = "default_reconcile_interval_ratio")]
+    pub reconcile_interval_ratio: f64,
+    /// 桶内出简排序模式："frequency" 或 "efficiency"（默认 "efficiency"）
+    #[serde(default = "default_simple_assign_mode")]
+    pub simple_assign_mode: String,
 }
+
+fn default_simple_start_progress() -> f64 { 0.4 }
+fn default_simple_ramp_progress() -> f64 { 0.1 }
+fn default_simple_activation_reheat() -> f64 { 1.2 }
+fn default_simple_coverage_ratio() -> f64 { 0.90 }
+fn default_reconcile_interval_ratio() -> f64 { 0.05 }
+fn default_simple_assign_mode() -> String { "efficiency".to_string() }
 
 /// 模拟退火参数配置
 #[derive(Debug, Clone, Deserialize)]
@@ -86,7 +119,25 @@ pub struct AnnealingConfig {
     pub perturb_strength: f64,
     pub reheat_factor: f64,
     pub max_parts: usize,
+
+    /// 冲突导向移动的执行概率（0.0~1.0），0.0 表示关闭本特性
+    #[serde(default = "default_conflict_probability")]
+    pub conflict_probability: f64,
+    /// 每隔多少步重建一次冲突缓存；0 表示初始化后不再重建
+    #[serde(default = "default_conflict_refresh_interval")]
+    pub conflict_refresh_interval: usize,
+    /// 在排序后冲突列表的前 N 个元素中采样
+    #[serde(default = "default_conflict_sample_window")]
+    pub conflict_sample_window: usize,
+    /// 冲突组排序是否按频率加权（true=按字频之和，false=按汉字数量）
+    #[serde(default = "default_conflict_weight_by_freq")]
+    pub conflict_weight_by_freq: bool,
 }
+
+fn default_conflict_probability() -> f64 { 0.0 }
+fn default_conflict_refresh_interval() -> usize { 1000 }
+fn default_conflict_sample_window() -> usize { 20 }
+fn default_conflict_weight_by_freq() -> bool { false }
 
 /// 全码目标配置（对应 [targets.full_code] 段）
 #[derive(Debug, Clone, Deserialize)]
@@ -171,6 +222,9 @@ pub struct SimpleLevelConfig {
     pub level: usize,
     pub code_num: usize,
     pub rules: Vec<String>,
+    /// 是否需要空格上屏（需求 20）；缺省为 false
+    #[serde(default)]
+    pub space_commit: bool,
 }
 
 /// 目标配置容器（对应 [targets] 段）
@@ -229,12 +283,23 @@ impl Config {
         }
     }
 
-    /// 获取简码配置（转换为内部格式）
+    /// 获取简码配置（转换为内部格式）。
+    ///
+    /// 级别保留规则（需求 21 / 确认点 1）：`code_num > 0` 的级别一律保留；`code_num == 0` 的级别
+    /// 仅在「存在按核心码长归属到该级的固定简码」时才保留——使该级的固定简码仍生效（输出并排除
+    /// 退火分配），同时不给「无固定简码的 code_num=0 级别」（如默认配置）凭空增加桶分配开销。
     pub fn get_simple_code_config(&self) -> SimpleCodeConfig {
+        // 固定简码的核心码长集合（去结尾 `_`），用于判断 code_num=0 级别是否需保留。
+        let fixed_core_lens: std::collections::HashSet<usize> = self
+            .get_fixed_simple_codes()
+            .iter()
+            .map(|(_, code)| code.trim_end_matches('_').chars().count())
+            .filter(|&l| l > 0)
+            .collect();
+
         let levels: Vec<SimpleCodeLevel> = self
             .simple_levels
             .iter()
-            .filter(|l| l.code_num > 0)
             .map(|l| {
                 let rule_candidates: Vec<Vec<SimpleCodeStep>> = l
                     .rules
@@ -246,12 +311,46 @@ impl Config {
                     level: l.level,
                     code_num: l.code_num,
                     rule_candidates,
+                    space_commit: l.space_commit,
                 }
             })
             .filter(|l| !l.rule_candidates.is_empty())
+            .filter(|l| {
+                if l.code_num > 0 {
+                    return true;
+                }
+                // code_num == 0：仅当有固定简码按码长归属到该级时保留（该级简码键位数 =
+                // 各候选规则步数的最大值，与 context 的 max_len 口径一致）。
+                let level_len = l
+                    .rule_candidates
+                    .iter()
+                    .map(|r| r.len())
+                    .max()
+                    .unwrap_or(0);
+                fixed_core_lens.contains(&level_len)
+            })
             .collect();
 
         SimpleCodeConfig { levels }
+    }
+
+    /// 解析固定简码映射为 `Vec<(char, String)>`（需求 21.1）。
+    ///
+    /// 键取汉字串的首个 `char`（忽略多字符键的余下部分），值为字面简码串（保留结尾 `_`）。
+    /// 缺失或空映射时返回空 `Vec`。具体的级别归属与一致性/长度校验在 `OptContext::new_with_fixed`
+    /// 中完成（需依赖该字全码长度与各级 `space_commit` / 简码键位数）。
+    pub fn get_fixed_simple_codes(&self) -> Vec<(char, String)> {
+        let mut out: Vec<(char, String)> = Vec::new();
+        if let Some(map) = &self.fixed_simple_codes {
+            for (hanzi, code) in map {
+                if let Some(ch) = hanzi.chars().next() {
+                    out.push((ch, code.clone()));
+                } else {
+                    eprintln!("⚠️ 警告：固定简码映射含空汉字键，已忽略");
+                }
+            }
+        }
+        out
     }
 
     /// 验证权重配置是否合理
@@ -314,13 +413,95 @@ impl Config {
             weight_equiv_cv: self.weights.full_code.equiv_cv,
             weight_distribution: self.weights.full_code.distribution,
             enable_simple_code: self.weights.simple_code.enabled,
-            weight_full_code: self.weights.simple_code.full_code_weight,
+            // 简码关闭时 weight_full_code 取 1.0：综合得分退化为纯原始全码分数（与简码引入前的
+            // 基线一致），避免用 full_code_weight(<1) 整体缩放分数而改变 SA 接受概率与全码搜索行为。
+            // 简码启用时仍取 full_code_weight，与 simple_code_weight 共同平衡两个分量。
+            weight_full_code: if self.weights.simple_code.enabled {
+                self.weights.simple_code.full_code_weight
+            } else {
+                1.0
+            },
             weight_simple_code: self.weights.simple_code.simple_code_weight,
             simple_weight_freq: self.weights.simple_code.freq,
             simple_weight_equiv: self.weights.simple_code.equiv,
             simple_weight_dist: self.weights.simple_code.dist,
             simple_weight_collision_count: self.weights.simple_code.collision_count,
             simple_weight_collision_rate: self.weights.simple_code.collision_rate,
+            simple_coverage_ratio: self.weights.simple_code.simple_coverage_ratio,
+            simple_assign_mode: parse_simple_assign_mode(&self.weights.simple_code.simple_assign_mode),
+        }
+    }
+
+    /// 校验并钳制简码激活与渐进配置（需求 13）。
+    ///
+    /// 规则：
+    /// - `simple_start_progress`、`simple_ramp_progress` 负值钳为 0；
+    /// - `simple_start_progress >= 1` 钳到 `[0,1)` 内的最大有效值；
+    /// - `start + ramp > 1` 时钳定 `ramp = 1 - start`；
+    /// - `(start, ramp) == (0, 0)` 时返回硬激活标记 `true`。
+    ///
+    /// 任何越界钳制都会输出告警。返回 `hard_activate`。
+    pub fn validate_simple_activation(&mut self) -> bool {
+        let sc = &mut self.weights.simple_code;
+
+        if sc.simple_start_progress < 0.0 {
+            eprintln!(
+                "⚠️ 警告：simple_start_progress < 0 (当前: {:.3})，钳制为 0",
+                sc.simple_start_progress
+            );
+            sc.simple_start_progress = 0.0;
+        }
+        if sc.simple_ramp_progress < 0.0 {
+            eprintln!(
+                "⚠️ 警告：simple_ramp_progress < 0 (当前: {:.3})，钳制为 0",
+                sc.simple_ramp_progress
+            );
+            sc.simple_ramp_progress = 0.0;
+        }
+        if sc.simple_start_progress >= 1.0 {
+            // 钳到 [0,1) 内的最大有效值
+            let clamped = 1.0 - f64::EPSILON;
+            eprintln!(
+                "⚠️ 警告：simple_start_progress >= 1 (当前: {:.3})，钳制到 {:.6}",
+                sc.simple_start_progress, clamped
+            );
+            sc.simple_start_progress = clamped;
+        }
+        if sc.simple_start_progress + sc.simple_ramp_progress > 1.0 {
+            let clamped_ramp = 1.0 - sc.simple_start_progress;
+            eprintln!(
+                "⚠️ 警告：simple_start_progress + simple_ramp_progress > 1 (当前: {:.3})，钳定 ramp 为 {:.6}",
+                sc.simple_start_progress + sc.simple_ramp_progress,
+                clamped_ramp
+            );
+            sc.simple_ramp_progress = clamped_ramp;
+        }
+
+        // 激活升温倍率小于 1 等于「激活即降温」，属误配；钳制为 1.0（需求 27.3）。
+        if sc.simple_activation_reheat < 1.0 {
+            eprintln!(
+                "⚠️ 警告：simple_activation_reheat < 1.0 (当前: {:.3})，钳制为 1.0",
+                sc.simple_activation_reheat
+            );
+            sc.simple_activation_reheat = 1.0;
+        }
+
+        // (start, ramp) == (0, 0) → 从开始即硬激活（兼容档，需求 13.5）
+        sc.simple_start_progress == 0.0 && sc.simple_ramp_progress == 0.0
+    }
+}
+
+/// 解析简码出简排序模式字符串；非法值回落 `Efficiency` 并告警（需求 13）
+fn parse_simple_assign_mode(s: &str) -> SimpleAssignMode {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "frequency" => SimpleAssignMode::Frequency,
+        "efficiency" => SimpleAssignMode::Efficiency,
+        other => {
+            eprintln!(
+                "⚠️ 警告：simple_assign_mode 取值非法 \"{}\"，回落到默认 \"efficiency\"",
+                other
+            );
+            SimpleAssignMode::Efficiency
         }
     }
 }
@@ -377,6 +558,12 @@ impl Default for Config {
                     dist: 0.05,
                     collision_count: 0.05,
                     collision_rate: 0.25,
+                    simple_start_progress: default_simple_start_progress(),
+                    simple_ramp_progress: default_simple_ramp_progress(),
+                    simple_activation_reheat: default_simple_activation_reheat(),
+                    simple_coverage_ratio: default_simple_coverage_ratio(),
+                    reconcile_interval_ratio: default_reconcile_interval_ratio(),
+                    simple_assign_mode: default_simple_assign_mode(),
                 },
             },
             annealing: AnnealingConfig {
@@ -393,26 +580,34 @@ impl Default for Config {
                 perturb_strength: 0.15,
                 reheat_factor: 1.25,
                 max_parts: 3,
+                conflict_probability: 0.0,
+                conflict_refresh_interval: 1000,
+                conflict_sample_window: 20,
+                conflict_weight_by_freq: false,
             },
             simple_levels: vec![
                 SimpleLevelConfig {
                     level: 1,
                     code_num: 0,
                     rules: vec!["Aa".to_string()],
+                    space_commit: false,
                 },
                 SimpleLevelConfig {
                     level: 2,
                     code_num: 1,
                     rules: vec!["AaBa".to_string()],
+                    space_commit: false,
                 },
                 SimpleLevelConfig {
                     level: 3,
                     code_num: 1,
                     rules: vec!["AaBaCa".to_string()],
+                    space_commit: false,
                 },
             ],
             scale: None,
             targets: None,
+            fixed_simple_codes: None,
         }
     }
 }
@@ -697,5 +892,208 @@ dist_max = 8.0
         assert_eq!(targets.simple_code.freq, 0.0);
         assert_eq!(targets.simple_code.low_weight, 0.01);
         assert_eq!(targets.simple_code.freq_max, 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // 冲突导向配置项：默认值与向后兼容解析测试
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_conflict_fields_default_when_absent() {
+        // 不含任何冲突导向字段的 [annealing] 应解析成功且四字段取默认值
+        let cfg: Config = toml::from_str(minimal_config_prefix()).expect("解析失败");
+        let a = &cfg.annealing;
+        assert_eq!(a.conflict_probability, 0.0);
+        assert_eq!(a.conflict_refresh_interval, 1000);
+        assert_eq!(a.conflict_sample_window, 20);
+        assert!(!a.conflict_weight_by_freq);
+    }
+
+    #[test]
+    fn test_conflict_fields_partial_present() {
+        // 仅含部分冲突导向字段：已存在字段取显式值，缺失字段取默认值
+        let toml_str = format!(
+            "{}\nconflict_probability = 0.25\nconflict_weight_by_freq = true\n",
+            minimal_config_prefix()
+        );
+        let cfg: Config = toml::from_str(&toml_str).expect("解析失败");
+        let a = &cfg.annealing;
+        assert_eq!(a.conflict_probability, 0.25); // 显式
+        assert!(a.conflict_weight_by_freq); // 显式
+        assert_eq!(a.conflict_refresh_interval, 1000); // 默认
+        assert_eq!(a.conflict_sample_window, 20); // 默认
+    }
+
+    #[test]
+    fn test_conflict_fields_default_impl() {
+        let a = &Config::default().annealing;
+        assert_eq!(a.conflict_probability, 0.0);
+        assert_eq!(a.conflict_refresh_interval, 1000);
+        assert_eq!(a.conflict_sample_window, 20);
+        assert!(!a.conflict_weight_by_freq);
+    }
+
+    // -----------------------------------------------------------------------
+    // 简码评估性能优化新增配置项：默认值与 simple_assign_mode 解析测试
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_simple_code_new_fields_default_when_absent() {
+        // minimal_config_prefix 的 [weights.simple_code] 不含 6 个新增项，
+        // 应解析成功且全部取既定默认值（需求 4.1/7.2/8.2/9.1/12.1/17.1）
+        let cfg: Config = toml::from_str(minimal_config_prefix()).expect("解析失败");
+        let sc = &cfg.weights.simple_code;
+        assert_eq!(sc.simple_start_progress, 0.4);
+        assert_eq!(sc.simple_ramp_progress, 0.1);
+        assert_eq!(sc.simple_activation_reheat, 1.2);
+        assert_eq!(sc.simple_coverage_ratio, 0.90);
+        assert_eq!(sc.reconcile_interval_ratio, 0.05);
+        assert_eq!(sc.simple_assign_mode, "efficiency");
+    }
+
+    #[test]
+    fn test_simple_code_new_fields_explicit_values() {
+        // 显式提供新增项时应原样解析（不被默认值覆盖）
+        let toml_with_new = minimal_config_prefix().replace(
+            "collision_count = 0.0\ncollision_rate = 0.0\n",
+            "collision_count = 0.0\ncollision_rate = 0.0\nsimple_start_progress = 0.4\nsimple_ramp_progress = 0.2\nsimple_activation_reheat = 1.5\nsimple_coverage_ratio = 0.95\nreconcile_interval_ratio = 0.1\nsimple_assign_mode = \"frequency\"\n",
+        );
+        let cfg: Config = toml::from_str(&toml_with_new).expect("解析失败");
+        let sc = &cfg.weights.simple_code;
+        assert_eq!(sc.simple_start_progress, 0.4);
+        assert_eq!(sc.simple_ramp_progress, 0.2);
+        assert_eq!(sc.simple_activation_reheat, 1.5);
+        assert_eq!(sc.simple_coverage_ratio, 0.95);
+        assert_eq!(sc.reconcile_interval_ratio, 0.1);
+        assert_eq!(sc.simple_assign_mode, "frequency");
+    }
+
+    #[test]
+    fn test_parse_simple_assign_mode_valid() {
+        // "frequency" -> Frequency，"efficiency" -> Efficiency（含大小写/空白容错）
+        assert_eq!(parse_simple_assign_mode("frequency"), SimpleAssignMode::Frequency);
+        assert_eq!(parse_simple_assign_mode("efficiency"), SimpleAssignMode::Efficiency);
+        assert_eq!(parse_simple_assign_mode("  Frequency  "), SimpleAssignMode::Frequency);
+        assert_eq!(parse_simple_assign_mode("EFFICIENCY"), SimpleAssignMode::Efficiency);
+    }
+
+    #[test]
+    fn test_parse_simple_assign_mode_illegal_falls_back_to_efficiency() {
+        // 非法字符串回落为 Efficiency（需求 17.2）
+        assert_eq!(parse_simple_assign_mode("foo"), SimpleAssignMode::Efficiency);
+        assert_eq!(parse_simple_assign_mode(""), SimpleAssignMode::Efficiency);
+    }
+
+    #[test]
+    fn test_get_weight_config_simple_assign_mode_illegal_falls_back() {
+        // 通过 get_weight_config()：非法 simple_assign_mode 经 parse 后回落 Efficiency
+        let toml_with_illegal = minimal_config_prefix().replace(
+            "collision_count = 0.0\ncollision_rate = 0.0\n",
+            "collision_count = 0.0\ncollision_rate = 0.0\nsimple_assign_mode = \"bogus\"\n",
+        );
+        let cfg: Config = toml::from_str(&toml_with_illegal).expect("解析失败");
+        assert_eq!(cfg.weights.simple_code.simple_assign_mode, "bogus");
+
+        let wc = cfg.get_weight_config();
+        assert_eq!(wc.simple_assign_mode, SimpleAssignMode::Efficiency);
+        // 同时确认默认覆盖率被正确传递
+        assert_eq!(wc.simple_coverage_ratio, 0.90);
+    }
+
+    #[test]
+    fn test_code_num_zero_level_kept_only_with_matching_fixed() {
+        // 确认点 1：get_simple_code_config 中 code_num=0 的级别仅在「有按码长归属到该级的
+        // 固定简码」时保留，否则丢弃（默认配置 level 1 code_num=0 无固定简码 → 丢弃）。
+        let mut cfg = Config::default();
+        // 默认 simple_levels：level 1 code_num=0(rules ["Aa"], 1 键)、level 2/3 code_num>0。
+        cfg.fixed_simple_codes = None;
+        let levels_no_fixed = cfg.get_simple_code_config().levels;
+        assert!(
+            levels_no_fixed.iter().all(|l| l.code_num > 0),
+            "无固定简码时 code_num=0 级别应被丢弃"
+        );
+
+        // 加入归属 level 1（1 键）的固定简码 "a" → 该 code_num=0 级别应保留。
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("不".to_string(), "a".to_string());
+        cfg.fixed_simple_codes = Some(map);
+        let levels_fixed = cfg.get_simple_code_config().levels;
+        assert!(
+            levels_fixed.iter().any(|l| l.code_num == 0),
+            "有归属 code_num=0 级别的固定简码时应保留该级别"
+        );
+        assert_eq!(
+            levels_fixed.len(),
+            levels_no_fixed.len() + 1,
+            "应恰好多保留一个 code_num=0 级别"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Property 11：激活与渐进配置钳制不变量
+    // -----------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    proptest! {
+        // Feature: simple-code-perf-optimization, Property 11: 激活与渐进配置钳制不变量
+        // 对任意输入的 simple_start_progress 与 simple_ramp_progress（含负值、≥1、之和 >1 等
+        // 非法值），钳制后应满足：0 ≤ start < 1、start + ramp ≤ 1、负输入被钳为 0；
+        // 且当二者输入均为 0（含负值经钳制后为 0）时，hard_activate 为真。
+        // Validates: Requirements 13.1, 13.2, 13.3, 13.4, 13.5
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop11_activation_clamp_invariants(
+            start in -5.0f64..5.0,
+            ramp in -5.0f64..5.0,
+        ) {
+            let mut cfg = Config::default();
+            cfg.weights.simple_code.simple_start_progress = start;
+            cfg.weights.simple_code.simple_ramp_progress = ramp;
+
+            let hard = cfg.validate_simple_activation();
+            let sc = &cfg.weights.simple_code;
+
+            // 13.2 / 13.3：0 ≤ start < 1
+            prop_assert!(sc.simple_start_progress >= 0.0);
+            prop_assert!(sc.simple_start_progress < 1.0);
+
+            // 13.1：负输入被钳为 0（start/ramp 钳制后均非负）
+            prop_assert!(sc.simple_ramp_progress >= 0.0);
+            if start < 0.0 {
+                prop_assert_eq!(sc.simple_start_progress, 0.0);
+            }
+            if ramp < 0.0 && start + ramp <= 1.0 {
+                // ramp 负值先被钳为 0；该值不会再被 start+ramp>1 分支改动
+                prop_assert_eq!(sc.simple_ramp_progress, 0.0);
+            }
+
+            // 13.4：start + ramp ≤ 1（容许浮点误差）
+            prop_assert!(sc.simple_start_progress + sc.simple_ramp_progress <= 1.0 + 1e-9);
+
+            // 13.5：二者（经负值钳制后）均为 0 时硬激活为真，否则为假
+            let start_after_neg = start.max(0.0);
+            let ramp_after_neg = ramp.max(0.0);
+            let expected_hard = start_after_neg == 0.0 && ramp_after_neg == 0.0;
+            prop_assert_eq!(hard, expected_hard);
+        }
+    }
+
+    // 需求 27.3：simple_activation_reheat < 1.0 应被钳制为 1.0 并告警。
+    #[test]
+    fn test_reheat_below_one_clamped_to_one() {
+        let mut cfg = Config::default();
+        cfg.weights.simple_code.simple_activation_reheat = 0.5;
+        cfg.validate_simple_activation();
+        assert_eq!(
+            cfg.weights.simple_code.simple_activation_reheat, 1.0,
+            "reheat < 1.0 应被钳制为 1.0（需求 27.3）"
+        );
+
+        // >= 1.0 的值不被钳制（上界仅告警、不钳制，需求 27.4）。
+        let mut cfg2 = Config::default();
+        cfg2.weights.simple_code.simple_activation_reheat = 3.0;
+        cfg2.validate_simple_activation();
+        assert_eq!(cfg2.weights.simple_code.simple_activation_reheat, 3.0);
     }
 }

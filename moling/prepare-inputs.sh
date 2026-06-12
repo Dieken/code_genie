@@ -659,5 +659,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   print "$F[0]\t", join(" ", @b), "\t$F[2]";
 ' chaifen.txt > input-division.txt
 
-echo '(13) 替换 input-fixed.txt 和 input-division.txt 中的 .A, .S, .Y  为 .0, .1, .2 以让码灵能计算简码 ...'
-perl -CSDA -i -lpE 's/(\S)\.A/\1.0/g;  s/(\S)\.S/\1.1/g;  s/(\S)\.Y/\1.2/g'   input-fixed.txt input-division.txt
+if sed -ne '/^\s*\[weights.simple_code\]/,/^\s*\[/p' config.toml | grep -qi '^\s*enabled\s*=\s*true'; then
+    echo '(13) 替换 input-fixed.txt 和 input-division.txt 中的 .A, .S, .Y  为 .0, .1, .2 以让码灵能计算简码 ...'
+    perl -CSDA -i -lpE 's/(\S)\.A/\1.0/g;  s/(\S)\.S/\1.1/g;  s/(\S)\.Y/\1.2/g' input-fixed.txt input-division.txt
+fi

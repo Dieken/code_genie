@@ -265,7 +265,7 @@ fn run_evaluate(
     // 构建 OptContext
     let scale_config = types::ScaleConfig::default();
     let weights = cfg.get_weight_config();
-    let ctx = OptContext::new(
+    let ctx = OptContext::new_with_fixed(
         &splits,
         &fixed_roots,
         &groups,
@@ -275,6 +275,7 @@ fn run_evaluate(
         simple_config,
         weights,
         TargetsConfig::default(),
+        &cfg.get_fixed_simple_codes(),
     );
 
     println!("  编码基数: {}", ctx.code_base);
@@ -801,7 +802,7 @@ fn run_optimize(cfg: &Config) {
     } else {
         println!("\n📐 正在进行初始尺度校准...");
         let temp_scale = types::ScaleConfig::default();
-        let temp_ctx = OptContext::new(
+        let temp_ctx = OptContext::new_with_fixed(
             &splits,
             &fixed_roots,
             &dynamic_groups,
@@ -811,6 +812,7 @@ fn run_optimize(cfg: &Config) {
             simple_config.clone(),
             weights,
             TargetsConfig::default(),
+            &cfg.get_fixed_simple_codes(),
         );
 
         let initial_assignment = annealing::smart_init(&temp_ctx, cfg);
@@ -953,7 +955,7 @@ fn run_optimize(cfg: &Config) {
     let key_dist_config_2 = loader::load_key_distribution(&cfg.files.key_dist);
 
     let targets_config = cfg.get_targets_config();
-    let ctx = OptContext::new(
+    let ctx = OptContext::new_with_fixed(
         &splits,
         &fixed_roots,
         &dynamic_groups,
@@ -963,6 +965,7 @@ fn run_optimize(cfg: &Config) {
         simple_config,
         weights,
         targets_config,
+        &cfg.get_fixed_simple_codes(),
     );
 
     println!("\n  - 编码基数: {}", ctx.code_base);
@@ -998,9 +1001,18 @@ fn run_optimize(cfg: &Config) {
     let sm = best_simple_metrics;
     let best_eval = Evaluator::new(&ctx, &best_assignment);
     let best_scores = best_eval.get_metric_scores(&ctx);
+    let simple_sub = best_eval.get_simple_metric_scores(&ctx);
     println!("\n=================================");
     println!("🏆 最优结果 (线程 {}):", best_thread);
-    println!("   综合得分: {:.4}", best_score);
+    // 综合得分三分量（需求 28.4）：全码分量 = weight_full_code·total_full，
+    // 简码分量 = weight_simple_code·total_simple。
+    if cfg.weights.simple_code.enabled {
+        let full_comp = ctx.weights.weight_full_code * best_scores.total_full;
+        let simple_comp = ctx.weights.weight_simple_code * best_scores.total_simple;
+        println!("   综合得分: {:.4} (全码:{:.4} 简码:{:.4})", best_score, full_comp, simple_comp);
+    } else {
+        println!("   综合得分: {:.4}", best_score);
+    }
     println!("   「全码」重码数: {}  (分: {:.4})", m.collision_count, best_scores.collision_count);
     println!("   「全码」重码率: {:.6}%  (分: {:.4})", m.collision_rate * 100.0, best_scores.collision_rate);
     println!("   「全码」加权键均当量: {:.4}  (分: {:.4})", m.equiv_mean, best_scores.equivalence);
@@ -1008,14 +1020,12 @@ fn run_optimize(cfg: &Config) {
     println!("   「全码」用指分布偏差(L2): {:.4}  (分: {:.4})", m.dist_deviation, best_scores.distribution);
     if cfg.weights.simple_code.enabled {
         println!("---------------------------------");
-        println!("   「简码」重码数: {}  (简码总分: {:.4})", sm.collision_count, best_scores.total_simple);
-        println!("   「简码」重码率: {:.6}%", sm.collision_rate * 100.0);
-        println!(
-            "   「简码」覆盖率: {:.4}%",
-            sm.weighted_freq_coverage * 100.0
-        );
-        println!("   「简码」加权当量: {:.4}", sm.equiv_mean);
-        println!("   「简码」分布偏差: {:.4}", sm.dist_deviation);
+        println!("   「简码」总分: {:.4}", simple_sub.total);
+        println!("   「简码」重码数: {}  (分: {:.4})", sm.collision_count, simple_sub.collision_count);
+        println!("   「简码」重码率: {:.6}%  (分: {:.4})", sm.collision_rate * 100.0, simple_sub.collision_rate);
+        println!("   「简码」覆盖率: {:.4}%  (分: {:.4})", sm.weighted_freq_coverage * 100.0, simple_sub.freq);
+        println!("   「简码」加权当量: {:.4}  (分: {:.4})", sm.equiv_mean, simple_sub.equiv);
+        println!("   「简码」分布偏差: {:.4}  (分: {:.4})", sm.dist_deviation, simple_sub.dist);
     }
     println!("⏱️ 总耗时: {:?}", elapsed);
     println!("=================================");

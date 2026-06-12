@@ -52,6 +52,21 @@ pub fn pow_base(base: usize, exp: usize) -> usize {
     result
 }
 
+/// 简码桶内出简排序模式
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimpleAssignMode {
+    /// 按字频排序（与旧实现一致）
+    Frequency,
+    /// 按效率排序（freq × (base_saving + sel_len)）
+    Efficiency,
+}
+
+impl Default for SimpleAssignMode {
+    fn default() -> Self {
+        SimpleAssignMode::Efficiency
+    }
+}
+
 /// 权重配置 - 用于得分计算
 #[derive(Clone, Copy, Debug)]
 pub struct WeightConfig {
@@ -71,6 +86,9 @@ pub struct WeightConfig {
     pub simple_weight_dist: f64,
     pub simple_weight_collision_count: f64,
     pub simple_weight_collision_rate: f64,
+    // 简码评估性能优化：候选字覆盖率阈值与桶内出简排序模式
+    pub simple_coverage_ratio: f64,
+    pub simple_assign_mode: SimpleAssignMode,
 }
 
 impl Default for WeightConfig {
@@ -89,6 +107,8 @@ impl Default for WeightConfig {
             simple_weight_dist: 0.05,
             simple_weight_collision_count: 0.05,
             simple_weight_collision_rate: 0.25,
+            simple_coverage_ratio: 0.90,
+            simple_assign_mode: SimpleAssignMode::Efficiency,
         }
     }
 }
@@ -192,6 +212,18 @@ pub struct MetricScores {
     pub total: f64,
 }
 
+/// 简码各子指标的分数分量（用于日志输出，需求 28.5/28.6）。
+/// 各子分数之和等于 `total`（简码总分，未乘综合权重 weight_simple_code）。
+#[derive(Clone, Copy, Default)]
+pub struct SimpleMetricScores {
+    pub freq: f64,
+    pub equiv: f64,
+    pub dist: f64,
+    pub collision_count: f64,
+    pub collision_rate: f64,
+    pub total: f64,
+}
+
 /// 简码评估指标
 #[derive(Clone, Copy, Default)]
 pub struct SimpleMetrics {
@@ -225,6 +257,9 @@ pub struct SimpleCodeLevel {
     pub code_num: usize,
     /// 候选规则列表
     pub rule_candidates: Vec<Vec<SimpleCodeStep>>,
+    /// 是否需要空格上屏（需求 20）：为真时该级简码尾随一个空格键 `KEY_SPACE`，
+    /// 使有效击键序列末尾计入空格（影响效率排序键长度、加权当量、分布偏差与输出表示）。
+    pub space_commit: bool,
 }
 
 /// 简码配置
@@ -232,6 +267,24 @@ pub struct SimpleCodeLevel {
 pub struct SimpleCodeConfig {
     /// 简码级别列表
     pub levels: Vec<SimpleCodeLevel>,
+}
+
+/// 固定简码（需求 21）：一条经校验、级别归属确定的「汉字 → 字面简码」映射。
+///
+/// 固定简码的汉字不参与退火的简码分配，其对简码各项指标的贡献为不随分配变化的常量
+/// （因简码为字面键位串）。`code_str` 保留结尾下划线（如需空格上屏），供输出直接使用。
+#[derive(Clone, Debug)]
+pub struct FixedSimpleCode {
+    /// 汉字索引（char_infos / raw_splits 下标）
+    pub ci: usize,
+    /// 所属简码级别索引
+    pub li: usize,
+    /// 核心简码键位（不含空格上屏的尾随空格）
+    pub keys: Vec<u8>,
+    /// 是否空格上屏（与所属级别 `space_commit` 一致）
+    pub space_commit: bool,
+    /// 输出用的简码字符串（含空格上屏时的尾随下划线 `_`）
+    pub code_str: String,
 }
 
 /// 逻辑根 - 同一基础字的不同拆分变体
