@@ -35,11 +35,11 @@ perturb_collision_pairs_limit = 10 # 扰动时优先采样的冲突对上限
 reheat_factor = 1.0             # 设为 1.0 可关闭重新加热
 max_parts = 5                    # 最大码长
 
-# 冲突导向算子（已开启）：定向修当前重码组，更直接地降低重码数/重码率
-conflict_probability = 0.25      # 每步以 0.25 概率执行冲突导向移动
-conflict_refresh_interval = 1000 # 每 1000 步重建一次冲突缓存
-conflict_sample_window = 20      # 在排序后冲突列表的前 20 个冲突组中采样
-conflict_weight_by_freq = true   # 按字频之和排序，侧重优化重码率
+# 冲突导向算子（默认关闭：conflict_probability = 0.0）
+conflict_probability = 0.0       # 每步执行冲突导向移动的概率（0.0~1.0），0.0 表示关闭本特性
+conflict_refresh_interval = 1000 # 每隔多少步重建一次冲突缓存；0 表示初始化后不再重建
+conflict_sample_window = 20      # 在排序后冲突列表的前 N 个冲突组中采样
+conflict_weight_by_freq = false  # 冲突排序：false=按汉字数量(优化重码数)，true=按字频之和(优化重码率)
 
 # -------------------------------------------------------------------------
 # ⌨️ 键位配置
