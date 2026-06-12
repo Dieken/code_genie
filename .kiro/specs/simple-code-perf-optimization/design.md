@@ -731,4 +731,20 @@ struct SimpleEvaluator {
 
 **正确性**：行为等价（数值不变），由 Property 1（增量=全量逐字段一致）、Property 13（reconcile=全量）覆盖；新增针对全局聚合的一致性断言（move 序列后 `global_* == Σ_级 + 固定`）。
 
-**范围**：本节只做方向 A。分布偏差自身增量化（方向 B）依赖此处的 `global_key_usage[]`/`global_key_presses`，作为后续可选增强，需处理"`global_key_presses` 变化时所有键 pct 漂移、退回 O(键数) 重算"的分母耦合，另行评估。
+**范围**：本节只做方向 A。分布偏差自身增量化（方向 B）见下节「简码分布偏差增量化」。
+
+## 简码分布偏差增量化（需求 30，方向 B）
+
+**问题**：方向 A 后 `get_simple_metrics` 仍每步对全部键循环算 `dist_deviation = Σ_k penalty_k`（O(键数)）。`actual_pct(k)=g_key_usage[k]·100/g_key_presses` 的分母 `g_key_presses` 全局共享，其变化使所有键占比漂移。
+
+**设计**：
+- 维护 `g_dist_deviation: f64` 与每键贡献缓存 `g_dist_contrib[EQUIV_TABLE_SIZE]`，不变式 `g_dist_deviation == Σ_k g_dist_contrib[k]`。
+- 抽出纯函数 `key_dist_penalty(ctx, k, usage, presses)`（与旧内联公式逐字一致）。`recompute_dist_full` 据当前 `g_key_usage`/`g_key_presses` 全量重算贡献与总分，供构造/`full_rebuild`/`reconcile`（在 `recompute_global_aggregates` 末尾）调用。
+- move 内：三个增量助手（select/deselect/refresh）每次改 `g_key_usage[k]` 时把 k 记入工作缓冲 `g_dirty_keys`（move 起始清空）。
+- `finalize_dist` 在 `apply_move_incremental` 末尾、且仅 `selection_may_change` 时调用：
+  - `g_key_presses == 快照起始 presses`（仅键分布变化）：去重 `g_dirty_keys`，对每个 k 用 `key_dist_penalty` 重算贡献、增量更新 `g_dist_deviation`，O(被改动键)。**简码长度由级别规则固定，故 refresh（改键不改长度）presses 不变，走此快速路径。**
+  - presses 变化（select/deselect 改变选中集）：`recompute_dist_full` 全量回退 O(键数)。
+- `get_simple_metrics` 直接读 `g_dist_deviation`。
+- 回滚：`g_dist_deviation` + `g_dist_contrib` 纳入 `SimpleSnapshot`，`snapshot_aggregates` 整存、`rollback`（`has_selection` 时）整体写回。
+
+**正确性**：prop1（增量=全量逐字段，含 `dist_deviation`）、prop13（reconcile=全量）守住；并新增 `test_incremental_dist_matches_full_rebuild`：**非零** `key_dist_config` 下跑 move 序列，逐次断言增量 `g_dist_deviation` 等于对同一分配全量重建的值（覆盖快速路径与全量回退）。简码关闭/未激活时不触达。

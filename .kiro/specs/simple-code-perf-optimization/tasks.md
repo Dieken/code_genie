@@ -385,6 +385,21 @@
     - 新增 `test_global_aggregates_equal_sum_of_levels_plus_fixed`：move 序列（含接受/回滚）后断言 `g_* == Σ_级 + 固定`；prop1（增量=全量）、prop13（reconcile=全量）保持全绿；简码关闭零影响
     - _Requirements: 29.6, 29.7, 29.8_
 
+- [x] 26. 简码分布偏差增量化（需求 30，方向 B）
+  - [x] 26.1 维护 g_dist_deviation 与每键贡献缓存
+    - 新增 `g_dist_deviation`/`g_dist_contrib[]`；抽出 `key_dist_penalty` 纯函数与 `recompute_dist_full`；`recompute_global_aggregates` 末尾全量重算（覆盖构造/full_rebuild/reconcile）
+    - _Requirements: 30.1, 30.5_
+  - [x] 26.2 move 内键改动登记 + 末尾结算
+    - select/deselect/refresh 改 `g_key_usage[k]` 时记入 `g_dirty_keys`（move 起始清空）；`apply_move_incremental` 末尾 `selection_may_change` 时 `finalize_dist`：presses 不变只更新被改动键，presses 变化全量回退
+    - `get_simple_metrics` 直接读 `g_dist_deviation`，删除每步 O(键数) 循环
+    - _Requirements: 30.2, 30.3, 30.4, 30.5_
+  - [x] 26.3 回滚纳入分布偏差
+    - `SimpleSnapshot` 增 `g_dist_deviation`/`g_dist_contrib`，整存/整体写回
+    - _Requirements: 30.6_
+  - [x] 26.4 非零配置一致性测试
+    - 新增 `test_incremental_dist_matches_full_rebuild`：非零 `key_dist_config` 下 move 序列逐次断言增量 dist == 全量重建；prop1/prop13 保持全绿；简码关闭零影响
+    - _Requirements: 30.7, 30.8_
+
 ## Task Dependency Graph
 
 ```json

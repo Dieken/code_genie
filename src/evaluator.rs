@@ -131,6 +131,9 @@ struct SimpleSnapshot {
     g_equiv_freq_sum: u64,
     g_key_usage: [f64; EQUIV_TABLE_SIZE],
     g_key_presses: f64,
+    /// 移动起始的全局分布偏差与每键贡献快照（方向 B，回滚整体写回）。
+    g_dist_deviation: f64,
+    g_dist_contrib: [f64; EQUIV_TABLE_SIZE],
     /// `current_simple_code` 撤销日志：(li, ci, 修改前 code)，逆序回放。
     undo_code: Vec<(usize, usize, i64)>,
     /// `selected` 撤销日志：(li, ci, 修改前 selected)，逆序回放。
@@ -178,6 +181,14 @@ pub struct SimpleEvaluator {
     g_equiv_freq_sum: u64,
     g_key_usage: [f64; EQUIV_TABLE_SIZE],
     g_key_presses: f64,
+    /// 全局分布偏差及其每键贡献缓存（需求 29 方向 B）：`g_dist_deviation == Σ_k g_dist_contrib[k]`，
+    /// `g_dist_contrib[k]` 为键 k 在当前 `g_key_usage[k]`/`g_key_presses` 下的惩罚。
+    /// `get_simple_metrics` 直接读 `g_dist_deviation`，避免每步 O(键数) 重算。
+    g_dist_deviation: f64,
+    g_dist_contrib: [f64; EQUIV_TABLE_SIZE],
+    /// 本次移动中 `g_key_usage` 被改动的键（工作缓冲，去堆分配）：用于 presses 不变时只增量
+    /// 更新这些键的分布贡献。move 起始清空，move 末尾结算后去重使用。
+    g_dirty_keys: Vec<u8>,
     /// 缓存的简码得分
     cached_simple_score: f64,
     /// 得分是否需要重新计算
@@ -297,6 +308,9 @@ impl SimpleEvaluator {
             g_equiv_freq_sum: 0,
             g_key_usage: [0.0; EQUIV_TABLE_SIZE],
             g_key_presses: 0.0,
+            g_dist_deviation: 0.0,
+            g_dist_contrib: [0.0; EQUIV_TABLE_SIZE],
+            g_dirty_keys: Vec::new(),
             cached_simple_score: 0.0,
             simple_score_dirty: true,
             key_buf: Vec::new(),
@@ -382,6 +396,64 @@ impl SimpleEvaluator {
         self.g_equiv_freq_sum = ef;
         self.g_key_presses = kp;
         self.g_key_usage = ku;
+        // 全量重算分布偏差与每键贡献缓存（需求 29 方向 B）。
+        self.recompute_dist_full(ctx);
+    }
+
+    /// 单键分布惩罚：在给定 `usage`/`presses` 下键 `k` 对分布偏差的贡献。
+    /// 与 `get_simple_metrics` 旧内联公式逐字一致；`presses <= 0` 时为 0。
+    #[inline]
+    fn key_dist_penalty(ctx: &OptContext, k: usize, usage: f64, presses: f64) -> f64 {
+        if presses <= 0.0 {
+            return 0.0;
+        }
+        let cfg = &ctx.key_dist_config[k];
+        if cfg.target_rate == 0.0 && cfg.low_penalty == 0.0 && cfg.high_penalty == 0.0 {
+            return 0.0;
+        }
+        let actual_pct = usage * 100.0 / presses;
+        let diff = actual_pct - cfg.target_rate;
+        if diff < 0.0 {
+            diff * diff * cfg.low_penalty
+        } else if diff > 0.0 {
+            diff * diff * cfg.high_penalty
+        } else {
+            0.0
+        }
+    }
+
+    /// 全量重算每键分布贡献缓存与总分布偏差（据当前 `g_key_usage`/`g_key_presses`）。
+    fn recompute_dist_full(&mut self, ctx: &OptContext) {
+        let presses = self.g_key_presses;
+        let mut dev = 0.0;
+        for k in 0..EQUIV_TABLE_SIZE {
+            let c = Self::key_dist_penalty(ctx, k, self.g_key_usage[k], presses);
+            self.g_dist_contrib[k] = c;
+            dev += c;
+        }
+        self.g_dist_deviation = dev;
+    }
+
+    /// move 末尾结算分布偏差（需求 29 方向 B）：
+    /// - presses 与 move 起始相同（仅键分布变化、未改选中集/长度）：只对本次改动的键
+    ///   `g_dirty_keys` 增量更新贡献与总分布；
+    /// - presses 变化（所有键归一化 pct 漂移）：退回全量重算。
+    /// 仅在 `selection_may_change`（已取聚合快照）时调用。
+    fn finalize_dist(&mut self, ctx: &OptContext) {
+        if (self.g_key_presses - self.snapshot.g_key_presses).abs() < f64::EPSILON {
+            // presses 不变：增量更新被触碰键。
+            self.g_dirty_keys.sort_unstable();
+            self.g_dirty_keys.dedup();
+            let presses = self.g_key_presses;
+            for idx in 0..self.g_dirty_keys.len() {
+                let k = self.g_dirty_keys[idx] as usize;
+                let new_c = Self::key_dist_penalty(ctx, k, self.g_key_usage[k], presses);
+                self.g_dist_deviation += new_c - self.g_dist_contrib[k];
+                self.g_dist_contrib[k] = new_c;
+            }
+        } else {
+            self.recompute_dist_full(ctx);
+        }
     }
 
     /// 将候选字 `ci` 在级别 `li` 的简码键位写入复用缓冲 `key_buf`（去堆分配），并在该级
@@ -712,6 +784,8 @@ impl SimpleEvaluator {
         self.assigned_touched_list.clear();
         // 复位阶段 2 访问计数（观测北极星：本次移动的出简选择增量工作量）。
         self.stage2_visits = 0;
+        // 复位本次移动的「键改动」缓冲（方向 B 分布偏差增量结算用）。
+        self.g_dirty_keys.clear();
 
         if affected_candidates.is_empty() && full_affected_chars.is_empty() && resort_seeds.is_empty() {
             return;
@@ -788,6 +862,12 @@ impl SimpleEvaluator {
         } else {
             0.0
         };
+
+        // 分布偏差增量结算（需求 29 方向 B）：仅在出简选择可能变化（已取聚合快照）时；
+        // presses 不变则只更新被触碰键，presses 变化则退回全量重算。
+        if selection_may_change {
+            self.finalize_dist(ctx);
+        }
 
         self.simple_score_dirty = true;
     }
@@ -920,7 +1000,9 @@ impl SimpleEvaluator {
         self.g_equiv_freq_sum += freq;
         self.g_equiv_weighted += eq * freq_f;
         for i in 0..n {
-            self.g_key_usage[self.key_buf[i] as usize] += freq_f;
+            let k = self.key_buf[i];
+            self.g_key_usage[k as usize] += freq_f;
+            self.g_dirty_keys.push(k);
         }
         self.g_key_presses += freq_f * klen as f64;
     }
@@ -961,6 +1043,7 @@ impl SimpleEvaluator {
         for i in 0..klen {
             let k = self.levels[li].sel_keys[ci][i];
             self.g_key_usage[k as usize] -= freq_f;
+            self.g_dirty_keys.push(k);
         }
         self.g_key_presses -= freq_f * klen as f64;
     }
@@ -1016,10 +1099,14 @@ impl SimpleEvaluator {
         // 当量与键用量按「减旧值型贡献、加新值型贡献」同步。
         self.g_equiv_weighted += (eq - g_old_equiv) * freq_f;
         for i in 0..g_old_len {
-            self.g_key_usage[g_old_keys[i] as usize] -= freq_f;
+            let k = g_old_keys[i];
+            self.g_key_usage[k as usize] -= freq_f;
+            self.g_dirty_keys.push(k);
         }
         for i in 0..n {
-            self.g_key_usage[self.key_buf[i] as usize] += freq_f;
+            let k = self.key_buf[i];
+            self.g_key_usage[k as usize] += freq_f;
+            self.g_dirty_keys.push(k);
         }
         self.g_key_presses += freq_f * (klen as f64 - g_old_len as f64);
     }
@@ -1225,6 +1312,9 @@ impl SimpleEvaluator {
         self.snapshot.g_equiv_freq_sum = self.g_equiv_freq_sum;
         self.snapshot.g_key_usage = self.g_key_usage;
         self.snapshot.g_key_presses = self.g_key_presses;
+        // 分布偏差与每键贡献快照（方向 B）。
+        self.snapshot.g_dist_deviation = self.g_dist_deviation;
+        self.snapshot.g_dist_contrib = self.g_dist_contrib;
     }
 
     /// 提交本次增量：清空快照缓冲（确认增量结果，需求 2.1）。
@@ -1272,6 +1362,9 @@ impl SimpleEvaluator {
             self.g_equiv_freq_sum = self.snapshot.g_equiv_freq_sum;
             self.g_key_usage = self.snapshot.g_key_usage;
             self.g_key_presses = self.snapshot.g_key_presses;
+            // 1c) 分布偏差与每键贡献整体写回（方向 B）
+            self.g_dist_deviation = self.snapshot.g_dist_deviation;
+            self.g_dist_contrib = self.snapshot.g_dist_contrib;
 
             // 2) 触碰桶成员/freq_sum 整存整取（仅有效前缀）
             for i in 0..self.snapshot.bucket_snaps_len {
@@ -1414,8 +1507,6 @@ impl SimpleEvaluator {
         let total_covered = self.g_covered_freq;
         let total_equiv_weighted = self.g_equiv_weighted;
         let total_equiv_freq = self.g_equiv_freq_sum;
-        let total_key_usage = &self.g_key_usage;
-        let total_key_presses = self.g_key_presses;
 
         let coverage = if ctx.total_frequency > 0 {
             total_covered as f64 / ctx.total_frequency as f64
@@ -1429,26 +1520,8 @@ impl SimpleEvaluator {
             0.0
         };
 
-        let dist_deviation = if total_key_presses > 0.0 {
-            let inv = 1.0 / total_key_presses;
-            let mut dev = 0.0;
-            for key in 0..EQUIV_TABLE_SIZE {
-                let cfg = &ctx.key_dist_config[key];
-                if cfg.target_rate == 0.0 && cfg.low_penalty == 0.0 && cfg.high_penalty == 0.0 {
-                    continue;
-                }
-                let actual_pct = total_key_usage[key] * 100.0 * inv;
-                let diff = actual_pct - cfg.target_rate;
-                if diff < 0.0 {
-                    dev += diff * diff * cfg.low_penalty;
-                } else if diff > 0.0 {
-                    dev += diff * diff * cfg.high_penalty;
-                }
-            }
-            dev
-        } else {
-            0.0
-        };
+        // 分布偏差直接读增量维护的全局量（需求 29 方向 B），不再每步 O(键数) 重算。
+        let dist_deviation = self.g_dist_deviation;
 
         SimpleMetrics {
             weighted_freq_coverage: coverage,
@@ -4540,6 +4613,51 @@ mod rollback_roundtrip_tests {
             }
         }
         check(&ev);
+    }
+
+    // 需求 29 方向 B：非零分布配置下，增量维护的 g_dist_deviation 应始终等于「对同一分配
+    // 全量重建」的分布偏差（含 presses 不变快速路径与 presses 变化全量回退）。
+    #[test]
+    fn test_incremental_dist_matches_full_rebuild() {
+        let mut ctx = make_ctx(
+            &[(9, 2), (7, 2), (5, 2), (4, 1), (3, 2), (2, 1), (1, 2), (6, 2)],
+            SimpleAssignMode::Efficiency,
+            1,
+            1.0,
+        );
+        // 设置非零分布配置（简码键多落在 code_selector 'a'→键0 与键1 上），真正驱动 dist。
+        for k in 0..2usize {
+            ctx.key_dist_config[k].target_rate = 5.0;
+            ctx.key_dist_config[k].low_penalty = 1.5;
+            ctx.key_dist_config[k].high_penalty = 2.5;
+        }
+
+        let n = ctx.num_groups;
+        let mut assignment = vec![0u8; n];
+        let mut ev = Evaluator::new(&ctx, &assignment);
+
+        let assert_dist_matches = |assignment: &[u8], ev: &Evaluator| {
+            let inc = ev.simple_eval.as_ref().unwrap().g_dist_deviation;
+            // 对同一分配从零全量重建，取其分布偏差作为基准。
+            let fresh = Evaluator::new(&ctx, assignment);
+            let full = fresh.simple_eval.as_ref().unwrap().g_dist_deviation;
+            assert!(
+                (inc - full).abs() < 1e-6,
+                "增量 dist {inc} 与全量 {full} 不一致 (assignment={assignment:?})"
+            );
+        };
+
+        assert_dist_matches(&assignment, &ev);
+        let mut rng = rand::thread_rng();
+        for step in 0..3000usize {
+            let r = step % n;
+            let nk = (step % 2) as u8;
+            ev.try_move(&ctx, &mut assignment, r, nk, 1e18, &mut rng);
+            if step % 25 == 0 {
+                assert_dist_matches(&assignment, &ev);
+            }
+        }
+        assert_dist_matches(&assignment, &ev);
     }
 
     /// 单个级别的可比较状态快照（用于逐字段精确比对）。

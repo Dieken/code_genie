@@ -419,3 +419,22 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 6. THE 本优化 SHALL 为行为等价改造：在任意分配下，`get_simple_metrics` 返回的覆盖率、当量、分布偏差、简码重码与改造前逐字段一致（由增量=全量一致性属性测试覆盖）。
 7. WHERE 简码整体关闭或未激活（`simple_eval` 为 `None` 或 `simple_active == false`），THE 本改造 SHALL 无任何效果，全码路径行为、性能与基线一致。
 8. THE 周期对账（`reconcile`）与结束强制全量校验 SHALL 同样重建并校正全局聚合量，使其在长程优化中不累积漂移。
+
+### 需求 30：简码分布偏差增量化（消除每步 O(键数) 重算）
+
+**用户故事：** 作为优化器使用者，我希望简码分布偏差不再每步对全部键重算，从而进一步降低简码热路径单步开销。
+
+#### 背景
+
+需求 29（方向 A）后，`get_simple_metrics` 仍对全部键循环计算分布偏差 `dist_deviation = Σ_k penalty_k`（O(键数)，键数=31）。其中 `actual_pct(k) = g_key_usage[k]·100 / g_key_presses`，分母 `g_key_presses` 为全局共享量：当其变化时所有键的归一化占比同时漂移，无法只更新单键。
+
+#### 验收标准
+
+1. THE 简码评估器 SHALL 维护全局分布偏差 `g_dist_deviation` 及每键贡献缓存 `g_dist_contrib[k]`，满足 `g_dist_deviation == Σ_k g_dist_contrib[k]`，其中 `g_dist_contrib[k]` 为键 k 在当前 `g_key_usage[k]`/`g_key_presses` 下的分布惩罚。
+2. THE `get_simple_metrics` SHALL 直接读取 `g_dist_deviation`，SHALL NOT 每步对全部键重算分布偏差。
+3. WHEN 一次移动结束且 `g_key_presses` 与移动起始相同（仅键分布变化、未改变出简选中集/简码长度），THE 简码评估器 SHALL 仅对本次被改动的键（move 内记录于工作缓冲）增量更新其贡献与 `g_dist_deviation`，复杂度 O(被改动键数)。
+4. WHEN 一次移动结束且 `g_key_presses` 与移动起始不同（出简选中集变化导致总键击数变化、所有键占比漂移），THE 简码评估器 SHALL 退回对全部键的全量重算（O(键数)），保证正确。
+5. THE 分布偏差结算 SHALL 在 `apply_move_incremental` 末尾（`g_key_usage`/`g_key_presses` 已最终）进行，且仅在出简选择可能变化（已取聚合快照）时；全量重建（`rebuild_internal`）与对账时据当前全局键用量全量重算 `g_dist_contrib`/`g_dist_deviation`。
+6. WHEN 一次移动被拒绝或回滚，THE 简码评估器 SHALL 将 `g_dist_deviation` 与 `g_dist_contrib` 一并还原至移动前（纳入移动快照，整体写回）。
+7. THE 本优化 SHALL 为行为等价改造：任意分配下 `get_simple_metrics` 的 `dist_deviation` 与改造前逐字段一致（由增量=全量一致性属性测试，及非零分布配置下「增量 == 全量重建」断言覆盖）。
+8. WHERE 简码整体关闭或未激活，THE 本改造 SHALL 无任何效果，全码路径行为、性能与基线一致。
