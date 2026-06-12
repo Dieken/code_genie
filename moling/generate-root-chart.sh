@@ -8,6 +8,10 @@ shopt -s failglob
 [ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
 [ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
 
+# 默认开启潇明的空格简码
+[ "${USE_XIAOMING_RULE:-}" = 1 ] && [ -z "${ENABLE_SPACE_SHORTCODE:-}" ] && export ENABLE_SPACE_SHORTCODE=1
+
+
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=typer
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=../../typer
 [ -d "$TYPER_ROOT/scripts" ] || {
@@ -266,6 +270,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             if ($ENV{USE_XIAOMING_RULE}) {
                 if (length($v->{code}) == 3) {                  # 字根字
+                    next unless $ENV{ENABLE_SPACE_SHORTCODE};
                     $s = substr($v->{code}, 0, 1) . "_";        # 只可能是二简 A_
                 } else {                                        # 二根及以上根字，全码长一定 >= 4
                     if ($i == 2) {                              # 二简 AA
