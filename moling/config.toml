@@ -99,20 +99,20 @@ simple_assign_mode = "efficiency" # 桶内出简排序模式："frequency" 或 "
 
 [[simple_levels]]
 level = 1
-code_num = 1
+code_num = 0
 rules = ["Aa"]
 space_commit = false     # 是否需要空格上屏（默认 false）；为 true 时该级简码效率长度+1，且输出末尾追加 "_"
 
 [[simple_levels]]
 level = 2
 code_num = 1
-rules = ["AaBa"]
+rules = ["AaZz"]
 space_commit = false
 
 [[simple_levels]]
 level = 3
-code_num = 0
-rules = ["AaAbZz", "AaBaZz"]
+code_num = 1
+rules = ["AaBaZz"]
 space_commit = false
 
 # -------------------------------------------------------------------------
@@ -124,12 +124,12 @@ space_commit = false
 # - 有效简码长度须严格小于该字全码长度。
 # 下例仅用于表达配置格式（默认全部注释）。
 # -------------------------------------------------------------------------
-# [fixed_simple_codes]
-# "不" = "u"
-# "是" = "i"
-# "我" = "o"
-# "的" = "e"
-# "了" = "a"
+[fixed_simple_codes]
+"不" = "u"
+"是" = "i"
+"我" = "o"
+"的" = "e"
+"了" = "a"
 
 # -------------------------------------------------------------------------
 # 📐 量纲缩放配置（可选，缺失则自动校准）
