@@ -71,8 +71,8 @@ simple_code_weight = 0.4 # 简码目标总权重
 collision_count = 0.1    # 重码数权重
 collision_rate = 0.3     # 重码率权重
 freq = 0.2               # 频率覆盖权重
-equiv = 0.2              # 当量权重
-dist = 0.2               # 分布偏差权重
+equiv = 0.35             # 当量权重
+dist = 0.05              # 分布偏差权重
 
 # 简码激活、渐进与对账配置
 simple_start_progress = 0.4       # 简码计算激活进度阈值 p_start（建议落在舒适区前沿，默认 0.4）
@@ -81,7 +81,7 @@ simple_activation_reheat = 1.2    # 激活当刻升温倍率（独立于 reheat_
 simple_coverage_ratio = 0.90      # 候选字累计字频覆盖率阈值，默认 0.90
 reconcile_interval_ratio = 0.05   # 周期对账间隔比例 M = floor(total_steps × ratio)，M ≥ 1，默认 0.05
 simple_assign_mode = "efficiency" # 桶内出简排序模式："frequency" 或 "efficiency"，默认 "efficiency"
-simple_protect_top_n = 0          # 简码占用保护：禁止简码等于受保护汉字的全码；0=保护全部汉字，N>0=仅保护全字频前 N 名，默认 0
+simple_protect_top_n = 6000       # 简码占用保护：禁止简码等于受保护汉字的全码；0=保护全部汉字，N>0=仅保护全字频前 N 名，默认 0
 
 # -------------------------------------------------------------------------
 # 📝 简码规则配置
@@ -173,8 +173,8 @@ distribution_max = 0.0       # 硬约束：分布偏差超过此值直接拒绝�
 enabled = true               # 是否启用简码目标偏差模式
 collision_count = 90         # 目标简码重码数
 collision_rate = 0.0001      # 目标简码重码率
-freq = 0.70                  # 目标频率覆盖率（如 0.85 = 85%）
-equiv = 0.13                 # 目标简码当量
+freq = 0.60                  # 目标频率覆盖率（如 0.85 = 85%）
+equiv = 0.12                 # 目标简码当量
 dist = 10.0                  # 目标简码分布偏差
 low_weight = 0.01            # 低权重系数
 collision_count_max = 0.0    # 硬约束：简码重码数超过此值直接拒绝（0 = 不启用）
