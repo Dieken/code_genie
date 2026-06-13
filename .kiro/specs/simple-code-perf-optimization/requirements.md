@@ -471,3 +471,23 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 4. WHILE 简码尚未激活，THE `get_simple_metrics` SHALL 返回零值（`simple_eval == None`），使激活前日志的简码指标显示为 0。
 5. THE 最终结果上报 SHALL 不受影响：结束时对 `best_assignment` 重建评估器（急切构建简码）计算最终简码指标，无论简码是否曾激活均给出真实值。
 6. WHERE 简码整体关闭（`enable_simple_code == false`），THE 本改造 SHALL 与基线行为、性能完全一致（本就 `simple_eval == None` 且不对账）。
+
+### 需求 33：简码占用保护（简码不得抢占受保护汉字的全码）
+
+**用户故事：** 作为方案设计者，我发现简码会占用某些汉字的全码编码（"抢位"），导致这些字的全码不可用。我希望能禁止简码等于受保护汉字的全码，并可通过一个阈值控制保护范围——默认保护全部汉字，或仅保护使用频率最高的前 N 名汉字。
+
+#### 背景
+
+出简选择只按级别桶内排序键（频率/效率）择优，未校验「该简码编码值是否恰好等于某汉字的全码编码值」。当二者相等时，简码占据了该字的全码键位（抢位）。`calc_simple_code` 与 `calc_code_only` 同进制编码，长度不同则数值不同、长度相同才可能数值相等；故抢位仅发生在「简码长度 == 某字全码长度」时（如单部件字的全码与一级简码同长）。需引入硬资格约束：被保护汉字的全码编码值禁止作为任何出简简码。保护范围由配置 `simple_protect_top_n` 控制。
+
+#### 验收标准
+
+1. THE 配置 SHALL 提供整型项 `weights.simple_code.simple_protect_top_n`，默认 0；`0` 表示保护全部汉字，`N>0` 表示仅保护「全字频降序前 N 名」汉字（并列时按 `ci` 升序确定名次）。
+2. THE 出简选择 SHALL 将「编码值等于受保护汉字全码」的简码桶名额置为 0（谁都不出简），该约束为硬资格约束，对所有出简模式（frequency / efficiency）一致适用，且优先于桶内排序择优。
+3. WHEN 某桶因占用保护名额为 0，THE 该桶内候选字 SHALL NOT 被本级出简、SHALL NOT 被跨级排除，而是按既有跨级传播规则上浮到更高级别（更长简码）继续尝试。
+4. WHERE `simple_protect_top_n == 0`，THE 占用保护判定 SHALL 等价于「全码桶 `full_code_to_chars[code]` 非空」（复用既有全码桶结构，零额外内存）。
+5. WHERE `simple_protect_top_n > 0`，THE 简码评估器 SHALL 维护「受保护（top-N）汉字当前全码占用计数」`protect_count[code]`（使用 `FxHashMap` 以节省内存），占用保护判定为 `protect_count[code] > 0`；`protect_count` SHALL 在每次移动据 top-N 字全码变化增量维护，并在拒绝/回滚时整体还原。
+6. THE 占用保护增量维护 SHALL 与全量重建逐字段一致：任意分配下，增量路径得到的出简选择/简码指标与对同一分配全量重建的结果一致（由「增量 == 全量重建」「对账 == 全量重建」一致性属性测试覆盖）。
+7. THE 全量重建 SHALL 在出简选择之前建立占用保护判定所需状态（全码编码基线与 `protect_count`），使初始构建即正确应用保护（不得出现「构建路径漏判保护」）。
+8. WHERE 简码整体关闭或未激活（`simple_eval == None`），THE 本约束 SHALL 无任何效果，全码路径行为、逻辑、性能与基线一致（所有保护逻辑封装于 `SimpleEvaluator` 内）。
+9. THE 配置文件 `config.toml.example` 与 `moling/config.toml` SHALL 包含 `simple_protect_top_n` 项及说明其语义的行内注释，默认值与代码内置默认（0）一致。

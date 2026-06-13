@@ -94,6 +94,10 @@ pub struct SimpleCodeWeights {
     /// 桶内出简排序模式："frequency" 或 "efficiency"（默认 "efficiency"）
     #[serde(default = "default_simple_assign_mode")]
     pub simple_assign_mode: String,
+    /// 简码占用保护（需求 33）：禁止简码等于「全字频前 N 名汉字」的全码。
+    /// 默认 0 表示 N = 全部汉字（简码不得等于任何汉字的全码）；N>0 仅保护前 N 名。
+    #[serde(default = "default_simple_protect_top_n")]
+    pub simple_protect_top_n: usize,
 }
 
 fn default_simple_start_progress() -> f64 { 0.4 }
@@ -102,6 +106,7 @@ fn default_simple_activation_reheat() -> f64 { 1.2 }
 fn default_simple_coverage_ratio() -> f64 { 0.90 }
 fn default_reconcile_interval_ratio() -> f64 { 0.05 }
 fn default_simple_assign_mode() -> String { "efficiency".to_string() }
+fn default_simple_protect_top_n() -> usize { 0 }
 
 /// 模拟退火参数配置
 #[derive(Debug, Clone, Deserialize)]
@@ -429,6 +434,7 @@ impl Config {
             simple_weight_collision_rate: self.weights.simple_code.collision_rate,
             simple_coverage_ratio: self.weights.simple_code.simple_coverage_ratio,
             simple_assign_mode: parse_simple_assign_mode(&self.weights.simple_code.simple_assign_mode),
+            simple_protect_top_n: self.weights.simple_code.simple_protect_top_n,
         }
     }
 
@@ -564,6 +570,7 @@ impl Default for Config {
                     simple_coverage_ratio: default_simple_coverage_ratio(),
                     reconcile_interval_ratio: default_reconcile_interval_ratio(),
                     simple_assign_mode: default_simple_assign_mode(),
+                    simple_protect_top_n: default_simple_protect_top_n(),
                 },
             },
             annealing: AnnealingConfig {
@@ -949,6 +956,7 @@ dist_max = 8.0
         assert_eq!(sc.simple_coverage_ratio, 0.90);
         assert_eq!(sc.reconcile_interval_ratio, 0.05);
         assert_eq!(sc.simple_assign_mode, "efficiency");
+        assert_eq!(sc.simple_protect_top_n, 0);
     }
 
     #[test]
@@ -956,7 +964,7 @@ dist_max = 8.0
         // 显式提供新增项时应原样解析（不被默认值覆盖）
         let toml_with_new = minimal_config_prefix().replace(
             "collision_count = 0.0\ncollision_rate = 0.0\n",
-            "collision_count = 0.0\ncollision_rate = 0.0\nsimple_start_progress = 0.4\nsimple_ramp_progress = 0.2\nsimple_activation_reheat = 1.5\nsimple_coverage_ratio = 0.95\nreconcile_interval_ratio = 0.1\nsimple_assign_mode = \"frequency\"\n",
+            "collision_count = 0.0\ncollision_rate = 0.0\nsimple_start_progress = 0.4\nsimple_ramp_progress = 0.2\nsimple_activation_reheat = 1.5\nsimple_coverage_ratio = 0.95\nreconcile_interval_ratio = 0.1\nsimple_assign_mode = \"frequency\"\nsimple_protect_top_n = 500\n",
         );
         let cfg: Config = toml::from_str(&toml_with_new).expect("解析失败");
         let sc = &cfg.weights.simple_code;
@@ -965,6 +973,7 @@ dist_max = 8.0
         assert_eq!(sc.simple_activation_reheat, 1.5);
         assert_eq!(sc.simple_coverage_ratio, 0.95);
         assert_eq!(sc.reconcile_interval_ratio, 0.1);
+        assert_eq!(sc.simple_protect_top_n, 500);
         assert_eq!(sc.simple_assign_mode, "frequency");
     }
 

@@ -81,6 +81,7 @@ simple_activation_reheat = 1.2    # 激活当刻升温倍率（独立于 reheat_
 simple_coverage_ratio = 0.90      # 候选字累计字频覆盖率阈值，默认 0.90
 reconcile_interval_ratio = 0.05   # 周期对账间隔比例 M = floor(total_steps × ratio)，M ≥ 1，默认 0.05
 simple_assign_mode = "efficiency" # 桶内出简排序模式："frequency" 或 "efficiency"，默认 "efficiency"
+simple_protect_top_n = 0          # 简码占用保护：禁止简码等于受保护汉字的全码；0=保护全部汉字，N>0=仅保护全字频前 N 名，默认 0
 
 # -------------------------------------------------------------------------
 # 📝 简码规则配置

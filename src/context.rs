@@ -71,6 +71,11 @@ pub struct OptContext {
     pub simple_candidate_chars: Vec<usize>,
     /// 候选字位图，按 ci 直接索引，供 O(1) 判定
     pub simple_is_candidate: Vec<bool>,
+    /// 简码占用保护阈值 N（需求 33）：0 = 保护全部汉字全码；N>0 = 仅保护全字频前 N 名。
+    pub simple_protect_top_n: usize,
+    /// 全字频前 N 名汉字位图（按 ci 索引，需求 33）：仅 `simple_protect_top_n > 0` 时填充，
+    /// 供简码评估器增量维护「受保护全码占用计数」。N=0（保护全部）时为空，改用全码桶占用判定。
+    pub simple_is_topn: Vec<bool>,
     /// 候选字集合的实际累计字频覆盖率（供「配置确认」日志输出）
     pub simple_actual_coverage: f64,
     /// 每个组影响的简码汉字集合 ∩ 候选字集合（用 Vec 保证顺序确定、遍历高效）
@@ -271,6 +276,9 @@ impl OptContext {
 
         let mut simple_candidate_chars: Vec<usize> = Vec::new();
         let mut simple_is_candidate: Vec<bool> = vec![false; n_chars];
+        // 简码占用保护（需求 33）：N 从配置读取；is_topn 仅在 N>0 时填充。
+        let simple_protect_top_n = weights.simple_protect_top_n;
+        let mut simple_is_topn: Vec<bool> = Vec::new();
         let mut simple_actual_coverage = 0.0f64;
         let mut group_to_simple_affected_candidate: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
         let mut simple_base_saving: Vec<Vec<i64>> = Vec::new();
@@ -310,6 +318,15 @@ impl OptContext {
                     cumulative += char_infos[ci].frequency;
                 }
                 simple_actual_coverage = cumulative as f64 / total_frequency as f64;
+            }
+
+            // 简码占用保护（需求 33）：N>0 时标记全字频前 N 名汉字（sorted_by_freq 已按字频降序、
+            // 并列 ci 升序）。N=0（保护全部）不填充 is_topn，简码评估器改用全码桶占用判定。
+            if simple_protect_top_n > 0 {
+                simple_is_topn = vec![false; n_chars];
+                for &ci in sorted_by_freq.iter().take(simple_protect_top_n) {
+                    simple_is_topn[ci] = true;
+                }
             }
 
             // base_saving 预计算：simple_base_saving[ci][li] = full_len - effective_simple_len
@@ -576,6 +593,8 @@ impl OptContext {
             targets_config,
             simple_candidate_chars,
             simple_is_candidate,
+            simple_protect_top_n,
+            simple_is_topn,
             simple_actual_coverage,
             group_to_simple_affected_candidate,
             simple_base_saving,

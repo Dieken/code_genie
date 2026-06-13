@@ -1,7 +1,7 @@
 //! 配置文件烟雾测试（任务 3.3）
 //!
 //! 解析 `config.toml.example` 与 `moling/config.toml` 配置文件，
-//! 断言「简码评估性能优化」新增的 6 个配置项：
+//! 断言「简码评估性能优化」新增的 7 个配置项：
 //!   1. 存在于 `[weights.simple_code]` 段；
 //!   2. 取值等于代码内置默认值（见 `src/config.rs` 的 `default_*` 函数）；
 //!   3. 在文件原始文本中带有行内注释（`#`）。
@@ -17,6 +17,7 @@ use std::path::PathBuf;
 enum Expected {
     Float(f64),
     Str(&'static str),
+    Int(i64),
 }
 
 const EXPECTED_ITEMS: &[(&str, Expected)] = &[
@@ -26,6 +27,7 @@ const EXPECTED_ITEMS: &[(&str, Expected)] = &[
     ("simple_coverage_ratio", Expected::Float(0.90)),
     ("reconcile_interval_ratio", Expected::Float(0.05)),
     ("simple_assign_mode", Expected::Str("efficiency")),
+    ("simple_protect_top_n", Expected::Int(0)),
 ];
 
 /// 相对于 `CARGO_MANIFEST_DIR`（crate 根 = 仓库根）解析配置文件路径。
@@ -92,6 +94,15 @@ fn check_config_file(relative: &str) {
                 let got = value
                     .as_str()
                     .unwrap_or_else(|| panic!("[{relative}] 配置项 `{key}` 不是字符串: {value:?}"));
+                assert_eq!(
+                    got, *exp,
+                    "[{relative}] 配置项 `{key}` 默认值与代码内置默认不一致"
+                );
+            }
+            Expected::Int(exp) => {
+                let got = value
+                    .as_integer()
+                    .unwrap_or_else(|| panic!("[{relative}] 配置项 `{key}` 不是整数: {value:?}"));
                 assert_eq!(
                     got, *exp,
                     "[{relative}] 配置项 `{key}` 默认值与代码内置默认不一致"
