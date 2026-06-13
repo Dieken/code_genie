@@ -89,6 +89,8 @@ pub struct WeightConfig {
     // 简码评估性能优化：候选字覆盖率阈值与桶内出简排序模式
     pub simple_coverage_ratio: f64,
     pub simple_assign_mode: SimpleAssignMode,
+    /// 简码占用保护（需求 33）：0 = 保护全部汉字全码；N>0 = 仅保护全字频前 N 名。
+    pub simple_protect_top_n: usize,
 }
 
 impl Default for WeightConfig {
@@ -109,6 +111,7 @@ impl Default for WeightConfig {
             simple_weight_collision_rate: 0.25,
             simple_coverage_ratio: 0.90,
             simple_assign_mode: SimpleAssignMode::Efficiency,
+            simple_protect_top_n: 0,
         }
     }
 }

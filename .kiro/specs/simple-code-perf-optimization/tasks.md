@@ -400,6 +400,37 @@
     - 新增 `test_incremental_dist_matches_full_rebuild`：非零 `key_dist_config` 下 move 序列逐次断言增量 dist == 全量重建；prop1/prop13 保持全绿；简码关闭零影响
     - _Requirements: 30.7, 30.8_
 
+- [x] 27. 激活前零简码维护与对账门控（需求 32）
+  - [x] 27.1 SA 起始用 new_full_only
+    - `simulated_annealing` 工作评估器改用 `Evaluator::new_full_only`，激活前 `simple_eval=None`、不构建/不维护简码
+    - _Requirements: 32.1, 32.4_
+  - [x] 27.2 对账门控改为 simple_activated
+    - 周期对账与结束强制对账触发条件由 `simple_enabled` 改为 `simple_activated`；激活前跳过
+    - 依赖 `activate_simple` 在 `simple_eval=None` 时据当前分配全量构建（需求 8.6）同步激活时刻状态
+    - _Requirements: 32.2, 32.3, 32.5, 32.6_
+
+- [x] 28. 简码占用保护（需求 33）
+  - [x] 28.1 配置与上下文预计算
+    - `SimpleCodeWeights.simple_protect_top_n: usize`（serde `default=0`）+ `default_simple_protect_top_n`；映射到 `WeightConfig`；`Config::default` 补默认；解析单测（默认 0、显式 500）
+    - `OptContext` 增 `simple_protect_top_n` 与 `simple_is_topn: Vec<bool>`；`new` 中 N>0 时按 `sorted_by_freq.take(N)` 填位图，N=0 留空
+    - _Requirements: 33.1, 33.4, 33.5_
+  - [x] 28.2 判定与出简选择应用
+    - `SimpleEvaluator` 增 `protect_count: FxHashMap<usize,u32>`、`protect_dirty_buf`；新增 `is_code_blocked`（N=0 判全码桶非空，N>0 判 protect_count>0）与 `recompute_protect_count`
+    - `rebuild_selection`/`reselect_bucket` 被阻断桶 `code_num=0`，候选字不出简、不跨级排除（上浮）
+    - _Requirements: 33.2, 33.3, 33.4, 33.5_
+  - [x] 28.3 构建顺序修正（关键缺陷修复）
+    - `rebuild_internal` 中将 `last_full_codes` 基线填充与 `recompute_protect_count` 移到 `rebuild_selection` 之前，使 N>0 初始构建即正确应用保护
+    - _Requirements: 33.7_
+  - [x] 28.4 增量维护与回滚
+    - `apply_move_incremental` 阶段 1 据全码变化收集 blocked 翻转到 `protect_dirty_buf`（N=0 用全码桶空/len==1，N>0 更新 protect_count+undo）；`selection_may_change` 纳入 `!protect_dirty_buf.is_empty()`；`do_incremental_selection` 据脏缓冲标脏重选
+    - `SimpleSnapshot.protect_undo`：`rollback` 逆序回放还原 protect_count，`commit` 清空
+    - _Requirements: 33.5, 33.6_
+  - [x] 28.5 配置文件与测试
+    - `config.toml.example` 与 `moling/config.toml`（后者改值不提交）加 `simple_protect_top_n = 0` 及注释；扩展 `config_files_smoke` 断言该项
+    - 新增 `simple_protect_tests`：随机分配+移动序列断言「出简简码不撞受保护全码」（N=0/N>0 参数化）+ 定向「被占用桶名额 0 并上浮」；prop1/prop13 保持全绿
+    - 更新受影响测试：prop4 oracle 与 prop_b1 零访问前提纳入占用保护语义
+    - _Requirements: 33.6, 33.8, 33.9_
+
 ## Task Dependency Graph
 
 ```json
@@ -439,7 +470,11 @@
     { "id": 31, "tasks": ["18.2"] },
     { "id": 32, "tasks": ["19.1"] },
     { "id": 33, "tasks": ["19.2"] },
-    { "id": 34, "tasks": ["20.1", "20.2"] }
+    { "id": 34, "tasks": ["20.1", "20.2"] },
+    { "id": 35, "tasks": ["28.1"] },
+    { "id": 36, "tasks": ["28.2", "28.3"] },
+    { "id": 37, "tasks": ["28.4"] },
+    { "id": 38, "tasks": ["28.5"] }
   ]
 }
 ```

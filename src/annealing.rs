@@ -840,7 +840,10 @@ pub fn simulated_annealing(
     let mut rng = thread_rng();
 
     let mut assignment = multi_start_init(ctx, cfg, thread_id);
-    let mut evaluator = Evaluator::new(ctx, &assignment);
+    // SA 起始用 new_full_only：简码延迟激活，激活前完全不构建/不维护简码（需求 8.5/29 性能）。
+    // 激活时 activate_simple 在 simple_eval 为 None 时会据当前分配全量构建一次（需求 8.6），
+    // 故激活前无需急切构建，也无需周期对账维护简码状态。
+    let mut evaluator = Evaluator::new_full_only(ctx, &assignment);
 
     // === 简码延迟激活与权重渐进曲线配置（任务 10.1，需求 8/9/12/13/15）===
     // 简码是否启用（启用时延迟到进度阈值后再激活，早期探索阶段简码不贡献）。
@@ -1273,23 +1276,47 @@ pub fn simulated_annealing(
             let cur_simple_comp = w_eff * evaluator.simple_score_component(ctx);
             let best_full_comp = weight_full * best_full_score;
             let best_simple_comp = w_eff * best_simple_score;
+            let total = evaluator.get_score(ctx);
+            // 最优总分按当前 w_eff 重算（= 全码分量 + 简码分量），与下方简码行的最优简码分量自洽；
+            // 不直接用存储的 best_score（其由上次采纳时的 w_eff 计算，渐进期会与当前分量口径不一致）。
+            let best_total_disp = best_full_comp + best_simple_comp;
+            // 全码行（始终输出）：保留全码分量，去掉简码分量（简码移至下方独立行，需求 16）。
+            // pct/speed/基温 取定宽，使下方简码行的指标块对齐。
             println!(
-                "   [T0] 进度: {}% | {:.1} 万步/分钟 | 基温: {:.6} | 重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) CV={:.4}({:.4}) 分布={:.4}({:.4}) | 当前: {:.4} (全码:{:.4} 简码:{:.4}) 🏆最优: {:.4} (全码:{:.4} 简码:{:.4})",
+                "   [T0] 进度: {:>3}% | {:>5.1} 万步/分钟 | 基温: {:.6} | 重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) CV={:.4}({:.4}) 分布={:.4}({:.4}) | 当前: {:.4} (全码:{:.4}) 🏆最优: {:.4} (全码:{:.4})",
                 pct, speed * 60.0 / 10000.0, base_temp,
                 m.collision_count, scores.collision_count,
                 m.collision_rate * 100.0, scores.collision_rate,
                 m.equiv_mean, scores.equivalence,
                 m.equiv_cv, scores.equiv_cv,
                 m.dist_deviation, scores.distribution,
-                evaluator.get_score(ctx), cur_full_comp, cur_simple_comp,
-                best_score, best_full_comp, best_simple_comp
+                total, cur_full_comp,
+                best_total_disp, best_full_comp
             );
+            // 简码行（仅简码启用时）：单独展示简码指标与简码分量；前导空格使「覆盖=…」对齐
+            // 到上方全码行「重码=…」的列起点（前缀按定宽计算，CJK 按 2 列宽）。
+            if simple_enabled {
+                let sm = evaluator.get_simple_metrics(ctx);
+                let ss = evaluator.get_simple_metric_scores(ctx);
+                println!(
+                    "   [T0] 简码:                                         重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) 覆盖={:.2}%({:.4}) 分布={:.4}({:.4}) | 当前简码:{:.4} 🏆最优简码:{:.4}\n",
+                    sm.collision_count, ss.collision_count,
+                    sm.collision_rate * 100.0, ss.collision_rate,
+                    sm.equiv_mean, ss.equiv,
+                    sm.weighted_freq_coverage * 100.0, ss.freq,
+                    sm.dist_deviation, ss.dist,
+                    cur_simple_comp, best_simple_comp
+                );
+            }
         }
 
         // === 周期对账：每 M 步用全量重算覆盖增量值，纠正浮点/整型漂移（需求 15.4/15.5）===
         // 仅在简码启用时进行：简码关闭时全码增量本身（重码为整型精确）无需周期全量重建，
         // 以保持与基线一致的全码搜索行为与性能（不引入每 M 步的评估器重建开销）。
-        if simple_enabled && step > 0 && step % reconcile_m == 0 {
+        // 仅在简码已激活后才周期对账（需求 29 性能修复）：激活前 w_eff=0、简码不参与目标，
+        // 且 SA 起始用 new_full_only 未构建简码，故激活前无需对账（与简码关闭路径一致，
+        // 全码增量为整型精确不需周期全量重建）。激活时已据当前分配全量构建简码。
+        if simple_activated && step > 0 && step % reconcile_m == 0 {
             evaluator.reconcile(ctx, &assignment);
             evaluator.score_dirty = true;
         }
@@ -1311,9 +1338,10 @@ pub fn simulated_annealing(
     }
 
     // === 结束强制全量校验：使最终上报指标为精确值（需求 15.6）===
-    // 仅简码启用时进行（与周期对账一致）；简码关闭时跳过，保持与基线一致、不引入额外重建。
-    // 最终上报指标统一由下方对 best_assignment 重建的 best_eval 给出，与此处无关。
-    if simple_enabled {
+    // 仅简码已激活时进行（与周期对账一致，需求 29）；简码关闭/从未激活时跳过，
+    // 保持与基线一致、不引入额外重建。最终上报指标统一由下方对 best_assignment 重建的
+    // best_eval 给出，与此处无关。
+    if simple_activated {
         evaluator.reconcile(ctx, &assignment);
     }
     // 以全量重建结果一致地重算最佳解的分量与指标（需求 11/15.6）。

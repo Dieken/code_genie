@@ -781,3 +781,44 @@ struct SimpleEvaluator {
 - 回滚：`g_dist_deviation` + `g_dist_contrib` 纳入 `SimpleSnapshot`，`snapshot_aggregates` 整存、`rollback`（`has_selection` 时）整体写回。
 
 **正确性**：prop1（增量=全量逐字段，含 `dist_deviation`）、prop13（reconcile=全量）守住；并新增 `test_incremental_dist_matches_full_rebuild`：**非零** `key_dist_config` 下跑 move 序列，逐次断言增量 `g_dist_deviation` 等于对同一分配全量重建的值（覆盖快速路径与全量回退）。简码关闭/未激活时不触达。
+
+## 激活前零简码维护与对账门控（需求 32）
+
+**问题**：SA 起始 `Evaluator::new` 急切构建 `SimpleEvaluator`；周期/结束对账门控为 `simple_enabled`。激活前 `w_eff=0`、简码不入目标，但对账每 M 步仍全量重建简码（且与报告间隔接近时刷新出激活前的非零简码指标），属浪费。
+
+**设计**：
+- SA 起始改用 `Evaluator::new_full_only`（`simple_eval=None`）：激活前不构建/不维护简码。
+- 周期对账：触发条件由 `simple_enabled` 改为 `simple_activated`；激活前跳过（与简码关闭路径一致，全码增量整型精确不需重建）。结束强制对账同样改为 `simple_activated`。
+- 激活：`activate_simple` 在 `simple_eval==None` 时据当前分配全量构建一次（需求 8.6），使激活时刻简码状态与当前分配同步——替代原先"靠激活前周期对账兜底"的隐式做法。
+- 激活前 `get_simple_metrics` 返回零值（`simple_eval==None`），日志简码行显示 0。
+- 最终上报不受影响：结束时对 `best_assignment` 以 `Evaluator::new`（急切建简码）重算最终指标，无论是否曾激活均为真实值。
+- 简码关闭路径不受影响（本就 `None` 且不对账）。
+
+## 简码占用保护（需求 33）
+
+**问题**：出简选择仅按桶内排序键择优，未校验「简码编码值是否等于某汉字全码编码值」。二者相等时简码抢占该字的全码键位。需引入硬资格约束：禁止简码等于受保护汉字的全码，保护范围由配置 `simple_protect_top_n` 控制（0=全部，N>0=全字频前 N 名）。
+
+**编码可比性**：`calc_simple_code` 与 `calc_code_only` 同进制；长度不同 ⟹ 数值必不同，长度相同 ⟹ 才可能相等。故"撞码"判定即两整型编码值相等，无需额外换算，且仅在简码长度等于某字全码长度时发生。
+
+**配置与预计算（`config.rs` / `types.rs` / `context.rs`）**：
+- `SimpleCodeWeights.simple_protect_top_n: usize`（serde `default=0`），映射到 `WeightConfig.simple_protect_top_n`。
+- `OptContext` 新增 `simple_protect_top_n: usize` 与 `simple_is_topn: Vec<bool>`。`new` 中读取 N；仅 `N>0` 时按 `sorted_by_freq.take(N)`（字频降序、并列 ci 升序）填 `simple_is_topn` 位图；`N=0` 留空（保护全部，改用全码桶占用判定）。
+
+**判定（`SimpleEvaluator::is_code_blocked`）**：
+- `N==0`：`blocked(code) = code < full_code_to_chars.len() && !full_code_to_chars[code].is_empty()`（复用既有全码桶，零额外内存）。
+- `N>0`：`blocked(code) = protect_count.get(code) > 0`，其中 `protect_count: FxHashMap<usize,u32>` 记「top-N 字当前全码占用计数」。
+
+**出简选择应用（`rebuild_selection` / `reselect_bucket`）**：每桶择优前先判 `is_code_blocked`；被阻断则该桶 `code_num=0`（谁都不出简）。被阻断桶内候选字 `all_assigned_flags` 保持 false，不跨级排除，由既有跨级传播上浮到更高级别继续尝试。
+
+**构建顺序（需求 33.7，关键修正）**：`rebuild_internal` 中必须在 `rebuild_selection` **之前**建立判定所需状态：先填 `last_full_codes`（每字全码基线），再 `recompute_protect_count`（据 top-N 字全码统计占用），最后才 `rebuild_selection`。否则 N>0 初始构建时 `protect_count` 为空 → 漏判保护（此为实现中发现并修复的真实缺陷）。
+
+**增量维护（`apply_move_incremental` 阶段 1）**：移动后据全码变化更新保护并收集被禁/解禁翻转到 `protect_dirty_buf`：
+- `N==0`：移动后某 `old_code` 全码桶变空 → 解禁；某 `new_code` 桶变为恰含一字 → 新禁；据此标脏对应简码桶。
+- `N>0`：仅 top-N 字影响 `protect_count`；计数 1→0 解禁、0→1 新禁；旧值入 `protect_undo` 供回滚。
+- `selection_may_change = !affected_candidates.is_empty() || !resort_seeds.is_empty() || !protect_dirty_buf.is_empty()`；`do_incremental_selection` 开头据 `protect_dirty_buf` 逐级容量守卫后 `touch_bucket` 标脏，使被影响桶重选。
+
+**回滚（`SimpleSnapshot.protect_undo`）**：`rollback` 在还原 `last_full_codes` 后逆序回放 `protect_undo` 还原 `protect_count`；`commit` 清空 `protect_undo`。
+
+**正确性**：由 prop1（增量=全量逐字段）、prop13（对账=全量）守护两路径一致；新增 `simple_protect_tests`：对随机分配 + 移动序列断言「任意出简字简码不撞受保护全码」（N=0 与 N>0 参数化），及定向用例「被占用桶名额 0 并上浮」。
+
+**范围隔离**：全部逻辑封装于 `SimpleEvaluator` 与简码配置内；`enable_simple_code==false` 时 `simple_eval==None`，保护逻辑不可达，全码路径行为/逻辑/性能与基线一致（需求 33.8）。

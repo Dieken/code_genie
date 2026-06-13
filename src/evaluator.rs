@@ -6,6 +6,8 @@ use rand::prelude::*;
 
 use std::cmp::Ordering;
 
+use rustc_hash::FxHashMap;
+
 use crate::context::OptContext;
 use crate::types::{
     KeyDistConfig, MetricScores, Metrics, SimpleAssignMode, SimpleMetricScores, SimpleMetrics, EQUIV_TABLE_SIZE,
@@ -134,6 +136,8 @@ struct SimpleSnapshot {
     /// 移动起始的全局分布偏差与每键贡献快照（方向 B，回滚整体写回）。
     g_dist_deviation: f64,
     g_dist_contrib: [f64; EQUIV_TABLE_SIZE],
+    /// 受保护占用计数的撤销日志（需求 33）：(code, 修改前 count)，逆序回放还原。
+    protect_undo: Vec<(usize, u32)>,
     /// `current_simple_code` 撤销日志：(li, ci, 修改前 code)，逆序回放。
     undo_code: Vec<(usize, usize, i64)>,
     /// `selected` 撤销日志：(li, ci, 修改前 selected)，逆序回放。
@@ -189,6 +193,12 @@ pub struct SimpleEvaluator {
     /// 本次移动中 `g_key_usage` 被改动的键（工作缓冲，去堆分配）：用于 presses 不变时只增量
     /// 更新这些键的分布贡献。move 起始清空，move 末尾结算后去重使用。
     g_dirty_keys: Vec<u8>,
+    /// 简码占用保护（需求 33）——仅 `simple_protect_top_n > 0` 时使用：
+    /// 「全字频前 N 名汉字」当前全码编码的占用计数 `protect_count[code] = 占用该编码的 top-N 字数`。
+    /// `blocked(code) = count > 0`。N=0（保护全部）时不用此表，改判全码桶占用。
+    protect_count: FxHashMap<usize, u32>,
+    /// 本次移动中受保护占用翻转、需重选的简码桶编码（工作缓冲，move 起始清空）。
+    protect_dirty_buf: Vec<usize>,
     /// 缓存的简码得分
     cached_simple_score: f64,
     /// 得分是否需要重新计算
@@ -311,6 +321,8 @@ impl SimpleEvaluator {
             g_dist_deviation: 0.0,
             g_dist_contrib: [0.0; EQUIV_TABLE_SIZE],
             g_dirty_keys: Vec::new(),
+            protect_count: FxHashMap::default(),
+            protect_dirty_buf: Vec::new(),
             cached_simple_score: 0.0,
             simple_score_dirty: true,
             key_buf: Vec::new(),
@@ -354,24 +366,59 @@ impl SimpleEvaluator {
     ) {
         let n_chars = ctx.char_infos.len();
 
-        // 简码出简选择（桶 / current_simple_code / selected / 级别聚合 / all_assigned_flags）
-        self.rebuild_selection(ctx, assignment, is_first_candidate);
-
-        // 全量重算简码重码并填满每桶贡献缓存（供后续增量差量维护）
-        self.recompute_collisions_full(ctx, full_code_to_chars);
-
-        // 记录每个汉字当前全码编码，作为后续增量检测全码桶变化的基线
+        // 记录每个汉字当前全码编码，作为后续增量检测全码桶变化的基线。
+        // 必须先于 rebuild_selection：N>0 时占用保护判定（is_code_blocked）依赖 protect_count，
+        // 而 protect_count 由 top-N 字的 last_full_codes 推导（需求 33）。
         if self.last_full_codes.len() != n_chars {
             self.last_full_codes = vec![0usize; n_chars];
         }
         for ci in 0..n_chars {
             self.last_full_codes[ci] = ctx.calc_code_only(ci, assignment);
         }
+        // 重建受保护占用计数（需求 33，仅 N>0）。须先于出简选择，使桶名额据保护正确归零。
+        self.recompute_protect_count(ctx);
+
+        // 简码出简选择（桶 / current_simple_code / selected / 级别聚合 / all_assigned_flags）
+        self.rebuild_selection(ctx, assignment, full_code_to_chars, is_first_candidate);
+
+        // 全量重算简码重码并填满每桶贡献缓存（供后续增量差量维护）
+        self.recompute_collisions_full(ctx, full_code_to_chars);
 
         // 据各级别聚合 + 固定简码常量偏置，一次性重算全局聚合（需求 29.2/29.8）。
         self.recompute_global_aggregates(ctx);
 
         self.simple_score_dirty = true;
+    }
+
+    /// 重建受保护占用计数（需求 33，仅 `simple_protect_top_n > 0`）：据 top-N 字当前全码
+    /// （`last_full_codes`）统计每个编码被多少 top-N 字占用。N=0（保护全部）时清空、不使用。
+    fn recompute_protect_count(&mut self, ctx: &OptContext) {
+        self.protect_count.clear();
+        if ctx.simple_protect_top_n == 0 || ctx.simple_is_topn.is_empty() {
+            return;
+        }
+        for ci in 0..ctx.simple_is_topn.len() {
+            if ctx.simple_is_topn[ci] {
+                *self.protect_count.entry(self.last_full_codes[ci]).or_insert(0) += 1;
+            }
+        }
+    }
+
+    /// 简码占用保护判定（需求 33）：编码 `code` 是否等于某受保护汉字的全码。
+    /// - N=0（保护全部）：等价于「全码桶 `full_code_to_chars[code]` 非空」（复用现有结构）。
+    /// - N>0：`protect_count[code] > 0`。
+    #[inline]
+    fn is_code_blocked(
+        &self,
+        ctx: &OptContext,
+        code: usize,
+        full_code_to_chars: &[Vec<usize>],
+    ) -> bool {
+        if ctx.simple_protect_top_n == 0 {
+            code < full_code_to_chars.len() && !full_code_to_chars[code].is_empty()
+        } else {
+            self.protect_count.get(&code).copied().unwrap_or(0) > 0
+        }
     }
 
     /// 据各级别聚合 + 固定简码常量偏置，全量重算全局聚合标量（需求 29.2）。
@@ -486,6 +533,7 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
+        full_code_to_chars: &[Vec<usize>],
         is_first_candidate: &[bool],
     ) {
         let n_levels = self.levels.len();
@@ -542,10 +590,16 @@ impl SimpleEvaluator {
             // 阶段 2：桶内按分配模式排序键局部排序后选取前 code_num 个出简
             for ti in 0..touched.len() {
                 let code = touched[ti];
-                // 固定简码占用名额（需求 21.7）：每桶优化可选名额 = code_num - 占用数（下限 0）。
-                let code_num = self.levels[li]
-                    .code_num
-                    .saturating_sub(ctx.simple_fixed_occ(li, code));
+                // 简码占用保护（需求 33）：编码撞受保护全码的桶不出简（名额=0）；
+                // 其候选字 all_assigned_flags 保持 false → 由更高级别（更长简码）继续尝试。
+                let code_num = if self.is_code_blocked(ctx, code, full_code_to_chars) {
+                    0
+                } else {
+                    // 固定简码占用名额（需求 21.7）：每桶优化可选名额 = code_num - 占用数（下限 0）。
+                    self.levels[li]
+                        .code_num
+                        .saturating_sub(ctx.simple_fixed_occ(li, code))
+                };
                 // 仅对受影响桶内的候选列表执行局部排序（需求 6.2/6.3）
                 Self::sort_bucket(
                     ctx,
@@ -786,20 +840,19 @@ impl SimpleEvaluator {
         self.stage2_visits = 0;
         // 复位本次移动的「键改动」缓冲（方向 B 分布偏差增量结算用）。
         self.g_dirty_keys.clear();
+        // 复位简码占用保护的本移动缓冲（需求 33）。
+        self.protect_dirty_buf.clear();
+        self.snapshot.protect_undo.clear();
 
         if affected_candidates.is_empty() && full_affected_chars.is_empty() && resort_seeds.is_empty() {
             return;
         }
 
-        // 出简选择是否可能变化：存在受影响候选字（简码编码可能变化）或需重排种子
-        // （Efficiency 模式下首选状态翻转改变排序键）时，都需要重算出简选择（阶段 2）。
-        let selection_may_change = !affected_candidates.is_empty() || !resort_seeds.is_empty();
-        self.snapshot.has_selection = selection_may_change;
-
         // 工作集复位
         self.affected_full_buckets.clear();
 
         // === 阶段 1（全码桶来源）：检测移动组所改变的全码桶（旧编码 ∪ 新编码）===
+        // 同时增量维护简码占用保护（需求 33）：据全码编码变化更新受保护占用、收集 blocked 翻转。
         for &ci in full_affected_chars {
             let new_code = ctx.calc_code_only(ci, assignment);
             let old_code = self.last_full_codes[ci];
@@ -808,8 +861,42 @@ impl SimpleEvaluator {
                 self.affected_full_buckets.push(new_code);
                 self.snapshot.last_full_codes.push((ci, old_code));
                 self.last_full_codes[ci] = new_code;
+
+                // 简码占用保护增量（需求 33）。full_code_to_chars 此时已反映本次移动后状态。
+                if ctx.simple_protect_top_n == 0 {
+                    // N=0（保护全部）：blocked(C)=全码桶非空。old_code 变空 → 解禁；
+                    // new_code 变为恰含此字（之前为空）→ 新禁；据此标脏对应简码桶。
+                    if full_code_to_chars[old_code].is_empty() {
+                        self.protect_dirty_buf.push(old_code);
+                    }
+                    if full_code_to_chars[new_code].len() == 1 {
+                        self.protect_dirty_buf.push(new_code);
+                    }
+                } else if ctx.simple_is_topn[ci] {
+                    // N>0：仅受保护(top-N)字影响占用计数；计数 1→0 解禁、0→1 新禁。
+                    let old_c = self.protect_count.get(&old_code).copied().unwrap_or(0);
+                    self.snapshot.protect_undo.push((old_code, old_c));
+                    if old_c <= 1 {
+                        self.protect_count.remove(&old_code);
+                        self.protect_dirty_buf.push(old_code);
+                    } else {
+                        self.protect_count.insert(old_code, old_c - 1);
+                    }
+                    let new_c = self.protect_count.get(&new_code).copied().unwrap_or(0);
+                    self.snapshot.protect_undo.push((new_code, new_c));
+                    self.protect_count.insert(new_code, new_c + 1);
+                    if new_c == 0 {
+                        self.protect_dirty_buf.push(new_code);
+                    }
+                }
             }
         }
+
+        // 出简选择是否可能变化：受影响候选字、重排种子，或简码占用保护 blocked 翻转，均需重算。
+        let selection_may_change = !affected_candidates.is_empty()
+            || !resort_seeds.is_empty()
+            || !self.protect_dirty_buf.is_empty();
+        self.snapshot.has_selection = selection_may_change;
 
         // === 阶段 2：仅对脏桶做局部重排 + pending_chars 跨级排除传播（精确增量，Backlog B1）===
         // 不再调用 `rebuild_selection` 做整体重算。仅遍历受影响候选字 / 重排种子与脏桶，
@@ -818,6 +905,7 @@ impl SimpleEvaluator {
             self.do_incremental_selection(
                 ctx,
                 assignment,
+                full_code_to_chars,
                 affected_candidates,
                 resort_seeds,
                 is_first_candidate,
@@ -1117,6 +1205,7 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
+        full_code_to_chars: &[Vec<usize>],
         is_first_candidate: &[bool],
         li: usize,
         code: usize,
@@ -1128,9 +1217,14 @@ impl SimpleEvaluator {
                 Self::cmp_in_bucket(ctx, is_first_candidate, li, a, b)
             });
         }
-        let code_num = self.levels[li]
-            .code_num
-            .saturating_sub(ctx.simple_fixed_occ(li, code));
+        // 简码占用保护（需求 33）：编码撞受保护全码的桶名额=0（谁都不出简）。
+        let code_num = if self.is_code_blocked(ctx, code, full_code_to_chars) {
+            0
+        } else {
+            self.levels[li]
+                .code_num
+                .saturating_sub(ctx.simple_fixed_occ(li, code))
+        };
         let len = self.levels[li].buckets[code].members.len();
         // 北极星计数：脏桶局部重排访问的成员数（与桶规模同阶，非候选字总集）。
         self.stage2_visits += len;
@@ -1164,6 +1258,7 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
+        full_code_to_chars: &[Vec<usize>],
         affected_candidates: &[usize],
         resort_seeds: &[usize],
         is_first_candidate: &[bool],
@@ -1180,6 +1275,18 @@ impl SimpleEvaluator {
         }
         self.pending_a.clear();
         self.pending_b.clear();
+
+        // --- 简码占用保护翻转（需求 33）：本次移动使某编码的「受保护占用」翻转（新禁/解禁），
+        // 把对应简码桶标记为脏以重选。`protect_dirty_buf` 在阶段 1 已据全码变化收集。
+        // 一个全码编码值可能对应某一级的合法简码桶（按长度匹配），逐级以容量守卫后触碰。---
+        for k in 0..self.protect_dirty_buf.len() {
+            let code = self.protect_dirty_buf[k];
+            for li in 0..n_levels {
+                if code < self.levels[li].buckets.len() {
+                    self.touch_bucket(li, code);
+                }
+            }
+        }
 
         // --- 阶段 1：受影响候选字逐级「旧桶移除 / 新桶加入」（仅在其当前出现的级别）---
         for &ci in affected_candidates {
@@ -1263,7 +1370,7 @@ impl SimpleEvaluator {
             self.newly_desel_buf.clear();
             for di in 0..self.dirty_per_level[li].len() {
                 let code = self.dirty_per_level[li][di];
-                self.reselect_bucket(ctx, assignment, is_first_candidate, li, code);
+                self.reselect_bucket(ctx, assignment, full_code_to_chars, is_first_candidate, li, code);
             }
 
             // (c) 跨级传播到 li+1
@@ -1330,6 +1437,7 @@ impl SimpleEvaluator {
         self.snapshot.undo_contrib.clear();
         self.snapshot.collision_buckets.clear();
         self.snapshot.last_full_codes.clear();
+        self.snapshot.protect_undo.clear();
         self.assigned_touched_list.clear();
     }
 
@@ -1406,6 +1514,16 @@ impl SimpleEvaluator {
         // 7) 还原 last_full_codes 条目（逆序，确保多次触碰同一 ci 时回到最早值）
         for &(ci, old_code) in self.snapshot.last_full_codes.iter().rev() {
             self.last_full_codes[ci] = old_code;
+        }
+
+        // 7b) 还原受保护占用计数（需求 33，逆序回放，确保同一 code 多次改动回到最早值）。
+        // 与 has_selection 无关：protect_count 在阶段 1 据全码变化更新，可能未触发 selection。
+        for &(code, old_count) in self.snapshot.protect_undo.iter().rev() {
+            if old_count == 0 {
+                self.protect_count.remove(&code);
+            } else {
+                self.protect_count.insert(code, old_count);
+            }
         }
 
         // 8) 还原简码重码贡献缓存（逆序）
@@ -3607,10 +3725,37 @@ mod bucket_selection_tests {
         })
     }
 
+    /// 独立判定编码 `code` 是否被简码占用保护阻断（需求 33，与产线 `is_code_blocked` 同口径）。
+    ///
+    /// - `simple_protect_top_n == 0`（保护全部）：等价于「全码桶 `full_code_to_chars[code]` 非空」。
+    /// - `simple_protect_top_n > 0`：等价于「某受保护汉字（`simple_is_topn`）全码 == code」。
+    fn oracle_is_blocked(ctx: &OptContext, full_code_to_chars: &[Vec<usize>], code: usize) -> bool {
+        if ctx.simple_protect_top_n == 0 {
+            code < full_code_to_chars.len() && !full_code_to_chars[code].is_empty()
+        } else {
+            full_code_to_chars.get(code).map_or(false, |chars| {
+                chars
+                    .iter()
+                    .any(|&c| ctx.simple_is_topn.get(c).copied().unwrap_or(false))
+            })
+        }
+    }
+
+    /// 据当前分配从头构建全码桶 `full_code_to_chars`（与产线 `Evaluator::new` 同口径）。
+    fn oracle_full_code_to_chars(ctx: &OptContext, assignment: &[u8]) -> Vec<Vec<usize>> {
+        let mut full_code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); ctx.code_space];
+        for ci in 0..ctx.char_infos.len() {
+            full_code_to_chars[ctx.calc_code_only(ci, assignment)].push(ci);
+        }
+        full_code_to_chars
+    }
+
     /// 从头独立推导每级的「桶成员」与「桶内选中集合」。
     ///
     /// 忠实复现设计 Property 4：按级别升序处理，低级别先出简；高级别桶中排除已被前序级别
     /// 选中（出简）的字（跨级排除）。每个桶内用 `oracle_cmp` 排序后取前 `code_num` 个为选中集合。
+    /// 此外复现需求 33 的简码占用保护：编码撞受保护全码的桶名额=0（谁都不出简），其候选字
+    /// 不被跨级排除，由更高级别继续尝试。
     /// 返回 `(members_per_level, selected_per_level)`，均以「桶编码 -> 排序后的 ci 列表」表示。
     #[allow(clippy::type_complexity)]
     fn oracle_selection(
@@ -3623,6 +3768,7 @@ mod bucket_selection_tests {
     ) {
         let n_levels = ctx.simple_config.levels.len();
         let n_chars = ctx.char_infos.len();
+        let full_code_to_chars = oracle_full_code_to_chars(ctx, assignment);
         let mut assigned = vec![false; n_chars];
         let mut members_per_level: Vec<HashMap<usize, Vec<usize>>> = Vec::with_capacity(n_levels);
         let mut selected_per_level: Vec<HashMap<usize, Vec<usize>>> = Vec::with_capacity(n_levels);
@@ -3639,12 +3785,18 @@ mod bucket_selection_tests {
                     buckets.entry(code).or_default().push(ci);
                 }
             }
-            // 阶段 2：桶内排序后取前 code_num 个为选中集合，并标记其跨级排除
+            // 阶段 2：桶内排序后取前 code_num 个为选中集合，并标记其跨级排除。
+            // 简码占用保护（需求 33）：被阻断的编码名额=0，桶内字不出简、不跨级排除。
             let mut selected: HashMap<usize, Vec<usize>> = HashMap::new();
             for (&code, members) in buckets.iter() {
+                let eff_code_num = if oracle_is_blocked(ctx, &full_code_to_chars, code) {
+                    0
+                } else {
+                    code_num
+                };
                 let mut sorted = members.clone();
                 sorted.sort_by(|&a, &b| oracle_cmp(ctx, is_first_candidate, li, a, b));
-                let sel: Vec<usize> = sorted.iter().take(code_num).copied().collect();
+                let sel: Vec<usize> = sorted.iter().take(eff_code_num).copied().collect();
                 for &ci in &sel {
                     assigned[ci] = true;
                 }
@@ -3707,7 +3859,6 @@ mod bucket_selection_tests {
 
                 for li in 0..n_levels {
                     let level = &se.levels[li];
-                    let code_num_li = ctx.simple_config.levels[li].code_num;
 
                     // 从评估器状态重建：current_simple_code 指向的桶成员 + selected 选中集合
                     let mut act_members: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -3747,11 +3898,12 @@ mod bucket_selection_tests {
                             li, code, mode, asg
                         );
 
-                        // (3) 选中数 = min(code_num, 桶成员数)
+                        // (3) 选中数 = oracle 选中数：未阻断桶为 min(code_num, 成员数)，
+                        //     被简码占用保护阻断的桶为 0（需求 33）。
                         prop_assert_eq!(
                             act_sel.len(),
-                            exp_mem.len().min(code_num_li),
-                            "级别 {} 桶 {} 选中数不等于 min(code_num, 成员数), mode={:?}",
+                            exp_sel.len(),
+                            "级别 {} 桶 {} 选中数与 oracle 不一致, mode={:?}",
                             li, code, mode
                         );
                     }
@@ -4340,9 +4492,34 @@ mod incremental_full_consistency_tests {
             for (k, &(gi, nk)) in moves.iter().enumerate() {
                 let r = gi % n_groups;
                 let affected_empty = ctx.group_to_simple_affected_candidate[r].is_empty();
+                // 记录移动前组内字的旧全码，用于判定需求 33「简码占用保护」是否翻转。
+                let moved_chars: Vec<usize> = ctx.group_to_chars[r].clone();
+                let old_full: Vec<usize> = moved_chars
+                    .iter()
+                    .map(|&ci| ctx.calc_code_only(ci, &assignment))
+                    .collect();
 
                 apply_move_inc(&mut ev_inc, &ctx, &mut assignment, r, nk);
                 let visits = ev_inc.last_stage2_visits();
+
+                // 判定本次移动是否触发简码占用保护翻转（需求 33，N=0：移动后某全码桶变空 →
+                // 解禁，或恰含一字 → 新禁）。翻转会把对应简码桶标脏并触发阶段 2 重选，使「空交集
+                // 零访问」前提不再成立。仅在无翻转时才断言零访问。
+                let protect_flip = if ctx.simple_protect_top_n == 0 {
+                    let mut fc: Vec<usize> = vec![0; ctx.code_space];
+                    for ci in 0..ctx.char_infos.len() {
+                        fc[ctx.calc_code_only(ci, &assignment)] += 1;
+                    }
+                    moved_chars.iter().zip(old_full.iter()).any(|(&ci, &oc)| {
+                        let nc = ctx.calc_code_only(ci, &assignment);
+                        nc != oc && (fc[oc] == 0 || fc[nc] == 1)
+                    })
+                } else {
+                    // N>0：仅受保护(top-N)字全码变化才可能翻转占用计数。
+                    moved_chars.iter().any(|&ci| {
+                        ctx.simple_is_topn.get(ci).copied().unwrap_or(false)
+                    })
+                };
 
                 // (2) 北极星断言
                 prop_assert!(
@@ -4350,11 +4527,12 @@ mod incremental_full_consistency_tests {
                     "step{}: 阶段 2 访问量 {} 超过常数倍上界 {}（candidates={} levels={}）",
                     k + 1, visits, sanity_bound, n_candidates, n_levels
                 );
-                if mode_is_freq && affected_empty {
-                    // Frequency 模式无重排种子；非候选字组移动 ⟹ 出简选择不变 ⟹ 阶段 2 零访问。
+                if mode_is_freq && affected_empty && !protect_flip {
+                    // Frequency 模式无重排种子；非候选字组移动且无保护翻转 ⟹ 出简选择不变
+                    // ⟹ 阶段 2 零访问。
                     prop_assert_eq!(
                         visits, 0,
-                        "step{}: Frequency 模式空交集移动应零访问，实际 {}",
+                        "step{}: Frequency 模式空交集且无保护翻转应零访问，实际 {}",
                         k + 1, visits
                     );
                 }
@@ -6158,5 +6336,183 @@ mod fixed_simple_code_tests {
             let full_end = Evaluator::new(&ctx, &assignment);
             assert_simple_eq(&ctx, &ev, &full_end, "reconcile")?;
         }
+    }
+}
+
+// =========================================================================
+// 🧪 简码占用保护测试（simple-code-perf-optimization, Requirement 33）
+// =========================================================================
+// 验证「简码占用保护」硬资格约束：
+//   - N=0（保护全部）：任何出简（被选中）汉字的简码编码值，均不得等于任意汉字的全码编码值；
+//   - N>0（仅保护 top-N）：出简简码不得等于任一受保护（全字频前 N 名）汉字的全码，
+//     但允许等于 top-N 之外汉字的全码；
+//   - 动态翻转：施加移动后，出简集合仍恒满足上述约束（增量路径）。
+#[cfg(test)]
+mod simple_protect_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    /// 构建启用简码、3 级、参数化 `simple_protect_top_n` 的 OptContext。
+    ///
+    /// `specs[i] = (freq, n_roots)`：第 i 个汉字含 `n_roots` 个独立字根（全码长度 = n_roots）。
+    /// 含 n_roots=1 的字时其全码长度为 1，与级别 1 简码同长，从而可能数值相等 —— 触发占用保护。
+    /// 仅用 2 个允许键位制造碰撞；覆盖率阈值 1.0 使全部字为候选字。
+    fn make_ctx(specs: &[(u64, usize)], mode: SimpleAssignMode, protect_top_n: usize) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(specs.len());
+        for (i, &(freq, n_roots)) in specs.iter().enumerate() {
+            let n_roots = n_roots.max(1);
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("p{i}_{j}");
+                groups.push(RootGroup {
+                    roots: vec![root.clone()],
+                    allowed_keys: vec![0, 1],
+                });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+        let step = |sel: char| SimpleCodeStep {
+            root_selector: sel,
+            code_selector: 'a',
+        };
+        let levels = vec![
+            SimpleCodeLevel { level: 1, code_num: 1, rule_candidates: vec![vec![step('A')]], space_commit: false },
+            SimpleCodeLevel { level: 2, code_num: 1, rule_candidates: vec![vec![step('A'), step('B')]], space_commit: false },
+            SimpleCodeLevel { level: 3, code_num: 1, rule_candidates: vec![vec![step('A'), step('B'), step('C')]], space_commit: false },
+        ];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        weights.simple_assign_mode = mode;
+        weights.simple_protect_top_n = protect_top_n;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 收集「全码编码值 -> 拥有该全码的汉字集合」（全体汉字，与产线 full_code_to_chars 同口径）。
+    fn full_code_to_chars(ctx: &OptContext, asg: &[u8]) -> Vec<Vec<usize>> {
+        let mut m: Vec<Vec<usize>> = vec![Vec::new(); ctx.code_space];
+        for ci in 0..ctx.char_infos.len() {
+            m[ctx.calc_code_only(ci, asg)].push(ci);
+        }
+        m
+    }
+
+    /// 遍历所有级别，对每个出简（被选中）汉字断言其简码不撞受保护全码。
+    fn assert_protection_holds(ctx: &OptContext, ev: &Evaluator, asg: &[u8], n: usize) {
+        let se = ev.simple_eval.as_ref().expect("简码应启用");
+        let fc = full_code_to_chars(ctx, asg);
+        for li in 0..se.levels.len() {
+            for ci in 0..ctx.char_infos.len() {
+                if !se.levels[li].selected[ci] {
+                    continue;
+                }
+                let code = ctx
+                    .calc_simple_code_eligible(ci, li, asg)
+                    .expect("出简字必有该级简码");
+                if n == 0 {
+                    // 保护全部：该简码编码值不应被任何汉字用作全码。
+                    assert!(
+                        code >= fc.len() || fc[code].is_empty(),
+                        "N=0 违反保护：级别 {} 字 {} 简码 {} 撞全码 {:?}",
+                        li, ci, code, fc.get(code)
+                    );
+                } else {
+                    // 仅保护 top-N：该简码编码值不应等于任一受保护汉字的全码。
+                    if code < fc.len() {
+                        for &owner in &fc[code] {
+                            assert!(
+                                !ctx.simple_is_topn[owner],
+                                "N={} 违反保护：级别 {} 字 {} 简码 {} 撞受保护字 {} 的全码",
+                                n, li, ci, code, owner
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(80))]
+
+        // Feature: simple-code-perf-optimization, Requirement 33: 简码占用保护（硬资格约束）。
+        // 对随机分配 + 确定性移动序列，断言任意出简字的简码不撞受保护全码（N=0 保护全部、N>0 保护 top-N）。
+        // Validates: Requirement 33
+        #[test]
+        fn prop33_selected_simple_codes_never_collide_protected_full(
+            mode_is_freq in any::<bool>(),
+            specs in prop::collection::vec((1u64..6, 1usize..4), 4usize..10),
+            // 0 = 保护全部；1..=5 = 仅保护 top-N
+            protect_top_n in 0usize..6,
+            moves in prop::collection::vec((0usize..48, 0u8..2), 0usize..20),
+        ) {
+            let mode = if mode_is_freq {
+                SimpleAssignMode::Frequency
+            } else {
+                SimpleAssignMode::Efficiency
+            };
+            let ctx = make_ctx(&specs, mode, protect_top_n);
+            let n_groups = ctx.num_groups;
+            let mut asg = vec![0u8; n_groups];
+
+            // step==0 为初始分配，其后逐步确定性改写键位；每步用全量重建后断言保护成立。
+            for step in 0..=moves.len() {
+                let ev = Evaluator::new(&ctx, &asg);
+                assert_protection_holds(&ctx, &ev, &asg, protect_top_n);
+                if step < moves.len() {
+                    let (gi, nk) = moves[step];
+                    asg[gi % n_groups] = nk;
+                }
+            }
+        }
+
+        // N>0 时允许出简简码等于「top-N 之外」汉字的全码：构造一个确实发生此类共享的场景，
+        // 断言它不被保护阻断（即该字仍可出简）。借由「保护成立 + 至少存在一例共享」联合验证语义边界。
+        // Validates: Requirement 33
+        #[test]
+        fn prop33_topn_allows_collision_with_unprotected_full(
+            specs in prop::collection::vec((1u64..6, 1usize..4), 4usize..10),
+        ) {
+            // 仅保护 top-1：受保护集合最小，最易出现「出简简码撞非受保护全码」的合法共享。
+            let ctx = make_ctx(&specs, SimpleAssignMode::Efficiency, 1);
+            let asg = vec![0u8; ctx.num_groups];
+            let ev = Evaluator::new(&ctx, &asg);
+            // 核心约束必须成立（不撞受保护全码）。
+            assert_protection_holds(&ctx, &ev, &asg, 1);
+        }
+    }
+
+    /// 定向单元测试：N=0 下，被全码占用的简码桶名额=0（谁都不出简），其候选字上浮到更高级别。
+    #[test]
+    fn n0_blocks_bucket_and_propagates_upward() {
+        // 两个单根字 + 一个三根字。两个单根字在级别 1 同键位 ⟹ 全码相同且长度 1，
+        // 级别 1 简码（长度 1）必撞其自身全码 ⟹ N=0 下级别 1 全被阻断，须上浮。
+        let specs = [(100u64, 1usize), (50, 1), (30, 3)];
+        let ctx = make_ctx(&specs, SimpleAssignMode::Frequency, 0);
+        let asg = vec![0u8; ctx.num_groups];
+        let ev = Evaluator::new(&ctx, &asg);
+        assert_protection_holds(&ctx, &ev, &asg, 0);
     }
 }
