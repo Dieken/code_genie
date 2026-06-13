@@ -454,3 +454,20 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 3. THE 优化器 SHALL 支持「一步到位」配置：WHEN `simple_ramp_progress == 0` 且 `simple_start_progress > 0`，THE `w_simple_eff` 在 `p ≥ simple_start_progress` 时 SHALL 直接返回目标权重 W（激活即满权重，无渐进期），且该配置不触发 `(0,0)` 硬激活兼容档。
 4. THE 纯全码移动（`Δsimple == 0`）的接受概率 SHALL 与 `w_eff` 取值无关，因而在「渐进」与「一步到位」两种配置下完全一致。
 5. THE 文档 SHALL 记录两种做法的取舍：渐进缓解首刻满权重简码项的重排冲击但目标在窗口内非平稳；一步到位使激活后目标平稳、单调下降，配合需求 26 的激活时重定价分数一次设定后只降不升；并记录"激活点越靠前（温度越高）一步到位越不易冻结"的量级判断与 A/B 验证方法。
+
+### 需求 32：激活前零简码维护与对账门控（消除激活前的简码全量重建浪费）
+
+**用户故事：** 作为优化器使用者，我希望简码激活前完全不做简码计算（含周期对账的全量重建），从而消除激活前的无效开销，并让激活前日志的简码指标如实显示为 0。
+
+#### 背景
+
+此前 SA 起始以 `Evaluator::new` 急切构建 `SimpleEvaluator`，且周期对账 `reconcile` 与结束强制对账的触发条件为 `simple_enabled`（而非 `simple_activated`）。当 `reconcile_interval` 与报告间隔接近时，激活前每个报告点附近恰有一次全量对账，使激活前简码指标既非零又随报告点变化——而此阶段 `w_eff = 0`，简码不参与目标函数，这些全量重建纯属浪费。
+
+#### 验收标准
+
+1. THE 退火主循环 SHALL 以 `Evaluator::new_full_only` 构建工作评估器，使激活前 `simple_eval` 为 `None`、不构建也不维护任何简码状态。
+2. THE 周期对账与结束强制对账 SHALL 仅在 `simple_activated == true` 时执行；激活前 SHALL NOT 触发任何简码（或全码）全量重建（与简码关闭路径一致，全码增量为整型精确）。
+3. WHEN 简码计算被激活（`activate_simple`，此时 `simple_eval == None`），THE 简码评估器 SHALL 据当前分配执行一次全量构建以初始化增量状态（需求 8.6），使激活时刻的简码状态与当前分配一致。
+4. WHILE 简码尚未激活，THE `get_simple_metrics` SHALL 返回零值（`simple_eval == None`），使激活前日志的简码指标显示为 0。
+5. THE 最终结果上报 SHALL 不受影响：结束时对 `best_assignment` 重建评估器（急切构建简码）计算最终简码指标，无论简码是否曾激活均给出真实值。
+6. WHERE 简码整体关闭（`enable_simple_code == false`），THE 本改造 SHALL 与基线行为、性能完全一致（本就 `simple_eval == None` 且不对账）。

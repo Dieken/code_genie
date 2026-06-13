@@ -840,7 +840,10 @@ pub fn simulated_annealing(
     let mut rng = thread_rng();
 
     let mut assignment = multi_start_init(ctx, cfg, thread_id);
-    let mut evaluator = Evaluator::new(ctx, &assignment);
+    // SA 起始用 new_full_only：简码延迟激活，激活前完全不构建/不维护简码（需求 8.5/29 性能）。
+    // 激活时 activate_simple 在 simple_eval 为 None 时会据当前分配全量构建一次（需求 8.6），
+    // 故激活前无需急切构建，也无需周期对账维护简码状态。
+    let mut evaluator = Evaluator::new_full_only(ctx, &assignment);
 
     // === 简码延迟激活与权重渐进曲线配置（任务 10.1，需求 8/9/12/13/15）===
     // 简码是否启用（启用时延迟到进度阈值后再激活，早期探索阶段简码不贡献）。
@@ -1307,7 +1310,10 @@ pub fn simulated_annealing(
         // === 周期对账：每 M 步用全量重算覆盖增量值，纠正浮点/整型漂移（需求 15.4/15.5）===
         // 仅在简码启用时进行：简码关闭时全码增量本身（重码为整型精确）无需周期全量重建，
         // 以保持与基线一致的全码搜索行为与性能（不引入每 M 步的评估器重建开销）。
-        if simple_enabled && step > 0 && step % reconcile_m == 0 {
+        // 仅在简码已激活后才周期对账（需求 29 性能修复）：激活前 w_eff=0、简码不参与目标，
+        // 且 SA 起始用 new_full_only 未构建简码，故激活前无需对账（与简码关闭路径一致，
+        // 全码增量为整型精确不需周期全量重建）。激活时已据当前分配全量构建简码。
+        if simple_activated && step > 0 && step % reconcile_m == 0 {
             evaluator.reconcile(ctx, &assignment);
             evaluator.score_dirty = true;
         }
@@ -1329,9 +1335,10 @@ pub fn simulated_annealing(
     }
 
     // === 结束强制全量校验：使最终上报指标为精确值（需求 15.6）===
-    // 仅简码启用时进行（与周期对账一致）；简码关闭时跳过，保持与基线一致、不引入额外重建。
-    // 最终上报指标统一由下方对 best_assignment 重建的 best_eval 给出，与此处无关。
-    if simple_enabled {
+    // 仅简码已激活时进行（与周期对账一致，需求 29）；简码关闭/从未激活时跳过，
+    // 保持与基线一致、不引入额外重建。最终上报指标统一由下方对 best_assignment 重建的
+    // best_eval 给出，与此处无关。
+    if simple_activated {
         evaluator.reconcile(ctx, &assignment);
     }
     // 以全量重建结果一致地重算最佳解的分量与指标（需求 11/15.6）。

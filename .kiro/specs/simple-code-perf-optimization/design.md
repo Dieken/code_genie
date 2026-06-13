@@ -781,3 +781,15 @@ struct SimpleEvaluator {
 - 回滚：`g_dist_deviation` + `g_dist_contrib` 纳入 `SimpleSnapshot`，`snapshot_aggregates` 整存、`rollback`（`has_selection` 时）整体写回。
 
 **正确性**：prop1（增量=全量逐字段，含 `dist_deviation`）、prop13（reconcile=全量）守住；并新增 `test_incremental_dist_matches_full_rebuild`：**非零** `key_dist_config` 下跑 move 序列，逐次断言增量 `g_dist_deviation` 等于对同一分配全量重建的值（覆盖快速路径与全量回退）。简码关闭/未激活时不触达。
+
+## 激活前零简码维护与对账门控（需求 32）
+
+**问题**：SA 起始 `Evaluator::new` 急切构建 `SimpleEvaluator`；周期/结束对账门控为 `simple_enabled`。激活前 `w_eff=0`、简码不入目标，但对账每 M 步仍全量重建简码（且与报告间隔接近时刷新出激活前的非零简码指标），属浪费。
+
+**设计**：
+- SA 起始改用 `Evaluator::new_full_only`（`simple_eval=None`）：激活前不构建/不维护简码。
+- 周期对账：触发条件由 `simple_enabled` 改为 `simple_activated`；激活前跳过（与简码关闭路径一致，全码增量整型精确不需重建）。结束强制对账同样改为 `simple_activated`。
+- 激活：`activate_simple` 在 `simple_eval==None` 时据当前分配全量构建一次（需求 8.6），使激活时刻简码状态与当前分配同步——替代原先"靠激活前周期对账兜底"的隐式做法。
+- 激活前 `get_simple_metrics` 返回零值（`simple_eval==None`），日志简码行显示 0。
+- 最终上报不受影响：结束时对 `best_assignment` 以 `Evaluator::new`（急切建简码）重算最终指标，无论是否曾激活均为真实值。
+- 简码关闭路径不受影响（本就 `None` 且不对账）。

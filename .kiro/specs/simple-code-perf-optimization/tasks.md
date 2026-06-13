@@ -400,6 +400,15 @@
     - 新增 `test_incremental_dist_matches_full_rebuild`：非零 `key_dist_config` 下 move 序列逐次断言增量 dist == 全量重建；prop1/prop13 保持全绿；简码关闭零影响
     - _Requirements: 30.7, 30.8_
 
+- [x] 27. 激活前零简码维护与对账门控（需求 32）
+  - [x] 27.1 SA 起始用 new_full_only
+    - `simulated_annealing` 工作评估器改用 `Evaluator::new_full_only`，激活前 `simple_eval=None`、不构建/不维护简码
+    - _Requirements: 32.1, 32.4_
+  - [x] 27.2 对账门控改为 simple_activated
+    - 周期对账与结束强制对账触发条件由 `simple_enabled` 改为 `simple_activated`；激活前跳过
+    - 依赖 `activate_simple` 在 `simple_eval=None` 时据当前分配全量构建（需求 8.6）同步激活时刻状态
+    - _Requirements: 32.2, 32.3, 32.5, 32.6_
+
 ## Task Dependency Graph
 
 ```json
