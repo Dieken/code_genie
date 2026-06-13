@@ -1277,6 +1277,9 @@ pub fn simulated_annealing(
             let best_full_comp = weight_full * best_full_score;
             let best_simple_comp = w_eff * best_simple_score;
             let total = evaluator.get_score(ctx);
+            // 最优总分按当前 w_eff 重算（= 全码分量 + 简码分量），与下方简码行的最优简码分量自洽；
+            // 不直接用存储的 best_score（其由上次采纳时的 w_eff 计算，渐进期会与当前分量口径不一致）。
+            let best_total_disp = best_full_comp + best_simple_comp;
             // 全码行（始终输出）：保留全码分量，去掉简码分量（简码移至下方独立行，需求 16）。
             // pct/speed/基温 取定宽，使下方简码行的指标块对齐。
             println!(
@@ -1288,7 +1291,7 @@ pub fn simulated_annealing(
                 m.equiv_cv, scores.equiv_cv,
                 m.dist_deviation, scores.distribution,
                 total, cur_full_comp,
-                best_score, best_full_comp
+                best_total_disp, best_full_comp
             );
             // 简码行（仅简码启用时）：单独展示简码指标与简码分量；前导空格使「覆盖=…」对齐
             // 到上方全码行「重码=…」的列起点（前缀按定宽计算，CJK 按 2 列宽）。
