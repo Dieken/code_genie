@@ -1273,17 +1273,35 @@ pub fn simulated_annealing(
             let cur_simple_comp = w_eff * evaluator.simple_score_component(ctx);
             let best_full_comp = weight_full * best_full_score;
             let best_simple_comp = w_eff * best_simple_score;
+            let total = evaluator.get_score(ctx);
+            // 全码行（始终输出）：保留全码分量，去掉简码分量（简码移至下方独立行，需求 16）。
+            // pct/speed/基温 取定宽，使下方简码行的指标块对齐。
             println!(
-                "   [T0] 进度: {}% | {:.1} 万步/分钟 | 基温: {:.6} | 重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) CV={:.4}({:.4}) 分布={:.4}({:.4}) | 当前: {:.4} (全码:{:.4} 简码:{:.4}) 🏆最优: {:.4} (全码:{:.4} 简码:{:.4})",
+                "   [T0] 进度: {:>3}% | {:>5.1} 万步/分钟 | 基温: {:.6} | 重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) CV={:.4}({:.4}) 分布={:.4}({:.4}) | 当前: {:.4} (全码:{:.4}) 🏆最优: {:.4} (全码:{:.4})",
                 pct, speed * 60.0 / 10000.0, base_temp,
                 m.collision_count, scores.collision_count,
                 m.collision_rate * 100.0, scores.collision_rate,
                 m.equiv_mean, scores.equivalence,
                 m.equiv_cv, scores.equiv_cv,
                 m.dist_deviation, scores.distribution,
-                evaluator.get_score(ctx), cur_full_comp, cur_simple_comp,
-                best_score, best_full_comp, best_simple_comp
+                total, cur_full_comp,
+                best_score, best_full_comp
             );
+            // 简码行（仅简码启用时）：单独展示简码指标与简码分量；前导空格使「覆盖=…」对齐
+            // 到上方全码行「重码=…」的列起点（前缀按定宽计算，CJK 按 2 列宽）。
+            if simple_enabled {
+                let sm = evaluator.get_simple_metrics(ctx);
+                let ss = evaluator.get_simple_metric_scores(ctx);
+                println!(
+                    "   [T0] 简码:                                         重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) 覆盖={:.2}%({:.4}) 分布={:.4}({:.4}) | 当前简码:{:.4} 🏆最优简码:{:.4}\n",
+                    sm.collision_count, ss.collision_count,
+                    sm.collision_rate * 100.0, ss.collision_rate,
+                    sm.equiv_mean, ss.equiv,
+                    sm.weighted_freq_coverage * 100.0, ss.freq,
+                    sm.dist_deviation, ss.dist,
+                    cur_simple_comp, best_simple_comp
+                );
+            }
         }
 
         // === 周期对账：每 M 步用全量重算覆盖增量值，纠正浮点/整型漂移（需求 15.4/15.5）===
