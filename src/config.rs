@@ -88,6 +88,11 @@ pub struct SimpleCodeWeights {
     /// 候选字累计字频覆盖率阈值（默认 1.0）
     #[serde(default = "default_simple_coverage_ratio")]
     pub simple_coverage_ratio: f64,
+    /// 退火期「active 候选」累计字频覆盖率阈值（默认 0.90，须 ≤ simple_coverage_ratio）。
+    /// active 候选参与每步增量评估与周期对账；其余（passive）候选仅在最终上报与输出时纳入，
+    /// 从而在保留「全集出简输出」的同时大幅降低每步简码计算量。
+    #[serde(default = "default_simple_active_coverage")]
+    pub simple_active_coverage: f64,
     /// 周期对账间隔比例，M = floor(total_steps × ratio)，M ≥ 1（默认 0.05）
     #[serde(default = "default_reconcile_interval_ratio")]
     pub reconcile_interval_ratio: f64,
@@ -104,6 +109,7 @@ fn default_simple_start_progress() -> f64 { 0.4 }
 fn default_simple_ramp_progress() -> f64 { 0.1 }
 fn default_simple_activation_reheat() -> f64 { 1.2 }
 fn default_simple_coverage_ratio() -> f64 { 1.0 }
+fn default_simple_active_coverage() -> f64 { 0.90 }
 fn default_reconcile_interval_ratio() -> f64 { 0.05 }
 fn default_simple_assign_mode() -> String { "efficiency".to_string() }
 fn default_simple_protect_top_n() -> usize { 0 }
@@ -433,6 +439,7 @@ impl Config {
             simple_weight_collision_count: self.weights.simple_code.collision_count,
             simple_weight_collision_rate: self.weights.simple_code.collision_rate,
             simple_coverage_ratio: self.weights.simple_code.simple_coverage_ratio,
+            simple_active_coverage: self.weights.simple_code.simple_active_coverage,
             simple_assign_mode: parse_simple_assign_mode(&self.weights.simple_code.simple_assign_mode),
             simple_protect_top_n: self.weights.simple_code.simple_protect_top_n,
         }
@@ -490,6 +497,23 @@ impl Config {
                 sc.simple_activation_reheat
             );
             sc.simple_activation_reheat = 1.0;
+        }
+
+        // 简码占用保护性能优化（active/passive 候选）：active 覆盖率须 ≤ 输出覆盖率，
+        // 否则钳制为 simple_coverage_ratio 并告警（active 候选应为输出候选的子集）。
+        if sc.simple_active_coverage < 0.0 {
+            eprintln!(
+                "⚠️ 警告：simple_active_coverage < 0 (当前: {:.3})，钳制为 0",
+                sc.simple_active_coverage
+            );
+            sc.simple_active_coverage = 0.0;
+        }
+        if sc.simple_active_coverage > sc.simple_coverage_ratio {
+            eprintln!(
+                "⚠️ 警告：simple_active_coverage ({:.3}) > simple_coverage_ratio ({:.3})，钳制为 {:.3}",
+                sc.simple_active_coverage, sc.simple_coverage_ratio, sc.simple_coverage_ratio
+            );
+            sc.simple_active_coverage = sc.simple_coverage_ratio;
         }
 
         // (start, ramp) == (0, 0) → 从开始即硬激活（兼容档，需求 13.5）
@@ -568,6 +592,7 @@ impl Default for Config {
                     simple_ramp_progress: default_simple_ramp_progress(),
                     simple_activation_reheat: default_simple_activation_reheat(),
                     simple_coverage_ratio: default_simple_coverage_ratio(),
+                    simple_active_coverage: default_simple_active_coverage(),
                     reconcile_interval_ratio: default_reconcile_interval_ratio(),
                     simple_assign_mode: default_simple_assign_mode(),
                     simple_protect_top_n: default_simple_protect_top_n(),
@@ -954,6 +979,7 @@ dist_max = 8.0
         assert_eq!(sc.simple_ramp_progress, 0.1);
         assert_eq!(sc.simple_activation_reheat, 1.2);
         assert_eq!(sc.simple_coverage_ratio, 1.0);
+        assert_eq!(sc.simple_active_coverage, 0.90);
         assert_eq!(sc.reconcile_interval_ratio, 0.05);
         assert_eq!(sc.simple_assign_mode, "efficiency");
         assert_eq!(sc.simple_protect_top_n, 0);
@@ -964,7 +990,7 @@ dist_max = 8.0
         // 显式提供新增项时应原样解析（不被默认值覆盖）
         let toml_with_new = minimal_config_prefix().replace(
             "collision_count = 0.0\ncollision_rate = 0.0\n",
-            "collision_count = 0.0\ncollision_rate = 0.0\nsimple_start_progress = 0.4\nsimple_ramp_progress = 0.2\nsimple_activation_reheat = 1.5\nsimple_coverage_ratio = 0.95\nreconcile_interval_ratio = 0.1\nsimple_assign_mode = \"frequency\"\nsimple_protect_top_n = 500\n",
+            "collision_count = 0.0\ncollision_rate = 0.0\nsimple_start_progress = 0.4\nsimple_ramp_progress = 0.2\nsimple_activation_reheat = 1.5\nsimple_coverage_ratio = 0.95\nsimple_active_coverage = 0.8\nreconcile_interval_ratio = 0.1\nsimple_assign_mode = \"frequency\"\nsimple_protect_top_n = 500\n",
         );
         let cfg: Config = toml::from_str(&toml_with_new).expect("解析失败");
         let sc = &cfg.weights.simple_code;
@@ -972,6 +998,7 @@ dist_max = 8.0
         assert_eq!(sc.simple_ramp_progress, 0.2);
         assert_eq!(sc.simple_activation_reheat, 1.5);
         assert_eq!(sc.simple_coverage_ratio, 0.95);
+        assert_eq!(sc.simple_active_coverage, 0.8);
         assert_eq!(sc.reconcile_interval_ratio, 0.1);
         assert_eq!(sc.simple_protect_top_n, 500);
         assert_eq!(sc.simple_assign_mode, "frequency");

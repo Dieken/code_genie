@@ -199,6 +199,11 @@ pub struct SimpleEvaluator {
     protect_count: FxHashMap<usize, u32>,
     /// 本次移动中受保护占用翻转、需重选的简码桶编码（工作缓冲，move 起始清空）。
     protect_dirty_buf: Vec<usize>,
+    /// 候选范围标志（active/passive 性能优化）：false = 退火 active 候选集
+    /// （`ctx.simple_candidate_chars`，每步增量/对账用）；true = 输出全集
+    /// （`ctx.simple_output_candidate_chars`，仅最终上报与 output 文件用）。
+    /// 仅影响 `rebuild_selection` 遍历哪个候选列表；增量路径不依赖它。
+    output_scope: bool,
     /// 缓存的简码得分
     cached_simple_score: f64,
     /// 得分是否需要重新计算
@@ -252,11 +257,14 @@ impl SimpleEvaluator {
     ///
     /// `is_first_candidate[ci]` 表示 `ci` 是否为其全码桶首选字，供 Efficiency
     /// 模式排序键中的 `sel_len`（0/1）取值（需求 4.6/5.4）。
+    ///
+    /// `output_scope`：false = 退火 active 候选集；true = 输出全集（仅最终上报/输出）。
     pub fn new(
         ctx: &OptContext,
         assignment: &[u8],
         full_code_to_chars: &[Vec<usize>],
         is_first_candidate: &[bool],
+        output_scope: bool,
     ) -> Self {
         let n_levels = ctx.simple_config.levels.len();
         let n_chars = ctx.char_infos.len();
@@ -323,6 +331,7 @@ impl SimpleEvaluator {
             g_dirty_keys: Vec::new(),
             protect_count: FxHashMap::default(),
             protect_dirty_buf: Vec::new(),
+            output_scope,
             cached_simple_score: 0.0,
             simple_score_dirty: true,
             key_buf: Vec::new(),
@@ -567,11 +576,18 @@ impl SimpleEvaluator {
         }
 
         let mut touched: Vec<usize> = Vec::new();
+        // 候选范围（active/passive）：active 用 simple_candidate_chars；输出全集用
+        // simple_output_candidate_chars（passive 也参与，仅最终上报/输出时 output_scope=true）。
+        let candidate_list: &[usize] = if self.output_scope {
+            &ctx.simple_output_candidate_chars
+        } else {
+            &ctx.simple_candidate_chars
+        };
         for li in 0..n_levels {
             // 阶段 1：候选字入桶（仅遍历候选字集合，排除已被低级别出简的字）
             touched.clear();
-            for idx in 0..ctx.simple_candidate_chars.len() {
-                let ci = ctx.simple_candidate_chars[idx];
+            for idx in 0..candidate_list.len() {
+                let ci = candidate_list[idx];
                 if self.all_assigned_flags[ci] {
                     continue;
                 }
@@ -1210,13 +1226,6 @@ impl SimpleEvaluator {
         li: usize,
         code: usize,
     ) {
-        // 仅对受影响桶内候选列表局部排序（需求 6.1/6.2/6.3）
-        {
-            let members = &mut self.levels[li].buckets[code].members;
-            members.sort_unstable_by(|&a, &b| {
-                Self::cmp_in_bucket(ctx, is_first_candidate, li, a, b)
-            });
-        }
         // 简码占用保护（需求 33）：编码撞受保护全码的桶名额=0（谁都不出简）。
         let code_num = if self.is_code_blocked(ctx, code, full_code_to_chars) {
             0
@@ -1225,6 +1234,19 @@ impl SimpleEvaluator {
                 .code_num
                 .saturating_sub(ctx.simple_fixed_occ(li, code))
         };
+        // 局部选择前 code_num（C 优化）：用部分选择 `select_nth_unstable_by` 取代整桶全排序，
+        // 复杂度 O(成员数) 而非 O(n log n)，且选中集合不变——分划后 members[0..code_num] 恰为
+        // 按 `cmp_in_bucket` 排序键最优的 code_num 个（严格全序 ⟹ 该集合唯一确定）。
+        // 仅 `0 < code_num < len` 时需分划：code_num==0（无人出简）或 code_num>=len（全员出简）
+        // 时选中集合与桶内顺序无关，跳过。
+        {
+            let members = &mut self.levels[li].buckets[code].members;
+            if code_num > 0 && code_num < members.len() {
+                members.select_nth_unstable_by(code_num - 1, |&a, &b| {
+                    Self::cmp_in_bucket(ctx, is_first_candidate, li, a, b)
+                });
+            }
+        }
         let len = self.levels[li].buckets[code].members.len();
         // 北极星计数：脏桶局部重排访问的成员数（与桶规模同阶，非候选字总集）。
         self.stage2_visits += len;
@@ -1764,7 +1786,7 @@ pub struct Evaluator {
 impl Evaluator {
     /// 创建新的评估器（急切构建简码评估器，向后兼容入口）。
     pub fn new(ctx: &OptContext, assignment: &[u8]) -> Self {
-        Self::new_impl(ctx, assignment, true)
+        Self::new_impl(ctx, assignment, true, false)
     }
 
     /// 创建「仅全码」评估器：跳过急切 `SimpleEvaluator` 构建（需求 24）。
@@ -1779,11 +1801,21 @@ impl Evaluator {
     /// 全量简码构建（warmup 每候选一次，约 50 次/阶段），是校准/Init 阶段的主要提速点。
     /// 简码整体关闭（`enable_simple_code=false`）时本入口与 `new` 完全等价（都为 None）。
     pub fn new_full_only(ctx: &OptContext, assignment: &[u8]) -> Self {
-        Self::new_impl(ctx, assignment, false)
+        Self::new_impl(ctx, assignment, false, false)
+    }
+
+    /// 创建评估器并以「输出全集（full）」范围急切构建简码评估器（active/passive 性能优化）。
+    ///
+    /// 供退火结束最终上报（对 `best_assignment` 重建以得到含 passive 的真实简码指标，点 (b)）
+    /// 与 output 文件生成使用：`simple_eval` 的出简选择覆盖 `simple_output_candidate_chars`
+    /// 全集（active ∪ passive）。退火热路径仍用 `new`（active 范围）。
+    pub fn new_output_scope(ctx: &OptContext, assignment: &[u8]) -> Self {
+        Self::new_impl(ctx, assignment, true, true)
     }
 
     /// 评估器构造实现。`build_simple` 为 false 时跳过急切 `SimpleEvaluator` 构建（需求 24）。
-    fn new_impl(ctx: &OptContext, assignment: &[u8], build_simple: bool) -> Self {
+    /// `simple_output_scope` 为 true 时简码评估器以输出全集范围构建（仅最终上报/输出）。
+    fn new_impl(ctx: &OptContext, assignment: &[u8], build_simple: bool, simple_output_scope: bool) -> Self {
         let n = ctx.char_infos.len();
         let cs = ctx.code_space;
         let mut code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
@@ -1868,7 +1900,7 @@ impl Evaluator {
         };
 
         let simple_eval = if build_simple && ctx.enable_simple_code && !ctx.simple_config.levels.is_empty() {
-            Some(SimpleEvaluator::new(ctx, assignment, &code_to_chars, &is_first_candidate))
+            Some(SimpleEvaluator::new(ctx, assignment, &code_to_chars, &is_first_candidate, simple_output_scope))
         } else {
             None
         };
@@ -2706,6 +2738,7 @@ impl Evaluator {
                 assignment,
                 &self.code_to_chars,
                 &self.is_first_candidate,
+                false, // 退火激活：active 候选范围
             ));
         }
         // 仅当确有简码评估器时才视为激活；否则（简码关闭/无级别）保持未激活、贡献为 0。
@@ -5660,7 +5693,7 @@ mod space_commit_and_length_tests {
             }
             is_first[first] = true;
         }
-        SimpleEvaluator::new(ctx, asg, &full_code_to_chars, &is_first)
+        SimpleEvaluator::new(ctx, asg, &full_code_to_chars, &is_first, false)
     }
 
     /// 该级指令步数（None 计 0）。
@@ -6514,5 +6547,105 @@ mod simple_protect_tests {
         let asg = vec![0u8; ctx.num_groups];
         let ev = Evaluator::new(&ctx, &asg);
         assert_protection_holds(&ctx, &ev, &asg, 0);
+    }
+}
+
+// =========================================================================
+// 🧪 active/passive 候选拆分测试（simple_active_coverage 性能优化）
+// =========================================================================
+// 验证：退火 active 范围的评估器只在 active 候选上出简（passive 不参与）；
+// 输出全集（output）范围的评估器把 passive 候选也纳入出简。
+#[cfg(test)]
+mod active_passive_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::types::{
+        KeyDistConfig, RootGroup, ScaleConfig, SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel,
+        SimpleCodeStep, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use std::collections::HashMap;
+
+    /// 单级（[A.a]，code_num 极大使桶内全选）、每字 2 个独立字根（全码长 2 > 简码长 1，
+    /// 避免需求 33 占用保护误阻断）的 OptContext；参数化 output / active 覆盖率。
+    fn make_ctx(freqs: &[u64], output_ratio: f64, active_ratio: f64) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(freqs.len());
+        for (i, &f) in freqs.iter().enumerate() {
+            let mut roots = Vec::with_capacity(2);
+            for j in 0..2 {
+                let r = format!("a{i}_{j}");
+                groups.push(RootGroup { roots: vec![r.clone()], allowed_keys: vec![0, 1] });
+                roots.push(r);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, f));
+        }
+        let step = |s: char| SimpleCodeStep { root_selector: s, code_selector: 'a' };
+        let levels = vec![SimpleCodeLevel {
+            level: 1,
+            code_num: 1000, // 桶内全员出简
+            rule_candidates: vec![vec![step('A')]],
+            space_commit: false,
+        }];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_assign_mode = SimpleAssignMode::Frequency;
+        weights.simple_coverage_ratio = output_ratio;
+        weights.simple_active_coverage = active_ratio;
+        OptContext::new(
+            &splits, &fixed_roots, &groups, equiv_table, key_dist,
+            ScaleConfig::default(), SimpleCodeConfig { levels }, weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    fn selected_set(ev: &Evaluator) -> Vec<usize> {
+        let se = ev.simple_eval.as_ref().expect("简码应启用");
+        let mut out = Vec::new();
+        for ci in 0..se.levels[0].selected.len() {
+            if se.levels[0].selected[ci] {
+                out.push(ci);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn active_scope_excludes_passive_output_scope_includes() {
+        // output=1.0（全 8 字），active=0.5（前缀更小）。
+        let freqs = [100u64, 90, 80, 70, 60, 50, 40, 30];
+        let ctx = make_ctx(&freqs, 1.0, 0.5);
+        assert!(
+            ctx.simple_candidate_chars.len() < ctx.simple_output_candidate_chars.len(),
+            "active 应严格小于 output"
+        );
+        let asg = vec![0u8; ctx.num_groups];
+
+        // active 范围（退火热路径口径）：只在 active 候选上出简。
+        let ev_active = Evaluator::new(&ctx, &asg);
+        let sel_active = selected_set(&ev_active);
+        for &ci in &sel_active {
+            assert!(
+                ctx.simple_is_candidate[ci],
+                "active 范围不应出简 passive 字 {ci}"
+            );
+        }
+
+        // output 范围（最终上报/输出口径）：passive 也纳入出简。
+        let ev_output = Evaluator::new_output_scope(&ctx, &asg);
+        let sel_output = selected_set(&ev_output);
+        assert!(
+            sel_output.len() > sel_active.len(),
+            "output 出简数({}) 应多于 active({})",
+            sel_output.len(), sel_active.len()
+        );
+        // 至少有一个 passive 字在 output 范围被出简。
+        assert!(
+            sel_output.iter().any(|&ci| !ctx.simple_is_candidate[ci]),
+            "output 范围应至少出简一个 passive 字"
+        );
     }
 }

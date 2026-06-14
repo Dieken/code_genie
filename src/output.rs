@@ -131,7 +131,7 @@ fn evaluator_simple_selection(ctx: &OptContext, assignment: &[u8]) -> Vec<(usize
         }
         is_first[first] = true;
     }
-    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first);
+    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first, true);
     se.selected_ordered(ctx, &is_first)
 }
 
@@ -253,7 +253,7 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         is_first_candidate[first] = true;
     }
 
-    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first_candidate);
+    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first_candidate, true);
     let sm = se.get_simple_metrics(ctx);
 
     let mut out = String::new();

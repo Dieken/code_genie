@@ -59,7 +59,8 @@ flowchart TD
 
 `OptContext::new` 在启用简码时一次性预计算下列静态数据（频率不变 → 全程不变，需求 4.8/7.4）：
 
-- `simple_candidate_chars: Vec<usize>`：按累计字频覆盖率 `simple_coverage_ratio` 选出的候选字集合（按字频降序累加直到覆盖率达标，需求 7.3）。`ratio >= 1.0` 时纳入全部汉字（含频率为 0 的字）；`ratio < 1.0` 时为覆盖率达标的最小字频前缀（零频尾部字排除）。
+- `simple_candidate_chars: Vec<usize>`：**active** 候选集——按 `simple_active_coverage`（默认 0.90）选出的最小字频前缀（退火期每步增量与周期对账只在此集合出简）。
+- `simple_output_candidate_chars: Vec<usize>`：**output（full）** 候选集——按 `simple_coverage_ratio`（默认 1.0，`>=1.0` 含零频字）选出，`active ⊆ output`；仅最终上报与 output 文件使用。
 - `simple_is_candidate: Vec<bool>`：候选字位图，按 `ci` 直接索引，供 O(1) 判定。
 - `simple_actual_coverage: f64` 与候选字数 `simple_candidate_chars.len()`：供「配置确认」日志输出（需求 7.7/16.6）。
 - `group_to_simple_affected_candidate: Vec<Vec<usize>>`：`group_to_simple_affected[group]` 与候选字集合求交并裁剪后的结构（需求 7.6）。用 `Vec` 而非 `HashSet` 以便顺序确定、遍历高效。
@@ -397,7 +398,8 @@ delta = weight_full · Δfull + w_eff · Δsimple
 | `simple_start_progress` | f64 | 0.4 | 简码计算激活进度阈值 |
 | `simple_ramp_progress` | f64 | 0.1 | 权重从 0 渐进到 W 的进度长度 |
 | `simple_activation_reheat` | f64 | 1.2 | 激活当刻升温倍率（独立于 reheat_factor；合理范围 `[1.0, temp_start/base_temp(p_start)]` 动态校验） |
-| `simple_coverage_ratio` | f64 | 1.0 | 候选字累计字频覆盖率阈值 |
+| `simple_coverage_ratio` | f64 | 1.0 | 候选字累计字频覆盖率阈值（输出全集 output 范围） |
+| `simple_active_coverage` | f64 | 0.90 | 退火期 active 候选覆盖率（须 ≤ simple_coverage_ratio）；passive 候选仅最终上报/输出纳入 |
 | `reconcile_interval_ratio` | f64 | 0.05 | 周期对账间隔比例，`M = floor(total_steps × ratio)`，`M ≥ 1` |
 | `simple_assign_mode` | String | "efficiency" | 桶内出简排序模式："frequency" 或 "efficiency" |
 
@@ -822,3 +824,33 @@ struct SimpleEvaluator {
 **正确性**：由 prop1（增量=全量逐字段）、prop13（对账=全量）守护两路径一致；新增 `simple_protect_tests`：对随机分配 + 移动序列断言「任意出简字简码不撞受保护全码」（N=0 与 N>0 参数化），及定向用例「被占用桶名额 0 并上浮」。
 
 **范围隔离**：全部逻辑封装于 `SimpleEvaluator` 与简码配置内；`enable_simple_code==false` 时 `simple_eval==None`，保护逻辑不可达，全码路径行为/逻辑/性能与基线一致（需求 33.8）。
+
+## active/passive 候选拆分（需求 34）与脏桶部分选择（需求 35）
+
+**问题**：`simple_coverage_ratio = 1.0`（全集出简，含低/零频字）下候选字从 ~1200 增到 ~11000，每步简码增量成本随候选数近似线性放大（阶段 1 受影响候选入/出桶、阶段 2 脏桶重排与 Efficiency 模式 resort 种子均同比放大），实测退火慢约 50%。新增候选几乎全是低/零频字，对字频加权的简码指标贡献≈0。
+
+**关键事实**：`simple_collision_count` 在**全码桶**上统计「未出简的字」，与「是否 active 候选」无关——未出简的字（含 passive）天然计入其全码桶重码。故 passive 排除出每步选择不影响其重码贡献。
+
+**设计（需求 34，active/passive）**：
+- `OptContext` 预计算两套候选集（同一 `sorted_by_freq`，两个前缀）：`simple_candidate_chars`（active，按 `simple_active_coverage`）与 `simple_output_candidate_chars`（output/full，按 `simple_coverage_ratio`）。`active_coverage` 钳制为 `≤ coverage_ratio` ⟹ `active ⊆ output`。两者均在固定简码剔除后定稿。
+- `SimpleEvaluator` 增 `output_scope: bool`：`rebuild_selection` 据此选择遍历 `simple_candidate_chars`（active，默认）或 `simple_output_candidate_chars`（output）。增量路径（`apply_move_incremental` 等）不依赖该标志——它只决定「哪些字进桶」。
+- 退火热路径（`Evaluator::new`、`activate_simple`、周期 `reconcile`）一律 active 范围 ⟹ passive 不进桶、不参与每步选择，但仍在全码桶里以「未出简」计入重码（需求 34.2/34.3）。
+- 最终上报（点 b）：结束时对 `best_assignment` 用新增的 `Evaluator::new_output_scope` 重建（output 范围），使上报简码指标纳入 passive、与 output 文件一致（需求 34.4）。
+- output 文件：`output.rs` 构建 `SimpleEvaluator` 时传 `output_scope = true`（需求 34.5）。
+- 正确性：active 与 output 两范围共用同一 `rebuild_selection`/增量逻辑，仅遍历列表不同；active 范围的「增量==全量」「对账==全量」由现有 prop1/prop13 守护（测试默认 `WeightConfig::default().simple_active_coverage = 1.0` ⟹ active=output=全集，覆盖原行为）；新增 `active_passive_tests` 验证「active 不出简 passive、output 出简 passive」。
+
+**设计（需求 35，部分选择）**：`reselect_bucket` 选取桶内前 `code_num` 个出简时，先算 `code_num`（含需求 33 占用保护归零与固定占用扣减），再仅在 `0 < code_num < 成员数` 时用 `select_nth_unstable_by(code_num-1, cmp_in_bucket)` 做 O(成员数) 分划（取代 O(n log n) 全排序）；`code_num==0` 或 `≥成员数` 时跳过。因 `cmp_in_bucket` 为严格全序，「最优 code_num 个」集合唯一确定，分划后 `members[0..code_num]` 即该集合，选中集合逐元素不变（prop1 守护）。
+
+**范围隔离**：以上全部封装在 `SimpleEvaluator`/`OptContext` 内；`enable_simple_code == false` 时 `simple_eval == None`，不可达，全码路径零影响（需求 34.7）。
+
+### Property 21: active/passive 候选拆分语义
+
+*对任意* 字频分布与 `simple_active_coverage ≤ simple_coverage_ratio`：`simple_candidate_chars`(active) ⊆ `simple_output_candidate_chars`(output)；退火 active 范围评估器的出简集合仅含 active 候选（passive 永不在退火期出简），而 output 范围评估器可出简 passive 候选；两范围各自满足「增量/对账 == 全量重建」。
+
+**Validates: Requirements 34.1, 34.2, 34.3, 34.6**
+
+### Property 22: 脏桶部分选择与全排序等价
+
+*对任意* 简码桶与 `code_num`，`reselect_bucket` 用部分选择得到的出简集合与「整桶按 `cmp_in_bucket` 排序后取前 `code_num`」逐元素相同。
+
+**Validates: Requirements 35.1, 35.2, 35.3**

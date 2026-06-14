@@ -431,6 +431,26 @@
     - 更新受影响测试：prop4 oracle 与 prop_b1 零访问前提纳入占用保护语义
     - _Requirements: 33.6, 33.8, 33.9_
 
+- [x] 29. active/passive 候选拆分与脏桶部分选择（需求 34/35）
+  - [x] 29.1 配置与上下文双候选集
+    - `config.rs`/`types.rs` 新增 `simple_active_coverage`（serde default 0.90；`validate_simple_activation` 钳制 `≤ simple_coverage_ratio` 并告警）；映射透传到 `WeightConfig`
+    - `context.rs` 由同一 `sorted_by_freq` 算两前缀：`simple_candidate_chars`(active，按 active_coverage) 与新增 `simple_output_candidate_chars`(output，按 coverage_ratio)，均剔除固定字；`active ⊆ output`
+    - _Requirements: 34.1_
+  - [x] 29.2 SimpleEvaluator 候选范围标志
+    - `SimpleEvaluator` 增 `output_scope: bool`，`rebuild_selection` 据此遍历 active 或 output 候选列表；`SimpleEvaluator::new` 增 `output_scope` 参数
+    - 新增 `Evaluator::new_output_scope`（output 范围）；退火热路径/激活/对账走 active，最终上报与 output 走 output
+    - _Requirements: 34.2, 34.3_
+  - [x] 29.3 最终上报与输出走 output 范围
+    - `annealing.rs` 结束对 `best_assignment` 用 `new_output_scope` 重建（点 b）；`output.rs` 构建 `SimpleEvaluator` 传 `output_scope=true`；配置确认日志输出 active 与 output 候选数
+    - _Requirements: 34.4, 34.5_
+  - [x] 29.4 脏桶部分选择（需求 35）
+    - `reselect_bucket` 先算 `code_num`，仅 `0<code_num<成员数` 时 `select_nth_unstable_by` 分划取代全排序；选中集合不变
+    - _Requirements: 35.1, 35.2, 35.3_
+  - [x] 29.5 配置文件与测试
+    - `config.toml.example`/`moling/config.toml` 加 `simple_active_coverage = 0.90` 及注释；`config_files_smoke` 加该项（moling 只校验存在+注释）
+    - 新增 `active_passive_tests`（active 不出简 passive、output 出简 passive）、context 的子集/钳制单测；prop1/prop13 保持全绿（测试默认 active=全集）
+    - _Requirements: 34.6, 34.7, 35.3_
+
 ## Task Dependency Graph
 
 ```json
@@ -474,7 +494,10 @@
     { "id": 35, "tasks": ["28.1"] },
     { "id": 36, "tasks": ["28.2", "28.3"] },
     { "id": 37, "tasks": ["28.4"] },
-    { "id": 38, "tasks": ["28.5"] }
+    { "id": 38, "tasks": ["28.5"] },
+    { "id": 39, "tasks": ["29.1"] },
+    { "id": 40, "tasks": ["29.2", "29.4"] },
+    { "id": 41, "tasks": ["29.3", "29.5"] }
   ]
 }
 ```

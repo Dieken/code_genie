@@ -1,7 +1,7 @@
 //! 配置文件烟雾测试（任务 3.3）
 //!
 //! 解析 `config.toml.example` 与 `moling/config.toml` 配置文件，
-//! 断言「简码评估性能优化」新增的 7 个配置项：
+//! 断言「简码评估性能优化」新增的 8 个配置项：
 //!   1. 存在于 `[weights.simple_code]` 段；
 //!   2. 在文件原始文本中带有行内注释（`#`）；
 //!   3. 仅对 `config.toml.example`（规范示例文件）额外断言取值等于代码内置默认值
@@ -29,6 +29,7 @@ const EXPECTED_ITEMS: &[(&str, Expected)] = &[
     ("simple_ramp_progress", Expected::Float(0.1)),
     ("simple_activation_reheat", Expected::Float(1.2)),
     ("simple_coverage_ratio", Expected::Float(1.0)),
+    ("simple_active_coverage", Expected::Float(0.90)),
     ("reconcile_interval_ratio", Expected::Float(0.05)),
     ("simple_assign_mode", Expected::Str("efficiency")),
     ("simple_protect_top_n", Expected::Int(0)),
