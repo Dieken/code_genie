@@ -8,8 +8,12 @@ shopt -s failglob
 [ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
 [ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
 
-# 默认开启潇明的空格简码
+# 默认开启潇明的空格简码，并且优先空格简以跟码灵保持一致
 [ "${USE_XIAOMING_RULE:-}" = 1 ] && [ -z "${ENABLE_SPACE_SHORTCODE:-}" ] && export ENABLE_SPACE_SHORTCODE=1
+[ "${USE_XIAOMING_RULE:-}" = 1 ] && [ -z "${PREFER_SPACE_SHORTCODE:-}" ] && export PREFER_SPACE_SHORTCODE=1
+
+# 优先空格简意味着开启空格简
+[ "${PREFER_SPACE_SHORTCODE:-}" = 1 ] && export ENABLE_SPACE_SHORTCODE=1
 
 
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=typer
@@ -268,21 +272,29 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
             $v = $chars{$char};
             next if $i >= length($v->{code}) || $v->{freq} < 1;
 
-            if ($ENV{USE_XIAOMING_RULE}) {
-                if (length($v->{code}) == 3) {                  # 字根字
-                    next unless $ENV{ENABLE_SPACE_SHORTCODE};
-                    $s = substr($v->{code}, 0, 1) . "_";        # 只可能是二简 A_
-                } else {                                        # 二根及以上根字，全码长一定 >= 4
-                    if ($i == 2) {                              # 二简 AA
-                        $s = substr($v->{code}, 0, 1) . substr($v->{code}, 2, 1);
-                    } elsif ($i == 3) {                         # 三简 ABB
-                        $s = substr($v->{code}, 0, 2) . $v->{y};
-                    } else {                                    # 只出到三简
-                        next;
+            $s = "";
+
+            if ($ENV{PREFER_SPACE_SHORTCODE}) {
+                $s = substr($v->{code}, 0, $i - 1) . "_" unless $ENV{USE_XIAOMING_RULE} && $i > 2;  # 潇明只有 A_ 空格简
+            }
+
+            if (! $s || exists $short_codes{$s}) {
+                if ($ENV{USE_XIAOMING_RULE}) {
+                    if (length($v->{code}) == 3) {                  # 字根字
+                        next unless $ENV{ENABLE_SPACE_SHORTCODE};
+                        $s = substr($v->{code}, 0, 1) . "_";        # 只可能是二简 A_
+                    } else {                                        # 二根及以上根字，全码长一定 >= 4
+                        if ($i == 2) {                              # 二简 AA
+                            $s = substr($v->{code}, 0, 1) . substr($v->{code}, 2, 1);
+                        } elsif ($i == 3) {                         # 三简 ABB
+                            $s = substr($v->{code}, 0, 2) . $v->{y};
+                        } else {                                    # 只出到三简
+                            next;
+                        }
                     }
+                } else {
+                    $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
                 }
-            } else {
-                $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
             }
 
             if ($ENV{ENABLE_SHORTCODE_MAPPING}) {   # 默认不开启，会损害简码效率

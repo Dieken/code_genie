@@ -85,7 +85,7 @@ pub struct SimpleCodeWeights {
     /// 激活当刻升温倍率（默认 1.2，独立于 reheat_factor）
     #[serde(default = "default_simple_activation_reheat")]
     pub simple_activation_reheat: f64,
-    /// 候选字累计字频覆盖率阈值（默认 0.90）
+    /// 候选字累计字频覆盖率阈值（默认 1.0）
     #[serde(default = "default_simple_coverage_ratio")]
     pub simple_coverage_ratio: f64,
     /// 周期对账间隔比例，M = floor(total_steps × ratio)，M ≥ 1（默认 0.05）
@@ -103,7 +103,7 @@ pub struct SimpleCodeWeights {
 fn default_simple_start_progress() -> f64 { 0.4 }
 fn default_simple_ramp_progress() -> f64 { 0.1 }
 fn default_simple_activation_reheat() -> f64 { 1.2 }
-fn default_simple_coverage_ratio() -> f64 { 0.90 }
+fn default_simple_coverage_ratio() -> f64 { 1.0 }
 fn default_reconcile_interval_ratio() -> f64 { 0.05 }
 fn default_simple_assign_mode() -> String { "efficiency".to_string() }
 fn default_simple_protect_top_n() -> usize { 0 }
@@ -953,7 +953,7 @@ dist_max = 8.0
         assert_eq!(sc.simple_start_progress, 0.4);
         assert_eq!(sc.simple_ramp_progress, 0.1);
         assert_eq!(sc.simple_activation_reheat, 1.2);
-        assert_eq!(sc.simple_coverage_ratio, 0.90);
+        assert_eq!(sc.simple_coverage_ratio, 1.0);
         assert_eq!(sc.reconcile_interval_ratio, 0.05);
         assert_eq!(sc.simple_assign_mode, "efficiency");
         assert_eq!(sc.simple_protect_top_n, 0);
@@ -1006,7 +1006,7 @@ dist_max = 8.0
         let wc = cfg.get_weight_config();
         assert_eq!(wc.simple_assign_mode, SimpleAssignMode::Efficiency);
         // 同时确认默认覆盖率被正确传递
-        assert_eq!(wc.simple_coverage_ratio, 0.90);
+        assert_eq!(wc.simple_coverage_ratio, 1.0);
     }
 
     #[test]

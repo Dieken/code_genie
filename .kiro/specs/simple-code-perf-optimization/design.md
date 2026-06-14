@@ -59,7 +59,7 @@ flowchart TD
 
 `OptContext::new` 在启用简码时一次性预计算下列静态数据（频率不变 → 全程不变，需求 4.8/7.4）：
 
-- `simple_candidate_chars: Vec<usize>`：按累计字频覆盖率 `simple_coverage_ratio` 选出的候选字集合（按字频降序累加直到覆盖率达标，需求 7.3）。
+- `simple_candidate_chars: Vec<usize>`：按累计字频覆盖率 `simple_coverage_ratio` 选出的候选字集合（按字频降序累加直到覆盖率达标，需求 7.3）。`ratio >= 1.0` 时纳入全部汉字（含频率为 0 的字）；`ratio < 1.0` 时为覆盖率达标的最小字频前缀（零频尾部字排除）。
 - `simple_is_candidate: Vec<bool>`：候选字位图，按 `ci` 直接索引，供 O(1) 判定。
 - `simple_actual_coverage: f64` 与候选字数 `simple_candidate_chars.len()`：供「配置确认」日志输出（需求 7.7/16.6）。
 - `group_to_simple_affected_candidate: Vec<Vec<usize>>`：`group_to_simple_affected[group]` 与候选字集合求交并裁剪后的结构（需求 7.6）。用 `Vec` 而非 `HashSet` 以便顺序确定、遍历高效。
@@ -397,7 +397,7 @@ delta = weight_full · Δfull + w_eff · Δsimple
 | `simple_start_progress` | f64 | 0.4 | 简码计算激活进度阈值 |
 | `simple_ramp_progress` | f64 | 0.1 | 权重从 0 渐进到 W 的进度长度 |
 | `simple_activation_reheat` | f64 | 1.2 | 激活当刻升温倍率（独立于 reheat_factor；合理范围 `[1.0, temp_start/base_temp(p_start)]` 动态校验） |
-| `simple_coverage_ratio` | f64 | 0.90 | 候选字累计字频覆盖率阈值 |
+| `simple_coverage_ratio` | f64 | 1.0 | 候选字累计字频覆盖率阈值 |
 | `reconcile_interval_ratio` | f64 | 0.05 | 周期对账间隔比例，`M = floor(total_steps × ratio)`，`M ≥ 1` |
 | `simple_assign_mode` | String | "efficiency" | 桶内出简排序模式："frequency" 或 "efficiency" |
 
@@ -542,7 +542,7 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 
 ### Property 6: 候选字集合为覆盖率达标的最小频率前缀且静态
 
-*对任意* 字频分布与覆盖率阈值 `ratio ∈ [0,1]`，候选字集合应等于「按字频降序累加、使累计覆盖率首次达到或超过 `ratio` 的最小前缀」；即其累计覆盖率 ≥ `ratio`，且去掉其中频率最低的一个字后累计覆盖率 < `ratio`（最小性）。该集合在任意移动序列后保持不变。
+*对任意* 字频分布与覆盖率阈值 `ratio ∈ [0,1]`：当 `ratio < 1.0` 时候选字集合应等于「按字频降序累加、使累计覆盖率首次达到或超过 `ratio` 的最小前缀」（累计覆盖率 ≥ `ratio`，且去掉其中频率最低的一个字后覆盖率 < `ratio`，即最小性，零频尾部字排除）；当 `ratio == 1.0` 时候选字集合应纳入全部汉字（含频率为 0 的字）。该集合在任意移动序列后保持不变。
 
 **Validates: Requirements 7.3, 7.4, 4.8**
 

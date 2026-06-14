@@ -109,7 +109,7 @@ impl Default for WeightConfig {
             simple_weight_dist: 0.05,
             simple_weight_collision_count: 0.05,
             simple_weight_collision_rate: 0.25,
-            simple_coverage_ratio: 0.90,
+            simple_coverage_ratio: 1.0,
             simple_assign_mode: SimpleAssignMode::Efficiency,
             simple_protect_top_n: 0,
         }
