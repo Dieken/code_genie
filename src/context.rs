@@ -310,7 +310,9 @@ impl OptContext {
             let mut cumulative = 0u64;
             if total_frequency > 0 {
                 for &ci in &sorted_by_freq {
-                    if (cumulative as f64) / (total_frequency as f64) >= ratio {
+                    // ratio >= 1.0：纳入全部汉字（含频率为 0 的字，使「所有字均为候选」）；
+                    // ratio < 1.0：取累计覆盖率首次达标的最小前缀（频率为 0 的尾部字被排除）。
+                    if ratio < 1.0 && (cumulative as f64) / (total_frequency as f64) >= ratio {
                         break;
                     }
                     simple_candidate_chars.push(ci);
@@ -852,6 +854,41 @@ mod candidate_set_tests {
         )
     }
 
+    /// ratio=1.0 时频率为 0 的字也应纳入候选集（「所有字均为候选」）。
+    #[test]
+    fn coverage_ratio_one_includes_zero_freq_chars() {
+        // 含两个零频字（索引 1、3）；ratio=1.0 应纳入全部 5 字。
+        let freqs = [100u64, 0, 50, 0, 10];
+        let ctx = make_simple_ctx(&freqs, 1.0);
+        assert_eq!(
+            ctx.simple_candidate_chars.len(),
+            freqs.len(),
+            "ratio=1.0 时候选集应纳入全部汉字（含零频字）"
+        );
+        for ci in 0..freqs.len() {
+            assert!(
+                ctx.simple_is_candidate[ci],
+                "ratio=1.0 时字 {ci}（freq={}）应为候选",
+                freqs[ci]
+            );
+        }
+        assert!((ctx.simple_actual_coverage - 1.0).abs() < 1e-12);
+    }
+
+    /// ratio<1.0 时频率为 0 的尾部字仍被排除（最小前缀语义不变）。
+    #[test]
+    fn coverage_ratio_below_one_excludes_zero_freq_chars() {
+        let freqs = [100u64, 0, 50, 0, 10];
+        // 0.95 < 1.0：取覆盖率达标的最小前缀，零频字不纳入。
+        let ctx = make_simple_ctx(&freqs, 0.95);
+        for &ci in &[1usize, 3] {
+            assert!(
+                !ctx.simple_is_candidate[ci],
+                "ratio<1.0 时零频字 {ci} 不应为候选"
+            );
+        }
+    }
+
     /// 测试预言：按字频降序（并列 ci 升序）排序得到的下标序列。
     fn freq_desc_order(freqs: &[u64]) -> Vec<usize> {
         let mut order: Vec<usize> = (0..freqs.len()).collect();
@@ -864,9 +901,11 @@ mod candidate_set_tests {
 
         // Feature: simple-code-perf-optimization, Property 6: 候选字集合为覆盖率达标的最小频率前缀且静态
         //
-        // 对任意字频分布与覆盖率阈值 ratio ∈ [0,1]，候选字集合应等于「按字频降序累加、
-        // 使累计覆盖率首次达到或超过 ratio 的最小前缀」；即其累计覆盖率 ≥ ratio，
-        // 且去掉其中频率最低的一个字后累计覆盖率 < ratio（最小性）。该集合在任意移动序列后保持不变。
+        // 对任意字频分布与覆盖率阈值 ratio ∈ [0,1]：
+        //   - ratio < 1.0：候选字集合应等于「按字频降序累加、使累计覆盖率首次达到或超过 ratio
+        //     的最小前缀」；即累计覆盖率 ≥ ratio，且去掉其中频率最低的一个字后覆盖率 < ratio（最小性）。
+        //   - ratio == 1.0：候选字集合应纳入全部汉字（含频率为 0 的字）。
+        // 该集合在任意移动序列后保持不变。
         #[test]
         fn prop6_candidate_set_minimal_frequency_prefix_and_static(
             freqs in prop::collection::vec(0u64..=200, 1..=8),
@@ -890,6 +929,13 @@ mod candidate_set_tests {
                 // 总频率为 0 时无候选字，覆盖率为 0
                 prop_assert_eq!(k, 0);
                 prop_assert_eq!(ctx.simple_actual_coverage, 0.0);
+            } else if ratio >= 1.0 {
+                // ratio == 1.0：纳入全部汉字（含零频字），覆盖率为 1.0
+                prop_assert_eq!(
+                    k, freqs.len(),
+                    "ratio=1.0 时候选字应纳入全部汉字（含零频字）"
+                );
+                prop_assert_eq!(ctx.simple_actual_coverage, 1.0);
             } else {
                 // (B) 覆盖率达标：候选集累计覆盖率 ≥ ratio
                 let sum_c: u64 = candidates.iter().map(|&ci| freqs[ci]).sum();

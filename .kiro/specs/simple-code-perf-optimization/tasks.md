@@ -37,7 +37,7 @@
 
 - [x] 2. 新增配置项与校验（`src/config.rs`）
   - [x] 2.1 新增 6 个配置项、默认值、枚举与校验
-    - 在 `SimpleCodeWeights` 新增带 `#[serde(default = ...)]` 的字段：`simple_start_progress`(0.6)、`simple_ramp_progress`(0.1)、`simple_activation_reheat`(1.0)、`simple_coverage_ratio`(0.90)、`reconcile_interval_ratio`(0.05)、`simple_assign_mode`("efficiency")
+    - 在 `SimpleCodeWeights` 新增带 `#[serde(default = ...)]` 的字段：`simple_start_progress`(0.6)、`simple_ramp_progress`(0.1)、`simple_activation_reheat`(1.0)、`simple_coverage_ratio`(1.0)、`reconcile_interval_ratio`(0.05)、`simple_assign_mode`("efficiency")
     - 定义 `SimpleAssignMode { Frequency, Efficiency }` 枚举与字符串解析（非法值回落 `Efficiency` 并告警）
     - 实现 `validate_simple_activation()`：钳制 `simple_start_progress` 到 [0,1)、负值钳 0、`start+ramp>1` 钳定 `ramp`、`(start,ramp)=(0,0)` 置 `hard_activate`，越界时输出告警
     - 将新值经 `WeightConfig`/上下文构造路径透传给 `OptContext`

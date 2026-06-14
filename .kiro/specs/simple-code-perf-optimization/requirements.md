@@ -119,12 +119,13 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 #### 验收标准
 
 1. THE 优化器 SHALL 在 `weights.simple_code` 下提供配置项 `simple_coverage_ratio`，用累计字频覆盖率来选出可出简的候选字集合。
-2. WHEN 配置文件缺失 `simple_coverage_ratio`，THE 优化器 SHALL 采用默认值 `0.90`。
+2. WHEN 配置文件缺失 `simple_coverage_ratio`，THE 优化器 SHALL 采用默认值 `1.0`。
 3. WHEN 优化器启动，THE 优化器 SHALL 按字频降序累加，直至累计覆盖率达到配置阈值，一次性确定候选字集合。
-4. THE 候选字集合 SHALL 在整个优化过程中保持不变。
-5. WHEN 简码评估器构建某简码级别，THE 简码评估器 SHALL 仅遍历候选字集合而不遍历全部汉字。
-6. WHEN 优化器启动，THE 优化器 SHALL 预先计算 `group_to_simple_affected[group]` 与候选字集合的交集，使仅影响非候选字的移动不触发简码重算。
-7. WHEN 优化器进入「配置确认」日志阶段，THE 优化器 SHALL 输出实际达到的覆盖率与对应的候选字数。
+4. WHERE `simple_coverage_ratio >= 1.0`，THE 优化器 SHALL 将全部汉字（含频率为 0 的字）纳入候选字集合；WHERE `simple_coverage_ratio < 1.0`，THE 优化器 SHALL 取覆盖率达标的最小字频前缀（频率为 0 的尾部字被排除）。
+5. THE 候选字集合 SHALL 在整个优化过程中保持不变。
+6. WHEN 简码评估器构建某简码级别，THE 简码评估器 SHALL 仅遍历候选字集合而不遍历全部汉字。
+7. WHEN 优化器启动，THE 优化器 SHALL 预先计算 `group_to_simple_affected[group]` 与候选字集合的交集，使仅影响非候选字的移动不触发简码重算。
+8. WHEN 优化器进入「配置确认」日志阶段，THE 优化器 SHALL 输出实际达到的覆盖率与对应的候选字数。
 
 ### 需求 8：退火后期激活简码计算
 
@@ -237,7 +238,7 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 
 #### 验收标准
 
-1. THE 优化器 SHALL 新增配置项 `simple_start_progress`（默认 `0.6`）、`simple_ramp_progress`（默认 `0.1`）、`simple_activation_reheat`（默认 `1.0`）、`simple_coverage_ratio`（默认 `0.90`）、`reconcile_interval_ratio`（默认 `0.05`）以及简码分配模式选择项 `simple_assign_mode`（默认 `"efficiency"`）。
+1. THE 优化器 SHALL 新增配置项 `simple_start_progress`（默认 `0.6`）、`simple_ramp_progress`（默认 `0.1`）、`simple_activation_reheat`（默认 `1.0`）、`simple_coverage_ratio`（默认 `1.0`）、`reconcile_interval_ratio`（默认 `0.05`）以及简码分配模式选择项 `simple_assign_mode`（默认 `"efficiency"`）。
 2. WHEN 配置文件缺失上述新增配置项，THE 优化器 SHALL 为每个缺失项采用预设的默认值。
 3. THE 优化器 SHALL 以增量化的新简码实现直接替换旧的 `full_rebuild` 热路径实现。
 4. WHERE `weights.simple_code.enabled` 为假，THE 优化器 SHALL 跳过简码评估，使行为与未启用简码时一致。
@@ -252,7 +253,8 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 1. THE 优化器 SHALL 将新增的全部配置项（`simple_start_progress`、`simple_ramp_progress`、`simple_activation_reheat`、`simple_coverage_ratio`、`reconcile_interval_ratio`、`simple_assign_mode`）同步写入 `config.toml.example` 文件。
 2. THE 优化器 SHALL 将新增的全部配置项同步写入 `moling/config.toml` 文件。
 3. WHEN 新增配置项写入上述配置文件，THE 优化器 SHALL 为每个配置项附带注释说明与对应默认值。
-4. THE 优化器 SHALL 使两个配置文件中新增配置项的默认值与代码内置默认值一致。
+4. THE 优化器 SHALL 使规范示例文件 `config.toml.example` 中新增配置项的取值与代码内置默认值一致。
+5. WHERE `moling/config.toml` 为使用者实验配置文件，THE 其新增配置项的取值 SHALL 允许被使用者自由修改、不必等于代码内置默认值；故相关校验（烟雾测试）对 `moling/config.toml` SHALL 仅校验配置项存在且带注释，SHALL NOT 断言其取值等于代码默认值。
 
 ### 需求 19：最小改动约束
 
