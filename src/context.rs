@@ -67,10 +67,14 @@ pub struct OptContext {
     // ====================================================================
     // 简码评估性能优化：静态预计算字段（仅在启用简码时填充，频率不变 → 全程不变）
     // ====================================================================
-    /// 候选字集合：按字频降序累加直到累计覆盖率达到 `simple_coverage_ratio` 的最小前缀
+    /// 候选字集合：按字频降序累加直到累计覆盖率达到 `simple_active_coverage` 的最小前缀（active）。
+    /// 退火期每步增量与周期对账只在此集合上进行。
     pub simple_candidate_chars: Vec<usize>,
-    /// 候选字位图，按 ci 直接索引，供 O(1) 判定
+    /// 候选字位图，按 ci 直接索引，供 O(1) 判定（active）
     pub simple_is_candidate: Vec<bool>,
+    /// 输出候选字集合（full）：按 `simple_coverage_ratio` 选出，active ⊆ output。
+    /// 仅用于最终上报（结束时对 best 解的全量重建）与 output 文件，不参与每步增量。
+    pub simple_output_candidate_chars: Vec<usize>,
     /// 简码占用保护阈值 N（需求 33）：0 = 保护全部汉字全码；N>0 = 仅保护全字频前 N 名。
     pub simple_protect_top_n: usize,
     /// 全字频前 N 名汉字位图（按 ci 索引，需求 33）：仅 `simple_protect_top_n > 0` 时填充，
@@ -276,6 +280,7 @@ impl OptContext {
 
         let mut simple_candidate_chars: Vec<usize> = Vec::new();
         let mut simple_is_candidate: Vec<bool> = vec![false; n_chars];
+        let mut simple_output_candidate_chars: Vec<usize> = Vec::new();
         // 简码占用保护（需求 33）：N 从配置读取；is_topn 仅在 N>0 时填充。
         let simple_protect_top_n = weights.simple_protect_top_n;
         let mut simple_is_topn: Vec<bool> = Vec::new();
@@ -296,10 +301,15 @@ impl OptContext {
         let mut simple_fixed_codes_vec: Vec<FixedSimpleCode> = Vec::new();
 
         if enable_simple_code {
-            // 候选字集合：按字频降序累加（并列按 ci 升序）直到覆盖率首次达标的最小前缀。
+            // 候选字集合：按字频降序累加（并列按 ci 升序）。
+            // 区分两档覆盖率（active/passive 性能优化）：
+            //   - active（simple_active_coverage，默认 0.90）：退火期每步增量与周期对账的候选集；
+            //   - output（simple_coverage_ratio，默认 1.0）：最终上报与 output 文件的候选集（全集）。
+            // active ⊆ output（active 覆盖率钳制为 ≤ output 覆盖率）。
             // 注意（需求 21.3）：候选字按全集汉字选取，不受固定简码影响；固定简码字的剔除
             // 在选取完成之后进行（需求 21.4）。
-            let ratio = weights.simple_coverage_ratio;
+            let ratio_output = weights.simple_coverage_ratio;
+            let ratio_active = weights.simple_active_coverage.clamp(0.0, ratio_output);
             let mut sorted_by_freq: Vec<usize> = (0..n_chars).collect();
             sorted_by_freq.sort_by(|&a, &b| {
                 char_infos[b]
@@ -307,19 +317,34 @@ impl OptContext {
                     .cmp(&char_infos[a].frequency)
                     .then(a.cmp(&b))
             });
-            let mut cumulative = 0u64;
-            if total_frequency > 0 {
+            // 按给定覆盖率阈值取「累计覆盖率首次达标的最小前缀」；ratio >= 1.0 时纳入全部汉字
+            // （含频率为 0 的字，详见需求 7）。
+            let select_prefix = |ratio: f64| -> Vec<usize> {
+                let mut out: Vec<usize> = Vec::new();
+                if total_frequency == 0 {
+                    return out;
+                }
+                let mut cum = 0u64;
                 for &ci in &sorted_by_freq {
-                    // ratio >= 1.0：纳入全部汉字（含频率为 0 的字，使「所有字均为候选」）；
-                    // ratio < 1.0：取累计覆盖率首次达标的最小前缀（频率为 0 的尾部字被排除）。
-                    if ratio < 1.0 && (cumulative as f64) / (total_frequency as f64) >= ratio {
+                    if ratio < 1.0 && (cum as f64) / (total_frequency as f64) >= ratio {
                         break;
                     }
-                    simple_candidate_chars.push(ci);
-                    simple_is_candidate[ci] = true;
-                    cumulative += char_infos[ci].frequency;
+                    out.push(ci);
+                    cum += char_infos[ci].frequency;
                 }
-                simple_actual_coverage = cumulative as f64 / total_frequency as f64;
+                out
+            };
+            if total_frequency > 0 {
+                // output（full）候选集
+                simple_output_candidate_chars = select_prefix(ratio_output);
+                // active 候选集 + 位图 + 实际覆盖率
+                simple_candidate_chars = select_prefix(ratio_active);
+                let mut cum_active = 0u64;
+                for &ci in &simple_candidate_chars {
+                    simple_is_candidate[ci] = true;
+                    cum_active += char_infos[ci].frequency;
+                }
+                simple_actual_coverage = cum_active as f64 / total_frequency as f64;
             }
 
             // 简码占用保护（需求 33）：N>0 时标记全字频前 N 名汉字（sorted_by_freq 已按字频降序、
@@ -549,6 +574,7 @@ impl OptContext {
 
                 // 候选字解耦（需求 21.4）：从候选集合与位图剔除固定简码字。
                 simple_candidate_chars.retain(|&ci| !simple_fixed_assigned[ci]);
+                simple_output_candidate_chars.retain(|&ci| !simple_fixed_assigned[ci]);
                 for ci in 0..n_chars {
                     if simple_fixed_assigned[ci] {
                         simple_is_candidate[ci] = false;
@@ -595,6 +621,7 @@ impl OptContext {
             targets_config,
             simple_candidate_chars,
             simple_is_candidate,
+            simple_output_candidate_chars,
             simple_protect_top_n,
             simple_is_topn,
             simple_actual_coverage,
@@ -887,6 +914,66 @@ mod candidate_set_tests {
                 "ratio<1.0 时零频字 {ci} 不应为候选"
             );
         }
+    }
+
+    /// active/passive 拆分：active 候选 ⊆ output 候选，且 active 覆盖率 < output 时严格更小。
+    #[test]
+    fn active_candidate_set_is_subset_of_output() {
+        use crate::types::{RootGroup, ScaleConfig};
+        // 8 个不同频率的单根字。
+        let freqs = [100u64, 90, 80, 70, 60, 50, 40, 30];
+        let n = freqs.len();
+        let mut groups = Vec::with_capacity(n);
+        let mut splits = Vec::with_capacity(n);
+        for (i, &f) in freqs.iter().enumerate() {
+            let root = format!("r{i}");
+            groups.push(RootGroup { roots: vec![root.clone()], allowed_keys: vec![0, 1, 2] });
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, vec![root], f));
+        }
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0; // output = 全集
+        weights.simple_active_coverage = 0.5; // active = 覆盖率 0.5 的前缀（更小）
+        let ctx = OptContext::new(
+            &splits, &fixed_roots, &groups, equiv_table, key_dist,
+            ScaleConfig::default(), SimpleCodeConfig { levels: vec![] }, weights,
+            TargetsConfig::default(),
+        );
+
+        // output = 全部 8 字（ratio=1.0）。
+        assert_eq!(ctx.simple_output_candidate_chars.len(), n, "output 应为全集");
+        // active 为严格子集（覆盖率 0.5 < 1.0）。
+        assert!(
+            ctx.simple_candidate_chars.len() < ctx.simple_output_candidate_chars.len(),
+            "active({}) 应严格小于 output({})",
+            ctx.simple_candidate_chars.len(),
+            ctx.simple_output_candidate_chars.len()
+        );
+        // active ⊆ output，且 active 位图与 active 列表一致。
+        for &ci in &ctx.simple_candidate_chars {
+            assert!(
+                ctx.simple_output_candidate_chars.contains(&ci),
+                "active 字 {ci} 应在 output 集合内"
+            );
+            assert!(ctx.simple_is_candidate[ci]);
+        }
+    }
+
+    /// active_coverage 超过 simple_coverage_ratio 时被钳制为后者（active = output）。
+    #[test]
+    fn active_coverage_clamped_to_output_ratio() {
+        let freqs = [100u64, 50, 10];
+        // 直接走 make_simple_ctx（active 默认 1.0），coverage_ratio=0.9 ⟹ active 被钳到 0.9。
+        let ctx = make_simple_ctx(&freqs, 0.9);
+        // active 与 output 在该配置下相等（active 钳到 output=0.9 的前缀）。
+        assert_eq!(
+            ctx.simple_candidate_chars, ctx.simple_output_candidate_chars,
+            "active 覆盖率被钳到 output 时两集合应相等"
+        );
     }
 
     /// 测试预言：按字频降序（并列 ci 升序）排序得到的下标序列。

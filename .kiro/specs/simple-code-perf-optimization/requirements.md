@@ -238,7 +238,7 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 
 #### 验收标准
 
-1. THE 优化器 SHALL 新增配置项 `simple_start_progress`（默认 `0.6`）、`simple_ramp_progress`（默认 `0.1`）、`simple_activation_reheat`（默认 `1.0`）、`simple_coverage_ratio`（默认 `1.0`）、`reconcile_interval_ratio`（默认 `0.05`）以及简码分配模式选择项 `simple_assign_mode`（默认 `"efficiency"`）。
+1. THE 优化器 SHALL 新增配置项 `simple_start_progress`（默认 `0.6`）、`simple_ramp_progress`（默认 `0.1`）、`simple_activation_reheat`（默认 `1.0`）、`simple_coverage_ratio`（默认 `1.0`）、`simple_active_coverage`（默认 `0.90`）、`reconcile_interval_ratio`（默认 `0.05`）以及简码分配模式选择项 `simple_assign_mode`（默认 `"efficiency"`）。
 2. WHEN 配置文件缺失上述新增配置项，THE 优化器 SHALL 为每个缺失项采用预设的默认值。
 3. THE 优化器 SHALL 以增量化的新简码实现直接替换旧的 `full_rebuild` 热路径实现。
 4. WHERE `weights.simple_code.enabled` 为假，THE 优化器 SHALL 跳过简码评估，使行为与未启用简码时一致。
@@ -250,7 +250,7 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 
 #### 验收标准
 
-1. THE 优化器 SHALL 将新增的全部配置项（`simple_start_progress`、`simple_ramp_progress`、`simple_activation_reheat`、`simple_coverage_ratio`、`reconcile_interval_ratio`、`simple_assign_mode`）同步写入 `config.toml.example` 文件。
+1. THE 优化器 SHALL 将新增的全部配置项（`simple_start_progress`、`simple_ramp_progress`、`simple_activation_reheat`、`simple_coverage_ratio`、`simple_active_coverage`、`reconcile_interval_ratio`、`simple_assign_mode`）同步写入 `config.toml.example` 文件。
 2. THE 优化器 SHALL 将新增的全部配置项同步写入 `moling/config.toml` 文件。
 3. WHEN 新增配置项写入上述配置文件，THE 优化器 SHALL 为每个配置项附带注释说明与对应默认值。
 4. THE 优化器 SHALL 使规范示例文件 `config.toml.example` 中新增配置项的取值与代码内置默认值一致。
@@ -493,3 +493,31 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 7. THE 全量重建 SHALL 在出简选择之前建立占用保护判定所需状态（全码编码基线与 `protect_count`），使初始构建即正确应用保护（不得出现「构建路径漏判保护」）。
 8. WHERE 简码整体关闭或未激活（`simple_eval == None`），THE 本约束 SHALL 无任何效果，全码路径行为、逻辑、性能与基线一致（所有保护逻辑封装于 `SimpleEvaluator` 内）。
 9. THE 配置文件 `config.toml.example` 与 `moling/config.toml` SHALL 包含 `simple_protect_top_n` 项及说明其语义的行内注释，默认值与代码内置默认（0）一致。
+
+### 需求 34：active/passive 候选拆分（高覆盖率下的退火提速）
+
+**用户故事：** 作为优化器使用者，我希望 `simple_coverage_ratio = 1.0`（全集出简，含低/零频字）时退火仍然快。我发现候选字从 ~1200（覆盖率 0.9）增到 ~11000（覆盖率 1.0）后，每步简码增量成本随候选数近似线性放大，速度下降约 50%。由于新增的多为低/零频字、对字频加权的简码指标贡献≈0，我希望它们不参与每步增量评估，只在最终上报与输出时纳入。
+
+#### 背景
+
+简码激活后每步 `apply_move_incremental` 的成本与「本步受影响候选字数 / 被触碰桶成员数」成正比；候选字 ×N 则阶段 1（受影响候选入/出桶）、阶段 2（脏桶重排 + Efficiency 模式 resort 种子）同比放大。简码重码（`simple_collision_count`）在**全码桶**上统计「未出简的字」，与「是否候选」无关——未出简的字（含非 active 候选）天然计入其全码桶重码。故把低频字排除出每步选择，不影响其对重码数的贡献，仅放弃其（≈0 的）加权指标贡献与（极少发生的）出简择优。
+
+#### 验收标准
+
+1. THE 优化器 SHALL 提供配置项 `simple_active_coverage`（默认 `0.90`），定义退火期「active 候选集」的累计字频覆盖率阈值；其取值 SHALL 被钳制为 `≤ simple_coverage_ratio`（越界则钳制并告警），使 active 候选 ⊆ output 候选。
+2. THE 简码评估器在退火期（每步增量 `apply_move_incremental` 与周期对账 `reconcile`）SHALL 仅在 active 候选集上出简选择；passive 候选（output ∖ active）SHALL NOT 进入简码桶、SHALL NOT 参与每步出简选择。
+3. WHILE 退火进行，passive 候选 SHALL 始终以「未出简」身份保留在其全码桶中，从而如实计入 `simple_collision_count`（重码数）/`simple_collision_freq`；其对覆盖率/加权当量/分布偏差等字频加权指标的贡献 SHALL 为 0（不出简即不计入）。
+4. WHEN 优化结束上报最终指标，THE 优化器 SHALL 对 `best_assignment` 以「输出全集（output，即 `simple_coverage_ratio` 选出的集合）」范围重建一次简码评估器，使最终上报的简码指标（及出简方案）纳入 passive 候选、与 output 文件一致（采用做法 (b)）。
+5. THE output 文件（`output-simple-codes.txt` / `output-combined.txt`）的出简选择 SHALL 以 output 全集范围生成，使 passive 候选也获得简码。
+6. THE active 范围与 output 范围的出简选择 SHALL 各自满足「增量 == 全量重建」「对账 == 全量重建」一致性（active 范围由现有属性测试覆盖；两范围共用同一 `rebuild_selection`/增量逻辑，仅遍历的候选列表不同）。
+7. WHERE 简码整体关闭或未激活（`simple_eval == None`），THE 本拆分 SHALL 无任何效果，全码路径行为、逻辑、性能与基线一致。
+
+### 需求 35：脏桶重选用部分选择（去掉整桶全排序的 log 因子）
+
+**用户故事：** 作为优化器使用者，我希望简码出简的桶重选成本随桶规模线性增长，而非 `O(n log n)`，在候选/桶变密时仍高效。
+
+#### 验收标准
+
+1. THE 简码评估器在脏桶重选（`reselect_bucket`，每步热路径）选取桶内前 `code_num` 个出简时，SHALL 使用部分选择（`select_nth_unstable_by`）而非整桶全排序，复杂度为 O(桶成员数)。
+2. THE 部分选择得到的出简集合 SHALL 与整桶全排序后取前 `code_num` 个**逐元素相同**（`cmp_in_bucket` 为严格全序，故「最优 `code_num` 个」的集合唯一确定）；当 `code_num == 0` 或 `code_num ≥ 桶成员数` 时 SHALL 跳过排序/分划（选中集合与桶内顺序无关）。
+3. THE 本优化 SHALL 为行为等价改造：任意分配下出简选择与简码指标与改造前逐字段一致（由增量=全量一致性属性测试覆盖）。

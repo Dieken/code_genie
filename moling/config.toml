@@ -79,6 +79,7 @@ simple_start_progress = 0.4       # 简码计算激活进度阈值 p_start（建
 simple_ramp_progress = 0.1        # 权重从 0 渐进到目标权重 W 的进度长度，默认 0.1
 simple_activation_reheat = 1.2    # 激活当刻升温倍率（独立于 reheat_factor；合理范围 [1.0, temp_start/激活基温]，默认 1.2）
 simple_coverage_ratio = 1.0       # 候选字累计字频覆盖率阈值，默认 1.0
+simple_active_coverage = 0.90     # 退火期 active 候选覆盖率（须 ≤ simple_coverage_ratio）；passive 候选仅最终上报/输出纳入，默认 0.90
 reconcile_interval_ratio = 0.05   # 周期对账间隔比例 M = floor(total_steps × ratio)，M ≥ 1，默认 0.05
 simple_assign_mode = "efficiency" # 桶内出简排序模式："frequency" 或 "efficiency"，默认 "efficiency"
 simple_protect_top_n = 6000       # 简码占用保护：禁止简码等于受保护汉字的全码；0=保护全部汉字，N>0=仅保护全字频前 N 名，默认 0

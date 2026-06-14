@@ -88,6 +88,8 @@ pub struct WeightConfig {
     pub simple_weight_collision_rate: f64,
     // 简码评估性能优化：候选字覆盖率阈值与桶内出简排序模式
     pub simple_coverage_ratio: f64,
+    /// 退火期 active 候选覆盖率（须 ≤ simple_coverage_ratio）；passive 候选仅在最终上报/输出纳入。
+    pub simple_active_coverage: f64,
     pub simple_assign_mode: SimpleAssignMode,
     /// 简码占用保护（需求 33）：0 = 保护全部汉字全码；N>0 = 仅保护全字频前 N 名。
     pub simple_protect_top_n: usize,
@@ -110,6 +112,11 @@ impl Default for WeightConfig {
             simple_weight_collision_count: 0.05,
             simple_weight_collision_rate: 0.25,
             simple_coverage_ratio: 1.0,
+            // 测试/程序化默认取 1.0（active = 全集，不启用 active/passive 近似），
+            // 与面向用户的配置默认（config.rs 的 0.90）有意不同：使既有以 WeightConfig::default()
+            // 构建、并设 simple_coverage_ratio=1.0 的测试保持「全部字均为 active 候选」的行为。
+            // active/passive 拆分的针对性测试会显式设置 simple_active_coverage < 1.0。
+            simple_active_coverage: 1.0,
             simple_assign_mode: SimpleAssignMode::Efficiency,
             simple_protect_top_n: 0,
         }

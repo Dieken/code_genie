@@ -889,9 +889,10 @@ pub fn simulated_annealing(
         // === 配置确认（需求 7.7/16.6）：输出简码候选字覆盖率与候选字数 ===
         if simple_enabled {
             println!(
-                "   [T0] 配置确认 | 简码候选字覆盖率: {:.2}% | 候选字数: {}",
+                "   [T0] 配置确认 | 简码 active 候选覆盖率: {:.2}% | active 候选字数: {} | 输出候选字数(full): {}",
                 ctx.simple_actual_coverage * 100.0,
-                ctx.simple_candidate_chars.len()
+                ctx.simple_candidate_chars.len(),
+                ctx.simple_output_candidate_chars.len()
             );
         }
 
@@ -1345,8 +1346,9 @@ pub fn simulated_annealing(
         evaluator.reconcile(ctx, &assignment);
     }
     // 以全量重建结果一致地重算最佳解的分量与指标（需求 11/15.6）。
+    // 用 new_output_scope：最终上报纳入 passive 候选（输出全集），使报告指标与 output 文件一致（点 b）。
     {
-        let mut best_eval = Evaluator::new(ctx, &best_assignment);
+        let mut best_eval = Evaluator::new_output_scope(ctx, &best_assignment);
         best_eval.simple_active = simple_activated;
         best_eval.current_simple_weight = if simple_enabled { w_target } else { 0.0 };
         best_eval.score_dirty = true;
