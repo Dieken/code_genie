@@ -3,6 +3,11 @@
 set -euo pipefail
 shopt -s failglob
 
+# 默认的声母映射，对月灵、妖灵、潇明不生效
+: "${OPTIMIZE_KEY_0:=w}"        # 首根笔画时，多次退火优化都选择了 w
+: "${OPTIMIZE_KEY_y:=k}"        # y 热力太高，首根笔画时，多次退火优化都选择映射到 k
+: "${OPTIMIZE_KEY_z:=v}"        # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+export OPTIMIZE_KEY_0 OPTIMIZE_KEY_y OPTIMIZE_KEY_z
 
 : "${USE_MIXED_FREQ:=0.1}"
 
@@ -277,11 +282,10 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
   }
 
   unless ($ENV{USE_XIAOMING_RULE}) {                        # 潇明会重新映射所有声母
-      $a =~ s/^0/w/ unless $ENV{OPTIMIZE_KEYS} =~ /0/;      # 首根笔画时，多次退火优化都选择了 w
-      #$a =~ s/^q/k/ unless $ENV{OPTIMIZE_KEYS} =~ /q/i;    # 默认不映射
-      #$a =~ s/^r/g/ unless $ENV{OPTIMIZE_KEYS} =~ /r/i;    # 统计陈氏当量，?[eiu] 的当量和中 r 和 g 最小，因此取 g
-      $a =~ s/^y/k/ unless $ENV{OPTIMIZE_KEYS} =~ /y/i;     # 首根笔画时，多次退火优化都选择了 k
-      $a =~ s/^z/v/ unless $ENV{OPTIMIZE_KEYS} =~ /z/i;     # https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+      my $consonant = substr($a, 0, 1);
+      if ($ENV{OPTIMIZE_KEYS} !~ /$consonant/ && ($consonant = $ENV{"OPTIMIZE_KEY_$consonant"})) {
+        $a =~ s/^./$consonant/;
+      }
   }
   print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1,1 > roots.txt
@@ -394,9 +398,9 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
       if ($a >= 2.5) {
         $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "asghl" : "sdfghjkl";
       } elsif ($a >= 1.5) {
-        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "wr uo asghl vnm" : "wr sdfghjkl vnm";
+        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "wruo asghl vnm" : "wr sdfghjkl vnm";
       } else {
-        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "qwrt yuop asghl xcvb nm" : "qwrtyp sdfghjkl xcvbnm";
+        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "qwrtyuop asghl xcvbnm" : "qwrtyp sdfghjkl xcvbnm";
       }
       $a[1] = join(" ", split /\s*/, $a[1]);
       printf "# freq=%.8f\n", $a;
@@ -413,9 +417,9 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
   if ($a >= 2.5) {
     $b = $ENV{USE_XIAOMING_RULE} ? "asghl" : "sdfghjkl";
   } elsif ($a >= 1.5) {
-    $b = $ENV{USE_XIAOMING_RULE} ? "wr uo asghl vnm" : "wr sdfghjkl vnm";
+    $b = $ENV{USE_XIAOMING_RULE} ? "wruo asghl vnm" : "wr sdfghjkl vnm";
   } else {
-    $b = $ENV{USE_XIAOMING_RULE} ? "qwrt yuop asghl xcvb nm" : "qwrtyp sdfghjkl xcvbnm";
+    $b = $ENV{USE_XIAOMING_RULE} ? "qwrtyuop asghl xcvbnm" : "qwrtyp sdfghjkl xcvbnm";
   }
   printf "# freq=%.8f\n", $a;
   print "$F[0].A\t", join(" ", split /\s*/, $b);
@@ -458,6 +462,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
     }
   }
 
+  # 潇明声码约束
   if ($ENV{USE_XIAOMING_RULE}) {
     %stroke_mapping = qw( 1 d 2 k 3 f 4 j 5 i 6 e );
     if (length($F[1]) > 1) {
@@ -476,28 +481,22 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
     }
   }
 
+  # 声码约束
   if (length($F[1]) > 1) {
     $a = substr($F[1], 0, 1);
 
     if ($ENV{USE_YAOLING_RULE}) {
         push @{ $yaoling_consonants{$a} }, $F[0];    # 妖灵的声母重新映射到声码，并且对应固定的韵码
     } else {
-        if (     $a eq "0" && $ENV{OPTIMIZE_KEYS} =~ /0/ ) {    # 零声母 0 需要映射
-            push @o, $F[0];
-        } elsif ($a eq "q" && $ENV{OPTIMIZE_KEYS} =~ /q/i) {    # 声母 q 不好按，需要映射
-            push @q, $F[0];
-        } elsif ($a eq "r" && $ENV{OPTIMIZE_KEYS} =~ /r/i) {    # 声母 r 不好按，需要映射
-            push @r, $F[0];
-        } elsif ($a eq "y" && $ENV{OPTIMIZE_KEYS} =~ /y/i) {    # 声母 y 过于高频，需要映射
-            push @y, $F[0];
-        } elsif ($a eq "z" && $ENV{OPTIMIZE_KEYS} =~ /z/i) {    # 25 键方案，z 需要映射
-            push @z, $F[0];
+        if ($ENV{OPTIMIZE_KEYS} =~ /$a/) {
+            push @{ $consonants{$a} }, $F[0];
         } else {
-            print "$F[0].S\t", substr($F[1], 0, 1) if length($F[1]) > 1;
+            print "$F[0].S\t", $a;
         }
     }
   }
 
+  # 韵码约束
   if ($ENV{USE_VOWEL}) {    # 使用韵母作为字根的补码
     if ($ENV{USE_YAOLING_RULE}) {           # 妖灵的声母重新映射到声码，并且对应固定的韵码
         if (length($F[1]) > 1) {
@@ -525,32 +524,40 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
     }
   } else {                  # 使用首笔作为字根的补码
     die "No stroke found for $F[0]!\n" unless exists $strokes{$F[0]};
-    die "Can not optimize consonants and left/right strokes at the same time!\n" if
-        $ENV{OPTIMIZE_KEYS} =~ /[0a-z]/i && $ENV{OPTIMIZE_KEYS} =~ /[6789A]/;   # A 是十六进制 10
+
+    my $stroke = $strokes{$F[0]};
 
     # 对五个笔画，考虑声母在左右时使用替代映射以提高手感
-    my $stroke = $strokes{$F[0]};
-    if ($stroke =~ /3/ && $F[1] =~ /[0qwrtsdfgzxcvb]/) {    # 假定零声母映射到键盘左侧
-        $stroke += 5;   # 左声母 + 撇
-    } elsif ($stroke =~ /[124]/ && $F[1] =~ /[yphjklnm]/) {
-        $stroke += 5;   # 右声母 + 横竖点
-    } elsif ($stroke =~ /5/ && $F[1] =~ /[0qwrtsdfgzxcvb]/) {
-        $stroke = "A";  # 左声母 + 折
+    if (length($F[1]) > 1) {
+        my $a = substr($F[1], 0, 1);
+
+        if ($ENV{OPTIMIZE_KEYS} =~ /$a/) {
+            warn "    WARN: Optimizing vowel $F[0].Y for mapping consonant $a\n";
+            push @{ $Y{ $a } },  $F[0];     # 同声母使用同样的韵码
+            next;
+        } else {
+            if ($stroke =~ /3/ && $F[1] =~ /[qwrtsdfgzxcvb]/) {
+                $stroke += 5;   # 左声母 + 撇
+            } elsif ($stroke =~ /[124]/ && $F[1] =~ /[yphjklnm]/) {
+                $stroke += 5;   # 右声母 + 横竖点
+            } elsif ($stroke =~ /5/ && $F[1] =~ /[qwrtsdfgzxcvb]/) {
+                $stroke = "A";  # 左声母 + 折
+            }
+        }
     }
 
     push @{ $Y{$stroke} },  $F[0];
   }
 
   END {
-    print join(" ", map { "$_.S" } @o), "\t", join(" ", split /\s*/, "wr sdfghjkl vnm") if @o > 0;
-    print join(" ", map { "$_.S" } @q), "\t", join(" ", split /\s*/, "q sdfghjkl vnm") if @q > 0;
-    print join(" ", map { "$_.S" } @r), "\t", join(" ", split /\s*/, "r sdfghjkl vnm") if @r > 0;
-    print join(" ", map { "$_.S" } @y), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @y > 0;
-    print join(" ", map { "$_.S" } @z), "\t", join(" ", split /\s*/, "sdfghjkl vnm") if @z > 0;
+    for (sort keys %consonants) {
+        print "# $_";
+        print join(" ", map { "$_.S" } @{ $consonants{$_} }), "\t", join(" ", split /\s*/, "qwrtyp sdfghjkl xcvbnm");
+    }
 
     for (sort keys %yaoling_consonants) {
         print "# $_";
-        print join(" ", map { "$_.S" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, "qwrt yp sdfg hjkl xcvb nm");
+        print join(" ", map { "$_.S" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, "qwrtyp sdfghjkl xcvbnm");
         print join(" ", map { "$_.Y" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, "aeuio");
     }
 
@@ -565,9 +572,13 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
 
     for my $stroke (sort keys %Y) {
       @a = sort @{ $Y{$stroke} };
-      if ($ENV{OPTIMIZE_KEYS} =~ /$stroke/i) {
+      if ($stroke =~ /^[1-9A]$/ && $ENV{OPTIMIZE_KEYS} =~ /$stroke/) {
+          die "No constraint found for $stroke!\n" unless exists $stroke_constraint{$stroke};
           print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, $stroke_constraint{$stroke});
+      } elsif ($stroke =~ /^[0qwrtypsdfghjklzxcvbnm]$/) {   # 待映射的声母的韵母约束
+          print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, "aeuio");
       } else {
+          die "No mapping found for $stroke!\n" unless exists $stroke_mapping{$stroke};
           print join("\n", map { "$_.Y\t$stroke_mapping{$stroke}" } @a);
       }
     }
