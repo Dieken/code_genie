@@ -9,6 +9,7 @@ use std::cmp::Ordering;
 use rustc_hash::FxHashMap;
 
 use crate::context::OptContext;
+use crate::bucket_store::{BucketStore, FullBucket};
 use crate::types::{
     KeyDistConfig, MetricScores, Metrics, SimpleAssignMode, SimpleMetricScores, SimpleMetrics, EQUIV_TABLE_SIZE,
     KEY_SPACE,
@@ -29,10 +30,17 @@ const SIMPLE_KEYS_CAP: usize = 12;
 /// 简码桶：映射到同一简码编码的候选字集合（局部排序对象）
 #[derive(Clone, Default)]
 struct SimpleBucket {
-    /// 映射到该简码编码的候选字 ci 列表
-    members: Vec<usize>,
+    /// 映射到该简码编码的候选字 ci 列表（u32，需求 6.1）
+    members: Vec<u32>,
     /// 桶频率和
     freq_sum: u64,
+}
+
+impl crate::bucket_store::Bucket for SimpleBucket {
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.members.is_empty()
+    }
 }
 
 /// 简码级别跟踪器（增量化）
@@ -41,8 +49,8 @@ struct SimpleLevelTracker {
     code_num: usize,
     /// 简码桶向量容量 = ctx.simple_level_capacity[li]
     capacity: usize,
-    /// 按简码编码直接索引的桶向量（替代 HashMap）
-    buckets: Vec<SimpleBucket>,
+    /// 简码桶存储：按 code_base^L 阈值自适应密集/稀疏后端（需求 4.3/5）。
+    buckets: BucketStore<SimpleBucket>,
     /// current_simple_code[ci]：该字当前所在桶编码，-1 表示无
     current_simple_code: Vec<i64>,
     /// 该级出简标记，按 ci 索引
@@ -90,7 +98,7 @@ struct LevelAggregateSnapshot {
 struct BucketSnap {
     li: usize,
     code: usize,
-    members: Vec<usize>,
+    members: Vec<u32>,
     freq_sum: u64,
 }
 
@@ -170,8 +178,9 @@ pub struct SimpleEvaluator {
     /// 各全码桶对简码重码的当前贡献缓存：bucket_collision_contrib[code] = (count, freq)
     ///
     /// 用于增量更新简码重码：对受影响的少数全码桶用「减旧贡献、加新贡献」做差量维护，
-    /// 从而避免每步全量扫描整个编码空间（需求 14.3）。在全量重建时一次性填满。
-    bucket_collision_contrib: Vec<(usize, u64)>,
+    /// 从而避免每步全量扫描整个编码空间（需求 14.3）。稀疏存储：缺失键等价 (0,0)，
+    /// 贡献归零时移除条目以保持有界（需求 4.1/4.2）。
+    bucket_collision_contrib: FxHashMap<u32, (usize, u64)>,
     /// 每个汉字「上次同步时」的全码编码缓存（按 ci 索引）。
     ///
     /// 用于在增量更新时检测移动组所触碰的全码桶（旧编码 ∪ 新编码），定位需要重算
@@ -212,9 +221,9 @@ pub struct SimpleEvaluator {
     key_buf: Vec<u8>,
     /// 快照回滚复用缓冲
     snapshot: SimpleSnapshot,
-    /// 桶触碰代际标记：`bucket_gen[li][code] == cur_gen` 表示该桶在本次移动中已被触碰
-    /// （已快照成员、已加入 `dirty_per_level`）。用代际计数实现 O(1) 去重与 O(1) 整体复位。
-    bucket_gen: Vec<Vec<u32>>,
+    /// 桶触碰代际标记：`bucket_gen[li].get(code) == Some(cur_gen)` 表示该桶在本次移动中已被
+    /// 触碰。稀疏存储（FxHashMap），条目数受每步触碰桶数界定（需求 4.4）；溢出时整体清空。
+    bucket_gen: Vec<FxHashMap<u32, u32>>,
     /// 当前移动代际计数（每次增量选择开始时自增；溢出时整体复位）。
     cur_gen: u32,
     /// 每级脏桶编码列表（复用工作集）：本次移动中成员发生变化、需局部重排的桶。
@@ -262,7 +271,7 @@ impl SimpleEvaluator {
     pub fn new(
         ctx: &OptContext,
         assignment: &[u8],
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
         is_first_candidate: &[bool],
         output_scope: bool,
     ) -> Self {
@@ -277,16 +286,10 @@ impl SimpleEvaluator {
                     .copied()
                     .unwrap_or(1)
                     .max(1);
-                let buckets = (0..cap)
-                    .map(|_| SimpleBucket {
-                        members: Vec::new(),
-                        freq_sum: 0,
-                    })
-                    .collect();
                 SimpleLevelTracker {
                     code_num: ctx.simple_config.levels[li].code_num,
                     capacity: cap,
-                    buckets,
+                    buckets: BucketStore::new(cap),
                     current_simple_code: vec![-1i64; n_chars],
                     selected: vec![false; n_chars],
                     covered_freq: 0,
@@ -301,17 +304,8 @@ impl SimpleEvaluator {
             })
             .collect();
 
-        let bucket_gen: Vec<Vec<u32>> = (0..n_levels)
-            .map(|li| {
-                let cap = ctx
-                    .simple_level_capacity
-                    .get(li)
-                    .copied()
-                    .unwrap_or(1)
-                    .max(1);
-                vec![0u32; cap]
-            })
-            .collect();
+        let bucket_gen: Vec<FxHashMap<u32, u32>> =
+            (0..n_levels).map(|_| FxHashMap::default()).collect();
 
         let mut se = Self {
             levels,
@@ -319,7 +313,7 @@ impl SimpleEvaluator {
             simple_collision_count: 0,
             simple_collision_freq: 0,
             simple_collision_rate: 0.0,
-            bucket_collision_contrib: vec![(0usize, 0u64); full_code_to_chars.len()],
+            bucket_collision_contrib: FxHashMap::default(),
             last_full_codes: vec![0usize; n_chars],
             g_covered_freq: 0,
             g_equiv_weighted: 0.0,
@@ -352,7 +346,7 @@ impl SimpleEvaluator {
             stage2_visits: 0,
         };
 
-        se.rebuild_internal(ctx, assignment, full_code_to_chars, is_first_candidate);
+        se.rebuild_internal(ctx, assignment, full_buckets, is_first_candidate);
         se.cached_simple_score = se.compute_simple_score(ctx);
         se.simple_score_dirty = false;
         se
@@ -370,7 +364,7 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
         is_first_candidate: &[bool],
     ) {
         let n_chars = ctx.char_infos.len();
@@ -388,10 +382,10 @@ impl SimpleEvaluator {
         self.recompute_protect_count(ctx);
 
         // 简码出简选择（桶 / current_simple_code / selected / 级别聚合 / all_assigned_flags）
-        self.rebuild_selection(ctx, assignment, full_code_to_chars, is_first_candidate);
+        self.rebuild_selection(ctx, assignment, full_buckets, is_first_candidate);
 
         // 全量重算简码重码并填满每桶贡献缓存（供后续增量差量维护）
-        self.recompute_collisions_full(ctx, full_code_to_chars);
+        self.recompute_collisions_full(ctx, full_buckets);
 
         // 据各级别聚合 + 固定简码常量偏置，一次性重算全局聚合（需求 29.2/29.8）。
         self.recompute_global_aggregates(ctx);
@@ -414,17 +408,17 @@ impl SimpleEvaluator {
     }
 
     /// 简码占用保护判定（需求 33）：编码 `code` 是否等于某受保护汉字的全码。
-    /// - N=0（保护全部）：等价于「全码桶 `full_code_to_chars[code]` 非空」（复用现有结构）。
+    /// - N=0（保护全部）：等价于「全码桶 `code` 非空」（经 BucketStore：键存在即非空）。
     /// - N>0：`protect_count[code] > 0`。
     #[inline]
     fn is_code_blocked(
         &self,
         ctx: &OptContext,
         code: usize,
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
     ) -> bool {
         if ctx.simple_protect_top_n == 0 {
-            code < full_code_to_chars.len() && !full_code_to_chars[code].is_empty()
+            full_buckets.get(code as u32).is_some()
         } else {
             self.protect_count.get(&code).copied().unwrap_or(0) > 0
         }
@@ -542,18 +536,15 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
         is_first_candidate: &[bool],
     ) {
         let n_levels = self.levels.len();
         let n_chars = ctx.char_infos.len();
 
-        // 重置所有级别状态
+        // 重置所有级别状态：以全新桶存储替换（Sparse 后端 O(1)，Dense 后端重分配，均不残留旧成员）。
         for level in self.levels.iter_mut() {
-            for b in level.buckets.iter_mut() {
-                b.members.clear();
-                b.freq_sum = 0;
-            }
+            level.buckets = BucketStore::new(level.capacity);
             for c in level.current_simple_code.iter_mut() {
                 *c = -1;
             }
@@ -593,11 +584,11 @@ impl SimpleEvaluator {
                 }
                 if let Some(code) = ctx.calc_simple_code_eligible(ci, li, assignment) {
                     debug_assert!(code < self.levels[li].capacity);
-                    let bucket = &mut self.levels[li].buckets[code];
+                    let bucket = self.levels[li].buckets.get_mut_or_insert(code as u32);
                     if bucket.members.is_empty() {
                         touched.push(code);
                     }
-                    bucket.members.push(ci);
+                    bucket.members.push(ci as u32);
                     bucket.freq_sum += ctx.char_infos[ci].frequency;
                     self.levels[li].current_simple_code[ci] = code as i64;
                 }
@@ -608,7 +599,7 @@ impl SimpleEvaluator {
                 let code = touched[ti];
                 // 简码占用保护（需求 33）：编码撞受保护全码的桶不出简（名额=0）；
                 // 其候选字 all_assigned_flags 保持 false → 由更高级别（更长简码）继续尝试。
-                let code_num = if self.is_code_blocked(ctx, code, full_code_to_chars) {
+                let code_num = if self.is_code_blocked(ctx, code, full_buckets) {
                     0
                 } else {
                     // 固定简码占用名额（需求 21.7）：每桶优化可选名额 = code_num - 占用数（下限 0）。
@@ -621,14 +612,13 @@ impl SimpleEvaluator {
                     ctx,
                     is_first_candidate,
                     li,
-                    &mut self.levels[li].buckets[code].members,
+                    &mut self.levels[li].buckets.get_mut_or_insert(code as u32).members,
                 );
-                let sel: Vec<usize> = self.levels[li].buckets[code]
-                    .members
-                    .iter()
-                    .take(code_num)
-                    .copied()
-                    .collect();
+                let sel: Vec<usize> = self.levels[li]
+                    .buckets
+                    .get(code as u32)
+                    .map(|b| b.members.iter().take(code_num).map(|&c| c as usize).collect())
+                    .unwrap_or_default();
                 for ci in sel {
                     let freq = ctx.char_infos[ci].frequency;
                     let freq_f = freq as f64;
@@ -667,13 +657,14 @@ impl SimpleEvaluator {
     #[inline]
     fn bucket_collision_contrib_of(
         ctx: &OptContext,
-        chars: &[usize],
+        chars: &[u32],
         assigned: &[bool],
     ) -> (usize, u64) {
         let mut n = 0usize;
         let mut max_freq = 0u64;
         let mut sum_freq = 0u64;
         for &ci in chars {
+            let ci = ci as usize;
             if !assigned[ci] {
                 let f = ctx.char_infos[ci].frequency;
                 sum_freq += f;
@@ -690,23 +681,20 @@ impl SimpleEvaluator {
         }
     }
 
-    /// 全量重算简码重码并填满每桶贡献缓存（供后续增量差量维护）。
-    fn recompute_collisions_full(&mut self, ctx: &OptContext, full_code_to_chars: &[Vec<usize>]) {
-        if self.bucket_collision_contrib.len() != full_code_to_chars.len() {
-            self.bucket_collision_contrib = vec![(0usize, 0u64); full_code_to_chars.len()];
-        }
+    /// 全量重算简码重码并填满每桶贡献缓存（供后续增量差量维护）。仅遍历非空全码桶（需求 7.2）。
+    fn recompute_collisions_full(&mut self, ctx: &OptContext, full_buckets: &BucketStore<FullBucket>) {
+        self.bucket_collision_contrib.clear();
         let mut total_count = 0usize;
         let mut total_freq = 0u64;
-        for (code, chars) in full_code_to_chars.iter().enumerate() {
-            let contrib = if chars.is_empty() {
-                (0, 0)
-            } else {
-                Self::bucket_collision_contrib_of(ctx, chars, &self.all_assigned_flags)
-            };
-            self.bucket_collision_contrib[code] = contrib;
+        full_buckets.for_each_nonempty(|code, b| {
+            let contrib = Self::bucket_collision_contrib_of(ctx, &b.members, &self.all_assigned_flags);
+            // 仅存非零贡献，保持稀疏有界（需求 4.2）。
+            if contrib.0 > 0 || contrib.1 > 0 {
+                self.bucket_collision_contrib.insert(code, contrib);
+            }
             total_count += contrib.0;
             total_freq += contrib.1;
-        }
+        });
         self.simple_collision_count = total_count;
         self.simple_collision_freq = total_freq;
         self.simple_collision_rate = if ctx.total_frequency > 0 {
@@ -773,9 +761,11 @@ impl SimpleEvaluator {
         ctx: &OptContext,
         is_first_candidate: &[bool],
         li: usize,
-        members: &mut [usize],
+        members: &mut [u32],
     ) {
-        members.sort_unstable_by(|&a, &b| Self::cmp_in_bucket(ctx, is_first_candidate, li, a, b));
+        members.sort_unstable_by(|&a, &b| {
+            Self::cmp_in_bucket(ctx, is_first_candidate, li, a as usize, b as usize)
+        });
     }
 
     /// 完整重建简码评估（供周期对账与结束校验调用）
@@ -783,12 +773,12 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
         is_first_candidate: &[bool],
     ) {
         // 观测计数：记录一次全量重建（防回归断言依赖此计数证明热路径不走全量重建）。
         self.full_rebuild_calls += 1;
-        self.rebuild_internal(ctx, assignment, full_code_to_chars, is_first_candidate);
+        self.rebuild_internal(ctx, assignment, full_buckets, is_first_candidate);
     }
 
     /// 简码增量更新（热路径核心，需求 1/14）。
@@ -825,7 +815,7 @@ impl SimpleEvaluator {
         affected_candidates: &[usize],
         resort_seeds: &[usize],
         full_affected_chars: &[usize],
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
         is_first_candidate: &[bool],
     ) {
         // 受影响裁剪（需求 1.5/7.6）：当本次移动既不影响任何候选字的简码归属
@@ -878,14 +868,17 @@ impl SimpleEvaluator {
                 self.snapshot.last_full_codes.push((ci, old_code));
                 self.last_full_codes[ci] = new_code;
 
-                // 简码占用保护增量（需求 33）。full_code_to_chars 此时已反映本次移动后状态。
+                // 简码占用保护增量（需求 33）。full_buckets 此时已反映本次移动后状态。
                 if ctx.simple_protect_top_n == 0 {
                     // N=0（保护全部）：blocked(C)=全码桶非空。old_code 变空 → 解禁；
                     // new_code 变为恰含此字（之前为空）→ 新禁；据此标脏对应简码桶。
-                    if full_code_to_chars[old_code].is_empty() {
+                    if full_buckets.get(old_code as u32).is_none() {
                         self.protect_dirty_buf.push(old_code);
                     }
-                    if full_code_to_chars[new_code].len() == 1 {
+                    if full_buckets
+                        .get(new_code as u32)
+                        .map_or(false, |b| b.members.len() == 1)
+                    {
                         self.protect_dirty_buf.push(new_code);
                     }
                 } else if ctx.simple_is_topn[ci] {
@@ -921,7 +914,7 @@ impl SimpleEvaluator {
             self.do_incremental_selection(
                 ctx,
                 assignment,
-                full_code_to_chars,
+                full_buckets,
                 affected_candidates,
                 resort_seeds,
                 is_first_candidate,
@@ -947,9 +940,17 @@ impl SimpleEvaluator {
         self.affected_full_buckets.dedup();
         for idx in 0..self.affected_full_buckets.len() {
             let code = self.affected_full_buckets[idx];
-            let (old_count, old_freq) = self.bucket_collision_contrib[code];
+            let (old_count, old_freq) = self
+                .bucket_collision_contrib
+                .get(&(code as u32))
+                .copied()
+                .unwrap_or((0, 0));
+            let members: &[u32] = full_buckets
+                .get(code as u32)
+                .map(|b| b.members.as_slice())
+                .unwrap_or(&[]);
             let (new_count, new_freq) =
-                Self::bucket_collision_contrib_of(ctx, &full_code_to_chars[code], &self.all_assigned_flags);
+                Self::bucket_collision_contrib_of(ctx, members, &self.all_assigned_flags);
             if (new_count, new_freq) == (old_count, old_freq) {
                 continue;
             }
@@ -959,7 +960,13 @@ impl SimpleEvaluator {
             // 先加新值再减旧值，避免 usize 下溢（总量恒 ≥ 旧桶贡献）
             self.simple_collision_count = self.simple_collision_count + new_count - old_count;
             self.simple_collision_freq = self.simple_collision_freq + new_freq - old_freq;
-            self.bucket_collision_contrib[code] = (new_count, new_freq);
+            // 稀疏维护：归零则移除条目，否则插入（需求 4.2）。
+            if new_count == 0 && new_freq == 0 {
+                self.bucket_collision_contrib.remove(&(code as u32));
+            } else {
+                self.bucket_collision_contrib
+                    .insert(code as u32, (new_count, new_freq));
+            }
         }
         self.simple_collision_rate = if ctx.total_frequency > 0 {
             self.simple_collision_freq as f64 / ctx.total_frequency as f64
@@ -983,9 +990,7 @@ impl SimpleEvaluator {
         self.cur_gen = self.cur_gen.wrapping_add(1);
         if self.cur_gen == 0 {
             for lvl in self.bucket_gen.iter_mut() {
-                for g in lvl.iter_mut() {
-                    *g = 0;
-                }
+                lvl.clear();
             }
             for g in self.assigned_touch_gen.iter_mut() {
                 *g = 0;
@@ -998,10 +1003,10 @@ impl SimpleEvaluator {
     /// `dirty_per_level[li]`（待局部重排）。代际标记保证每桶仅快照/入列一次。
     #[inline]
     fn touch_bucket(&mut self, li: usize, code: usize) {
-        if self.bucket_gen[li][code] == self.cur_gen {
+        if self.bucket_gen[li].get(&(code as u32)) == Some(&self.cur_gen) {
             return;
         }
-        self.bucket_gen[li][code] = self.cur_gen;
+        self.bucket_gen[li].insert(code as u32, self.cur_gen);
 
         let idx = self.snapshot.bucket_snaps_len;
         if idx == self.snapshot.bucket_snaps.len() {
@@ -1012,8 +1017,13 @@ impl SimpleEvaluator {
         snap.li = li;
         snap.code = code;
         snap.members.clear();
-        snap.members.extend_from_slice(&self.levels[li].buckets[code].members);
-        snap.freq_sum = self.levels[li].buckets[code].freq_sum;
+        // 缺失桶（未插入）按空桶语义：snapshot 记录空成员与 0 频率。
+        if let Some(b) = self.levels[li].buckets.get(code as u32) {
+            snap.members.extend_from_slice(&b.members);
+            snap.freq_sum = b.freq_sum;
+        } else {
+            snap.freq_sum = 0;
+        }
         self.snapshot.bucket_snaps_len += 1;
 
         self.dirty_per_level[li].push(code);
@@ -1023,20 +1033,27 @@ impl SimpleEvaluator {
     #[inline]
     fn bucket_insert_member(&mut self, li: usize, code: usize, ci: usize, freq: u64) {
         self.touch_bucket(li, code);
-        let b = &mut self.levels[li].buckets[code];
-        b.members.push(ci);
+        let b = self.levels[li].buckets.get_mut_or_insert(code as u32);
+        b.members.push(ci as u32);
         b.freq_sum += freq;
     }
 
     /// 从级别 `li` 编码 `code` 的桶移除候选字 `ci`（swap_remove + freq_sum 扣减），并触碰该桶。
+    /// 桶变空时移除条目以维持稀疏有界（需求 2.1）。
     /// 成员顺序的扰动由桶成员快照在回滚时整存整取还原，不影响正确性（重排前会重新排序）。
     #[inline]
     fn bucket_remove_member(&mut self, li: usize, code: usize, ci: usize, freq: u64) {
         self.touch_bucket(li, code);
-        let b = &mut self.levels[li].buckets[code];
-        if let Some(pos) = b.members.iter().position(|&x| x == ci) {
-            b.members.swap_remove(pos);
-            b.freq_sum -= freq;
+        let now_empty = {
+            let b = self.levels[li].buckets.get_mut_or_insert(code as u32);
+            if let Some(pos) = b.members.iter().position(|&x| x == ci as u32) {
+                b.members.swap_remove(pos);
+                b.freq_sum -= freq;
+            }
+            b.members.is_empty()
+        };
+        if now_empty {
+            self.levels[li].buckets.remove(code as u32);
         }
     }
 
@@ -1221,13 +1238,13 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
         is_first_candidate: &[bool],
         li: usize,
         code: usize,
     ) {
         // 简码占用保护（需求 33）：编码撞受保护全码的桶名额=0（谁都不出简）。
-        let code_num = if self.is_code_blocked(ctx, code, full_code_to_chars) {
+        let code_num = if self.is_code_blocked(ctx, code, full_buckets) {
             0
         } else {
             self.levels[li]
@@ -1239,19 +1256,27 @@ impl SimpleEvaluator {
         // 按 `cmp_in_bucket` 排序键最优的 code_num 个（严格全序 ⟹ 该集合唯一确定）。
         // 仅 `0 < code_num < len` 时需分划：code_num==0（无人出简）或 code_num>=len（全员出简）
         // 时选中集合与桶内顺序无关，跳过。
-        {
-            let members = &mut self.levels[li].buckets[code].members;
-            if code_num > 0 && code_num < members.len() {
-                members.select_nth_unstable_by(code_num - 1, |&a, &b| {
-                    Self::cmp_in_bucket(ctx, is_first_candidate, li, a, b)
-                });
-            }
+        let len = self
+            .levels[li]
+            .buckets
+            .get(code as u32)
+            .map_or(0, |b| b.members.len());
+        // 桶为空（成员已全部移除）：无可出简，直接返回，且不经 get_mut_or_insert 创建空条目
+        // （否则会破坏稀疏后端「键存在 ⟺ 非空」不变量并泄漏空桶）。
+        if len == 0 {
+            return;
         }
-        let len = self.levels[li].buckets[code].members.len();
+        // 局部选择前 code_num（C 优化）：用部分选择取代整桶全排序。
+        if code_num > 0 && code_num < len {
+            let members = &mut self.levels[li].buckets.get_mut(code as u32).unwrap().members;
+            members.select_nth_unstable_by(code_num - 1, |&a, &b| {
+                Self::cmp_in_bucket(ctx, is_first_candidate, li, a as usize, b as usize)
+            });
+        }
         // 北极星计数：脏桶局部重排访问的成员数（与桶规模同阶，非候选字总集）。
         self.stage2_visits += len;
         for idx in 0..len {
-            let ci = self.levels[li].buckets[code].members[idx];
+            let ci = self.levels[li].buckets.get(code as u32).unwrap().members[idx] as usize;
             let now_sel = idx < code_num;
             let was_sel = self.levels[li].selected[ci];
             if now_sel && !was_sel {
@@ -1280,7 +1305,7 @@ impl SimpleEvaluator {
         &mut self,
         ctx: &OptContext,
         assignment: &[u8],
-        full_code_to_chars: &[Vec<usize>],
+        full_buckets: &BucketStore<FullBucket>,
         affected_candidates: &[usize],
         resort_seeds: &[usize],
         is_first_candidate: &[bool],
@@ -1304,7 +1329,7 @@ impl SimpleEvaluator {
         for k in 0..self.protect_dirty_buf.len() {
             let code = self.protect_dirty_buf[k];
             for li in 0..n_levels {
-                if code < self.levels[li].buckets.len() {
+                if code < self.levels[li].capacity {
                     self.touch_bucket(li, code);
                 }
             }
@@ -1392,7 +1417,7 @@ impl SimpleEvaluator {
             self.newly_desel_buf.clear();
             for di in 0..self.dirty_per_level[li].len() {
                 let code = self.dirty_per_level[li][di];
-                self.reselect_bucket(ctx, assignment, full_code_to_chars, is_first_candidate, li, code);
+                self.reselect_bucket(ctx, assignment, full_buckets, is_first_candidate, li, code);
             }
 
             // (c) 跨级传播到 li+1
@@ -1496,13 +1521,20 @@ impl SimpleEvaluator {
             self.g_dist_deviation = self.snapshot.g_dist_deviation;
             self.g_dist_contrib = self.snapshot.g_dist_contrib;
 
-            // 2) 触碰桶成员/freq_sum 整存整取（仅有效前缀）
+            // 2) 触碰桶成员/freq_sum 整存整取（仅有效前缀）。还原为空则移除条目、
+            //    非空则重建，维持稀疏「键存在 ⟺ 非空」不变量（需求 8.2/8.3）。
             for i in 0..self.snapshot.bucket_snaps_len {
                 let snap = &self.snapshot.bucket_snaps[i];
-                let b = &mut self.levels[snap.li].buckets[snap.code];
-                b.members.clear();
-                b.members.extend_from_slice(&snap.members);
-                b.freq_sum = snap.freq_sum;
+                let li = snap.li;
+                let code = snap.code as u32;
+                if snap.members.is_empty() {
+                    self.levels[li].buckets.remove(code);
+                } else {
+                    let b = self.levels[li].buckets.get_mut_or_insert(code);
+                    b.members.clear();
+                    b.members.extend_from_slice(&snap.members);
+                    b.freq_sum = snap.freq_sum;
+                }
             }
 
             // 3) 逆序回放 current_simple_code 撤销日志
@@ -1548,9 +1580,14 @@ impl SimpleEvaluator {
             }
         }
 
-        // 8) 还原简码重码贡献缓存（逆序）
+        // 8) 还原简码重码贡献缓存（逆序）：还原为 (0,0) 即移除条目，否则插入（需求 4.2）。
         for &(code, old_count, old_freq) in self.snapshot.collision_buckets.iter().rev() {
-            self.bucket_collision_contrib[code] = (old_count, old_freq);
+            if old_count == 0 && old_freq == 0 {
+                self.bucket_collision_contrib.remove(&(code as u32));
+            } else {
+                self.bucket_collision_contrib
+                    .insert(code as u32, (old_count, old_freq));
+            }
         }
 
         // 9) 还原简码重码标量与缓存得分
@@ -1710,24 +1747,105 @@ impl SimpleEvaluator {
 // 主评估器
 // =========================================================================
 
+/// 输出桶存储后端选择日志（需求 12）：在配置确认阶段单线程调用一次。
+///
+/// 全部规模数字（code_base / max_parts / code_space / 各级 code_base^L / n_chars / 预估内存）
+/// 均在运行时据 `ctx` 与类型大小计算，除 `SPARSE_THRESHOLD` 外无任何硬编码规模常量（需求 12.6）。
+pub(crate) fn log_bucket_backends(ctx: &OptContext) {
+    use crate::bucket_store::SPARSE_THRESHOLD;
+    let n_chars = ctx.char_infos.len();
+    println!(
+        "📦 桶存储后端选择 (code_base={}, max_parts={}, code_space={}, 阈值={}):",
+        ctx.code_base, ctx.max_parts, ctx.code_space, SPARSE_THRESHOLD
+    );
+    log_one_backend("全码桶", ctx.code_space, std::mem::size_of::<FullBucket>(), n_chars);
+    // 简码级别桶：仅在启用简码时输出（需求 12.7）。
+    if ctx.enable_simple_code {
+        for (li, &cap) in ctx.simple_level_capacity.iter().enumerate() {
+            log_one_backend(
+                &format!("简码级别[{li}]桶"),
+                cap,
+                std::mem::size_of::<SimpleBucket>(),
+                n_chars,
+            );
+        }
+    }
+}
+
+/// 单个桶存储的后端选择日志行（需求 12.2/12.3/12.4）。
+fn log_one_backend(label: &str, capacity: usize, elem_size: usize, n_chars: usize) {
+    println!("{}", backend_log_line(label, capacity, elem_size, n_chars));
+}
+
+/// 构造单个桶存储后端选择日志行（纯函数，便于测试，需求 12.6）。
+/// 全部数字来自运行时参数，无硬编码规模常量（阈值除外）。
+pub(crate) fn backend_log_line(label: &str, capacity: usize, elem_size: usize, n_chars: usize) -> String {
+    use crate::bucket_store::{choose_backend, BackendKind, SPARSE_THRESHOLD};
+    let mb = capacity.saturating_mul(elem_size) / (1024 * 1024);
+    match choose_backend(capacity) {
+        BackendKind::Dense => format!(
+            "   · {label}: Dense (容量 {capacity} ≤ 阈值 {SPARSE_THRESHOLD}；预估 ~{mb} MB/线程)"
+        ),
+        BackendKind::Sparse => format!(
+            "   · {label}: Sparse (容量 {capacity} > 阈值 {SPARSE_THRESHOLD}；Dense 将需 ~{mb} MB/线程，\
+             改用稀疏存储，内存随非空桶数 ≤ n_chars({n_chars}) 增长)"
+        ),
+    }
+}
+
+/// 据当前分配构建全码桶存储 `BucketStore<FullBucket>` 与首选标记 `is_first_candidate`
+/// （与 `Evaluator::new` 同口径）。供 output 与测试在不构造完整 `Evaluator` 时复用，
+/// 集中处理 u32 成员表示与稀疏后端选择（需求 1/5/6）。
+pub(crate) fn build_full_buckets(
+    ctx: &OptContext,
+    assignment: &[u8],
+) -> (BucketStore<FullBucket>, Vec<bool>) {
+    let n = ctx.char_infos.len();
+    let mut fb: BucketStore<FullBucket> = BucketStore::new(ctx.code_space);
+    for ci in 0..n {
+        let code = ctx.calc_code_only(ci, assignment);
+        let b = fb.get_mut_or_insert(code as u32);
+        b.members.push(ci as u32);
+        let f = ctx.char_infos[ci].frequency;
+        b.freq_sum += f;
+        if f > b.max_freq {
+            b.max_freq = f;
+        }
+    }
+    let mut is_first = vec![false; n];
+    let mut updates: Vec<(u32, u32)> = Vec::new();
+    fb.for_each_nonempty(|code, b| {
+        let mut max_f = 0u64;
+        let mut first = u32::MAX;
+        for &ci in &b.members {
+            let f = ctx.char_infos[ci as usize].frequency;
+            if f > max_f || (f == max_f && ci < first) {
+                max_f = f;
+                first = ci;
+            }
+        }
+        updates.push((code, first));
+    });
+    for (code, first) in updates {
+        fb.get_mut_or_insert(code).first = first;
+        is_first[first as usize] = true;
+    }
+    (fb, is_first)
+}
+
 /// 主评估器 - 评估整个编码方案
 pub struct Evaluator {
     /// 当前编码列表
     current_codes: Vec<usize>,
     /// 当前等价值列表
     current_equiv_val: Vec<f64>,
-    /// 编码到汉字的映射（直接索引，大小 = code_space）
-    code_to_chars: Vec<Vec<usize>>,
+    /// 全码桶存储（取代基线的 code_to_chars/bucket_freq_sum/bucket_max_freq/bucket_first
+    /// 四个 code_space 大小数组）。密集/稀疏后端按 code_space 阈值自适应（需求 1/5）。
+    full_buckets: BucketStore<FullBucket>,
     /// 每个汉字在其桶中的位置（用于 O(1) swap_remove）
     char_bucket_pos: Vec<usize>,
-    /// 每个桶的频率总和
-    bucket_freq_sum: Vec<u64>,
-    /// 每个桶的最大频率（用于增量 collision_freq 计算）
-    bucket_max_freq: Vec<u64>,
     /// 每个汉字是否为其全码桶首选字（需求 5：首选字选重键长为 0）
     is_first_candidate: Vec<bool>,
-    /// 每个全码桶当前首选字 ci（usize::MAX 表示空桶；需求 5）
-    bucket_first: Vec<usize>,
     /// 本次移动中 `is_first_candidate` 发生写入（可能翻转）的汉字列表（复用工作集）。
     ///
     /// Efficiency 模式下桶内排序键含 `sel_len`（由 `is_first_candidate` 取 0/1），故某字
@@ -1818,10 +1936,8 @@ impl Evaluator {
     fn new_impl(ctx: &OptContext, assignment: &[u8], build_simple: bool, simple_output_scope: bool) -> Self {
         let n = ctx.char_infos.len();
         let cs = ctx.code_space;
-        let mut code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
+        let mut full_buckets: BucketStore<FullBucket> = BucketStore::new(cs);
         let mut char_bucket_pos = vec![0usize; n];
-        let mut bucket_freq_sum = vec![0u64; cs];
-        let mut bucket_max_freq = vec![0u64; cs];
         let mut current_codes = Vec::with_capacity(n);
         let mut current_equiv_val = Vec::with_capacity(n);
 
@@ -1840,12 +1956,13 @@ impl Evaluator {
             current_codes.push(code);
             current_equiv_val.push(equiv);
 
-            let pos = code_to_chars[code].len();
-            code_to_chars[code].push(ci);
+            let b = full_buckets.get_mut_or_insert(code as u32);
+            let pos = b.members.len();
+            b.members.push(ci as u32);
             char_bucket_pos[ci] = pos;
-            bucket_freq_sum[code] += info.frequency;
-            if info.frequency > bucket_max_freq[code] {
-                bucket_max_freq[code] = info.frequency;
+            b.freq_sum += info.frequency;
+            if info.frequency > b.max_freq {
+                b.max_freq = info.frequency;
             }
 
             total_equiv_weighted += equiv * freq_f;
@@ -1858,34 +1975,33 @@ impl Evaluator {
             total_key_presses += freq_f * info.parts.len() as f64;
         }
 
+        // 碰撞统计与首选字初始化：仅遍历非空桶（需求 7.1）。
         let mut total_collisions = 0usize;
         let mut collision_frequency = 0u64;
-        for code in 0..cs {
-            let cnt = code_to_chars[code].len();
+        let mut is_first_candidate = vec![false; n];
+        // 收集需要写回 first 的 (code, first_ci)，避免在遍历不可变借用期间可变借用。
+        let mut first_updates: Vec<(u32, u32)> = Vec::new();
+        full_buckets.for_each_nonempty(|code, b| {
+            let cnt = b.members.len();
             if cnt >= 2 {
                 total_collisions += cnt - 1;
-                collision_frequency += bucket_freq_sum[code] - bucket_max_freq[code];
+                collision_frequency += b.freq_sum - b.max_freq;
             }
-        }
-
-        // 初始化首选标记：每个非空全码桶取 (最大频率, 最小 ci) 为首选字（需求 5.1/5.2）
-        let mut is_first_candidate = vec![false; n];
-        let mut bucket_first = vec![usize::MAX; cs];
-        for code in 0..cs {
-            if code_to_chars[code].is_empty() {
-                continue;
-            }
+            // 首选字：桶内 (最大频率, 最小 ci)（需求 5.1/5.2）
             let mut max_f = 0u64;
-            let mut first = usize::MAX;
-            for &ci in &code_to_chars[code] {
-                let f = ctx.char_infos[ci].frequency;
+            let mut first = u32::MAX;
+            for &ci in &b.members {
+                let f = ctx.char_infos[ci as usize].frequency;
                 if f > max_f || (f == max_f && ci < first) {
                     max_f = f;
                     first = ci;
                 }
             }
-            bucket_first[code] = first;
-            is_first_candidate[first] = true;
+            first_updates.push((code, first));
+        });
+        for (code, first) in first_updates {
+            full_buckets.get_mut_or_insert(code).first = first;
+            is_first_candidate[first as usize] = true;
         }
 
         let inv_tf = if ctx.total_frequency > 0 {
@@ -1900,7 +2016,7 @@ impl Evaluator {
         };
 
         let simple_eval = if build_simple && ctx.enable_simple_code && !ctx.simple_config.levels.is_empty() {
-            Some(SimpleEvaluator::new(ctx, assignment, &code_to_chars, &is_first_candidate, simple_output_scope))
+            Some(SimpleEvaluator::new(ctx, assignment, &full_buckets, &is_first_candidate, simple_output_scope))
         } else {
             None
         };
@@ -1923,12 +2039,9 @@ impl Evaluator {
         let mut e = Self {
             current_codes,
             current_equiv_val,
-            code_to_chars,
+            full_buckets,
             char_bucket_pos,
-            bucket_freq_sum,
-            bucket_max_freq,
             is_first_candidate,
-            bucket_first,
             simple_is_first_dirty: Vec::new(),
             total_collisions,
             collision_frequency,
@@ -1955,14 +2068,15 @@ impl Evaluator {
         e
     }
 
-    /// 重新扫描桶的最大频率与首选字 (max_freq, 最小 ci)
-    /// 首选字取桶内最大频率者，频率并列时取最小 ci（需求 5.1/5.2）
+    /// 重新扫描桶成员的最大频率与首选字 (max_freq, 最小 ci)。
+    /// 首选字取桶内最大频率者，频率并列时取最小 ci（需求 5.1/5.2）。
+    /// 以成员切片为入参（静态），避免与 BucketStore 的可变借用冲突。
     #[inline]
-    fn rescan_bucket_first(&self, ctx: &OptContext, code: usize) -> (u64, usize) {
+    fn rescan_bucket_first(ctx: &OptContext, members: &[u32]) -> (u64, u32) {
         let mut max_f = 0u64;
-        let mut first = usize::MAX;
-        for &ci in &self.code_to_chars[code] {
-            let f = ctx.char_infos[ci].frequency;
+        let mut first = u32::MAX;
+        for &ci in members {
+            let f = ctx.char_infos[ci as usize].frequency;
             if f > max_f || (f == max_f && ci < first) {
                 max_f = f;
                 first = ci;
@@ -1971,16 +2085,16 @@ impl Evaluator {
         (max_f, first)
     }
 
-    /// 重新扫描桶的最大频率（仅 max，不跟踪首选字）。
+    /// 重新扫描桶成员的最大频率（仅 max，不跟踪首选字）。
     ///
     /// 供简码未激活/关闭的纯全码热路径使用：此时无需维护首选字
-    /// `is_first_candidate`/`bucket_first`，仅需 `bucket_max_freq` 用于重码频率统计，
+    /// `is_first_candidate`/`first`，仅需 `max_freq` 用于重码频率统计，
     /// 行为与基线版本（27fcc6d）的 `rescan_bucket_max` 完全一致。
     #[inline]
-    fn rescan_bucket_max(&self, ctx: &OptContext, code: usize) -> u64 {
+    fn rescan_bucket_max(ctx: &OptContext, members: &[u32]) -> u64 {
         let mut max_f = 0u64;
-        for &ci in &self.code_to_chars[code] {
-            let f = ctx.char_infos[ci].frequency;
+        for &ci in members {
+            let f = ctx.char_infos[ci as usize].frequency;
             if f > max_f {
                 max_f = f;
             }
@@ -2023,110 +2137,114 @@ impl Evaluator {
         self.total_equiv_sq_weighted += (new_eq * new_eq - old_eq * old_eq) * freq_f;
         self.current_equiv_val[ci] = new_eq;
 
+        let old_code_u = old_code as u32;
+        let new_code_u = new_code as u32;
+
         // === 从旧桶移除 ===
-        let old_len = self.code_to_chars[old_code].len();
-        // 旧桶的碰撞贡献（移除前）
-        let old_bucket_cc = old_len.saturating_sub(1);
-        let old_bucket_cf = if old_len >= 2 {
-            self.bucket_freq_sum[old_code] - self.bucket_max_freq[old_code]
-        } else {
-            0
-        };
-
-        // swap_remove: 用最后一个元素替换被移除的元素
         let pos = self.char_bucket_pos[ci];
-        let last_idx = old_len - 1;
-        if pos != last_idx {
-            let moved_ci = self.code_to_chars[old_code][last_idx];
-            self.code_to_chars[old_code][pos] = moved_ci;
-            self.char_bucket_pos[moved_ci] = pos;
-        }
-        self.code_to_chars[old_code].pop();
+        let (old_bucket_cc, old_bucket_cf, new_old_cc, new_old_cf, old_first_set, old_now_empty) = {
+            let ob = self.full_buckets.get_mut_or_insert(old_code_u); // 旧桶一定非空
+            let old_len = ob.members.len();
+            // 旧桶的碰撞贡献（移除前）
+            let old_bucket_cc = old_len.saturating_sub(1);
+            let old_bucket_cf = if old_len >= 2 { ob.freq_sum - ob.max_freq } else { 0 };
 
-        // 更新旧桶的频率统计与首选字（需求 5.3）
-        self.bucket_freq_sum[old_code] -= freq;
-        // 如果移除的是 max（含恰为首选字的情况），需要重扫。
-        // 简码激活时维护 (max, 首选)；未激活/简码关闭时仅维护 max（基线行为，性能不退化）。
-        if freq >= self.bucket_max_freq[old_code] {
-            if self.code_to_chars[old_code].is_empty() {
-                self.bucket_max_freq[old_code] = 0;
-                if self.simple_active {
-                    self.bucket_first[old_code] = usize::MAX;
+            // swap_remove: 用最后一个元素替换被移除的元素
+            let last_idx = old_len - 1;
+            if pos != last_idx {
+                let moved_ci = ob.members[last_idx];
+                ob.members[pos] = moved_ci;
+                self.char_bucket_pos[moved_ci as usize] = pos;
+            }
+            ob.members.pop();
+
+            // 更新旧桶的频率统计与首选字（需求 5.3）
+            ob.freq_sum -= freq;
+            // 如果移除的是 max（含恰为首选字的情况），需要重扫。
+            // 简码激活时维护 (max, 首选)；未激活/简码关闭时仅维护 max（基线行为，性能不退化）。
+            let mut old_first_set: Option<u32> = None;
+            if freq >= ob.max_freq {
+                if ob.members.is_empty() {
+                    ob.max_freq = 0;
+                    if self.simple_active {
+                        ob.first = u32::MAX;
+                    }
+                } else if self.simple_active {
+                    let (mf, first) = Self::rescan_bucket_first(ctx, &ob.members);
+                    ob.max_freq = mf;
+                    ob.first = first;
+                    old_first_set = Some(first);
+                } else {
+                    ob.max_freq = Self::rescan_bucket_max(ctx, &ob.members);
                 }
-            } else if self.simple_active {
-                let (mf, first) = self.rescan_bucket_first(ctx, old_code);
-                self.bucket_max_freq[old_code] = mf;
-                self.bucket_first[old_code] = first;
-                self.is_first_candidate[first] = true;
-                // 记录首选翻转（resort 种子）；apply_simple_for_move 才会清空它。
-                // 仅候选字才会被 apply_simple_for_move 用作 resort 种子，故只 push 候选字，
-                // 避免非候选字白白堆入缓冲、增大种子扫描（性能优化，行为等价）。
-                if ctx.simple_is_candidate[first] {
-                    self.simple_is_first_dirty.push(first);
-                }
-            } else {
-                self.bucket_max_freq[old_code] = self.rescan_bucket_max(ctx, old_code);
+            }
+
+            let new_old_len = ob.members.len();
+            let new_old_cc = new_old_len.saturating_sub(1);
+            let new_old_cf = if new_old_len >= 2 { ob.freq_sum - ob.max_freq } else { 0 };
+            let old_now_empty = ob.members.is_empty();
+            (old_bucket_cc, old_bucket_cf, new_old_cc, new_old_cf, old_first_set, old_now_empty)
+        };
+        // 旧桶若新首选翻转：标记 is_first_candidate 与 resort 种子（ob 借用已释放）。
+        if let Some(first) = old_first_set {
+            self.is_first_candidate[first as usize] = true;
+            // 记录首选翻转（resort 种子）；apply_simple_for_move 才会清空它。
+            // 仅候选字才会被用作 resort 种子，故只 push 候选字（性能优化，行为等价）。
+            if ctx.simple_is_candidate[first as usize] {
+                self.simple_is_first_dirty.push(first as usize);
             }
         }
-
-        let new_old_len = self.code_to_chars[old_code].len();
-        let new_old_cc = new_old_len.saturating_sub(1);
-        let new_old_cf = if new_old_len >= 2 {
-            self.bucket_freq_sum[old_code] - self.bucket_max_freq[old_code]
-        } else {
-            0
-        };
+        // 旧桶变空：移除条目以维持稀疏有界不变量（需求 2.1）。
+        if old_now_empty {
+            self.full_buckets.remove(old_code_u);
+        }
 
         // === 插入新桶 ===
-        let new_len = self.code_to_chars[new_code].len();
-        let new_bucket_cc = new_len.saturating_sub(1);
-        let new_bucket_cf = if new_len >= 2 {
-            self.bucket_freq_sum[new_code] - self.bucket_max_freq[new_code]
-        } else {
-            0
-        };
+        let (new_bucket_cc, new_bucket_cf, after_new_cc, after_new_cf) = {
+            let nb = self.full_buckets.get_mut_or_insert(new_code_u);
+            let new_len = nb.members.len();
+            let new_bucket_cc = new_len.saturating_sub(1);
+            let new_bucket_cf = if new_len >= 2 { nb.freq_sum - nb.max_freq } else { 0 };
 
-        let new_pos = new_len;
-        self.code_to_chars[new_code].push(ci);
-        self.char_bucket_pos[ci] = new_pos;
-        self.bucket_freq_sum[new_code] += freq;
-        // 加入新桶后增量维护首选字（需求 5.3）：取插入前的桶状态判定。
-        // 仅在简码激活时维护；未激活/简码关闭时跳过整段（基线行为，仅下方更新 max）。
-        if self.simple_active {
-            let prev_first = self.bucket_first[new_code];
-            let prev_max = self.bucket_max_freq[new_code];
-            let becomes_first = prev_first == usize::MAX
-                || freq > prev_max
-                || (freq == prev_max && ci < prev_first);
-            if becomes_first {
-                if prev_first != usize::MAX {
-                    self.is_first_candidate[prev_first] = false;
-                    if ctx.simple_is_candidate[prev_first] {
-                        self.simple_is_first_dirty.push(prev_first);
+            let new_pos = new_len;
+            nb.members.push(ci as u32);
+            self.char_bucket_pos[ci] = new_pos;
+            nb.freq_sum += freq;
+            // 加入新桶后增量维护首选字（需求 5.3）：取插入前的桶状态判定。
+            // 仅在简码激活时维护；未激活/简码关闭时跳过整段（基线行为，仅下方更新 max）。
+            if self.simple_active {
+                let prev_first = nb.first;
+                let prev_max = nb.max_freq;
+                let becomes_first = prev_first == u32::MAX
+                    || freq > prev_max
+                    || (freq == prev_max && (ci as u32) < prev_first);
+                if becomes_first {
+                    if prev_first != u32::MAX {
+                        self.is_first_candidate[prev_first as usize] = false;
+                        if ctx.simple_is_candidate[prev_first as usize] {
+                            self.simple_is_first_dirty.push(prev_first as usize);
+                        }
+                    }
+                    nb.first = ci as u32;
+                    self.is_first_candidate[ci] = true;
+                    if ctx.simple_is_candidate[ci] {
+                        self.simple_is_first_dirty.push(ci);
+                    }
+                } else {
+                    self.is_first_candidate[ci] = false;
+                    if ctx.simple_is_candidate[ci] {
+                        self.simple_is_first_dirty.push(ci);
                     }
                 }
-                self.bucket_first[new_code] = ci;
-                self.is_first_candidate[ci] = true;
-                if ctx.simple_is_candidate[ci] {
-                    self.simple_is_first_dirty.push(ci);
-                }
-            } else {
-                self.is_first_candidate[ci] = false;
-                if ctx.simple_is_candidate[ci] {
-                    self.simple_is_first_dirty.push(ci);
-                }
             }
-        }
-        if freq > self.bucket_max_freq[new_code] {
-            self.bucket_max_freq[new_code] = freq;
-        }
+            if freq > nb.max_freq {
+                nb.max_freq = freq;
+            }
 
-        let after_new_len = new_len + 1;
-        let after_new_cc = after_new_len.saturating_sub(1);
-        let after_new_cf = if after_new_len >= 2 {
-            self.bucket_freq_sum[new_code] - self.bucket_max_freq[new_code]
-        } else {
-            0
+            let after_new_len = new_len + 1;
+            let after_new_cc = after_new_len.saturating_sub(1);
+            let after_new_cf = if after_new_len >= 2 { nb.freq_sum - nb.max_freq } else { 0 };
+            (new_bucket_cc, new_bucket_cf, after_new_cc, after_new_cf)
         };
 
         // 更新全局碰撞计数
@@ -2580,10 +2698,10 @@ impl Evaluator {
         // 全量重建已从零重算全部首选/出简状态，残留的增量「首选翻转」resort 种子作废；
         // 在此清空，防止 warmup/coordinate_descent 等只走 rebuild_simple 的路径上该缓冲累积增长。
         self.simple_is_first_dirty.clear();
-        let code_to_chars = &self.code_to_chars;
+        let full_buckets = &self.full_buckets;
         let is_first_candidate = &self.is_first_candidate;
         if let Some(ref mut se) = self.simple_eval {
-            se.full_rebuild(ctx, assignment, code_to_chars, is_first_candidate);
+            se.full_rebuild(ctx, assignment, full_buckets, is_first_candidate);
             se.cached_simple_score = se.compute_simple_score(ctx);
             se.simple_score_dirty = false;
         }
@@ -2667,7 +2785,7 @@ impl Evaluator {
         // 读取完毕，清空首选翻转登记缓冲，避免跨移动累积（拒绝路径的反向翻转作为下次种子无害）。
         self.simple_is_first_dirty.clear();
 
-        let code_to_chars = &self.code_to_chars;
+        let full_buckets = &self.full_buckets;
         let is_first_candidate = &self.is_first_candidate;
         if let Some(ref mut se) = self.simple_eval {
             se.apply_move_incremental(
@@ -2676,7 +2794,7 @@ impl Evaluator {
                 &affected_candidates,
                 &resort_seeds,
                 &full_affected_chars,
-                code_to_chars,
+                full_buckets,
                 is_first_candidate,
             );
             se.cached_simple_score = se.compute_simple_score(ctx);
@@ -2736,7 +2854,7 @@ impl Evaluator {
             self.simple_eval = Some(SimpleEvaluator::new(
                 ctx,
                 assignment,
-                &self.code_to_chars,
+                &self.full_buckets,
                 &self.is_first_candidate,
                 false, // 退火激活：active 候选范围
             ));
@@ -2758,22 +2876,23 @@ impl Evaluator {
         for v in self.is_first_candidate.iter_mut() {
             *v = false;
         }
-        for code in 0..self.code_to_chars.len() {
-            if self.code_to_chars[code].is_empty() {
-                self.bucket_first[code] = usize::MAX;
-                continue;
-            }
+        // 仅遍历非空桶（需求 7.1）。先收集每桶首选字，再写回，避免迭代期可变借用。
+        let mut first_updates: Vec<(u32, u32)> = Vec::new();
+        self.full_buckets.for_each_nonempty(|code, b| {
             let mut max_f = 0u64;
-            let mut first = usize::MAX;
-            for &ci in &self.code_to_chars[code] {
-                let f = ctx.char_infos[ci].frequency;
+            let mut first = u32::MAX;
+            for &ci in &b.members {
+                let f = ctx.char_infos[ci as usize].frequency;
                 if f > max_f || (f == max_f && ci < first) {
                     max_f = f;
                     first = ci;
                 }
             }
-            self.bucket_first[code] = first;
-            self.is_first_candidate[first] = true;
+            first_updates.push((code, first));
+        });
+        for (code, first) in first_updates {
+            self.full_buckets.get_mut_or_insert(code).first = first;
+            self.is_first_candidate[first as usize] = true;
         }
     }
 
@@ -3039,6 +3158,19 @@ mod first_candidate_tests {
     use rand::thread_rng;
     use std::collections::HashMap;
 
+    // 后端选择日志行（需求 12.2/12.3/12.4/12.6）：数字均来自运行时参数。
+    #[test]
+    fn backend_log_line_content() {
+        // 小容量 → Dense，行内含 "Dense" 与预估 MB。
+        let dense = backend_log_line("全码桶", 1024, 40, 11177);
+        assert!(dense.contains("Dense"), "应标记 Dense: {dense}");
+        assert!(dense.contains("1024"), "应含运行时容量: {dense}");
+        // 超阈值容量 → Sparse，行内含 "Sparse" 与运行时 n_chars 提示。
+        let sparse = backend_log_line("全码桶", 33_554_432, 40, 11177);
+        assert!(sparse.contains("Sparse"), "应标记 Sparse: {sparse}");
+        assert!(sparse.contains("n_chars(11177)"), "应含运行时 n_chars 提示: {sparse}");
+    }
+
     /// 构建最小 OptContext：每个频率对应一个动态组，每组含 1 个字根、1 个单部件汉字。
     /// 不同组的汉字被分到同一键位时即产生重码（全码桶）。`enable_simple` 控制是否启用简码：
     /// 启用时附带一个 `"Aa"` 规则的简码级别（使主评估器持有 `SimpleEvaluator` 且
@@ -3190,7 +3322,7 @@ mod first_candidate_tests {
 
                 // 一致性约束：恰有「非空全码桶数量」个汉字被标记为首选字
                 let n_true = ev.is_first_candidate.iter().filter(|&&b| b).count();
-                let n_nonempty = ev.code_to_chars.iter().filter(|b| !b.is_empty()).count();
+                let n_nonempty = ev.full_buckets.nonempty_count();
                 prop_assert_eq!(n_true, n_nonempty);
             }
         }
@@ -4131,6 +4263,60 @@ mod incremental_full_consistency_tests {
         ev.apply_simple_for_move(ctx, assignment, &[r]);
     }
 
+    // Feature: sparse-bucket-memory-optimization, Property 5: 增量 == 全量重建（稀疏后端）
+    //
+    // 强制 BucketStore 走稀疏后端（线程局部阈值覆盖 = 0），对随机移动序列断言：
+    // 稀疏后端的「增量维护」结果与对同一分配「从零全量重建（稀疏）」逐字段一致，且与
+    // 密集后端从零重建的全码/简码指标一致（证明稀疏路径与基线密集等价）。
+    // Validates: Requirements 3.1, 3.2, 3.4, 4.6, 5.2, 5.5, 8.x
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(60))]
+        #[test]
+        fn prop5_sparse_evaluator_matches_dense(
+            mode_is_freq in any::<bool>(),
+            specs in prop::collection::vec((1u64..6, 1usize..4), 3usize..8),
+            moves in prop::collection::vec((0usize..12, 0u8..2), 0usize..40),
+        ) {
+            let mode = if mode_is_freq { SimpleAssignMode::Frequency } else { SimpleAssignMode::Efficiency };
+            let ctx = make_ctx(&specs, mode, 1, 1.0);
+            let n = ctx.num_groups;
+
+            // 稀疏增量：从零分配开始，逐步施加移动（强制稀疏后端）。
+            crate::bucket_store::set_test_threshold_override(Some(0));
+            let mut asg_sparse = vec![0u8; n];
+            let mut ev_sparse = Evaluator::new(&ctx, &asg_sparse);
+            for &(g, k) in &moves {
+                let r = g % n;
+                apply_move_inc(&mut ev_sparse, &ctx, &mut asg_sparse, r, k);
+            }
+            // 稀疏全量重建（对最终分配从零构建）作为同后端 oracle。
+            let ev_sparse_full = Evaluator::new(&ctx, &asg_sparse);
+            crate::bucket_store::set_test_threshold_override(None);
+
+            // 密集全量重建（默认阈值）作为基线 oracle。
+            let asg_final = asg_sparse.clone();
+            let ev_dense_full = Evaluator::new(&ctx, &asg_final);
+
+            // 后端确为稀疏 / 密集（防回归）。
+            prop_assert_eq!(ev_sparse.full_buckets.backend_kind(), crate::bucket_store::BackendKind::Sparse);
+            prop_assert_eq!(ev_dense_full.full_buckets.backend_kind(), crate::bucket_store::BackendKind::Dense);
+
+            // 稀疏增量 == 稀疏全量重建（内部一致性）。
+            assert_simple_eq(&ctx, &ev_sparse, &ev_sparse_full, "sparse-inc vs sparse-full")?;
+            // 稀疏增量 == 密集全量重建（与基线等价）。
+            assert_simple_eq(&ctx, &ev_sparse, &ev_dense_full, "sparse-inc vs dense-full")?;
+
+            // 全码指标也须一致（重码数 / 重码率 / 当量）。
+            let mut ev_sparse_mut = ev_sparse;
+            let mut ev_dense_mut = ev_dense_full;
+            let ms = ev_sparse_mut.get_metrics(&ctx);
+            let md = ev_dense_mut.get_metrics(&ctx);
+            prop_assert_eq!(ms.collision_count, md.collision_count, "全码重码数 稀疏≠密集");
+            prop_assert!((ms.collision_rate - md.collision_rate).abs() < 1e-9, "全码重码率 稀疏≠密集");
+            prop_assert!((ms.equiv_mean - md.equiv_mean).abs() < 1e-9, "全码当量 稀疏≠密集");
+        }
+    }
+
     /// 逐字段断言两个 SimpleEvaluator 的全部简码指标与状态一致。
     ///
     /// 比对内容：weighted_freq_coverage / equiv_mean / dist_deviation /
@@ -4874,8 +5060,8 @@ mod rollback_roundtrip_tests {
     /// 单个级别的可比较状态快照（用于逐字段精确比对）。
     #[derive(Clone, PartialEq, Debug)]
     struct LevelSnap {
-        /// 各桶 (成员列表, freq_sum)
-        buckets: Vec<(Vec<usize>, u64)>,
+        /// 各非空桶 (编码, 成员列表, freq_sum)，按编码升序，便于稀疏/密集后端等价比对。
+        buckets: Vec<(u32, Vec<u32>, u64)>,
         current_simple_code: Vec<i64>,
         selected: Vec<bool>,
         covered_freq: u64,
@@ -4900,7 +5086,7 @@ mod rollback_roundtrip_tests {
         simple_collision_rate: f64,
         cached_simple_score: f64,
         last_full_codes: Vec<usize>,
-        bucket_collision_contrib: Vec<(usize, u64)>,
+        bucket_collision_contrib: FxHashMap<u32, (usize, u64)>,
     }
 
     /// 从 Evaluator 持有的 SimpleEvaluator 抽取完整状态快照。
@@ -4910,11 +5096,15 @@ mod rollback_roundtrip_tests {
             .levels
             .iter()
             .map(|lv| LevelSnap {
-                buckets: lv
-                    .buckets
-                    .iter()
-                    .map(|b| (b.members.clone(), b.freq_sum))
-                    .collect(),
+                buckets: {
+                    let mut v: Vec<(u32, Vec<u32>, u64)> = lv
+                        .buckets
+                        .iter_nonempty()
+                        .map(|(c, b)| (c, b.members.clone(), b.freq_sum))
+                        .collect();
+                    v.sort_by_key(|t| t.0);
+                    v
+                },
                 current_simple_code: lv.current_simple_code.clone(),
                 selected: lv.selected.clone(),
                 covered_freq: lv.covered_freq,
@@ -5668,32 +5858,11 @@ mod space_commit_and_length_tests {
         )
     }
 
-    /// 构建 SimpleEvaluator 所需的 full_code_to_chars 与 is_first_candidate（与
+    /// 构建 SimpleEvaluator 所需的全码桶存储与 is_first_candidate（与
     /// `save_simple_code_output` / `Evaluator::new` 同口径）。
     fn build_simple_eval(ctx: &OptContext, asg: &[u8]) -> SimpleEvaluator {
-        let n = ctx.char_infos.len();
-        let cs = ctx.code_space;
-        let mut full_code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
-        for ci in 0..n {
-            full_code_to_chars[ctx.calc_code_only(ci, asg)].push(ci);
-        }
-        let mut is_first = vec![false; n];
-        for chars in full_code_to_chars.iter() {
-            if chars.is_empty() {
-                continue;
-            }
-            let mut max_f = 0u64;
-            let mut first = usize::MAX;
-            for &ci in chars {
-                let f = ctx.char_infos[ci].frequency;
-                if f > max_f || (f == max_f && ci < first) {
-                    max_f = f;
-                    first = ci;
-                }
-            }
-            is_first[first] = true;
-        }
-        SimpleEvaluator::new(ctx, asg, &full_code_to_chars, &is_first, false)
+        let (full_buckets, is_first) = build_full_buckets(ctx, asg);
+        SimpleEvaluator::new(ctx, asg, &full_buckets, &is_first, false)
     }
 
     /// 该级指令步数（None 计 0）。
@@ -6045,12 +6214,13 @@ mod fixed_simple_code_tests {
         for li in 0..se.levels.len() {
             let cn = se.levels[li].code_num;
             let lvl = &se.levels[li];
-            for code in 0..lvl.buckets.len() {
+            for (code, b) in lvl.buckets.iter_nonempty() {
+                let code = code as usize;
                 let occ = ctx.simple_fixed_occ(li, code);
-                let sel_count = lvl.buckets[code]
+                let sel_count = b
                     .members
                     .iter()
-                    .filter(|&&ci| lvl.selected[ci])
+                    .filter(|&&ci| lvl.selected[ci as usize])
                     .count();
                 prop_assert!(sel_count <= cn.saturating_sub(occ),
                     "级别 {} 桶 {} 优化出简数 {} 超过可选名额 max(0, {} - {})", li, code, sel_count, cn, occ);
