@@ -267,6 +267,76 @@ pub fn load_keymap(keymap_path: &str, division_path: &str) -> HashMap<String, u8
     root_to_key
 }
 
+/// 将 keymap（子字根名 → 键位）据当前 `ctx` 折叠为退火初始分配（assignment），并做约束校验。
+///
+/// 用于「从既有结果给 optimize 播种」：把一份既有 `output-keymap.txt` 解析（`load_keymap`）
+/// 得到的「子字根名 → 键位」映射，按**当前** `ctx` 的字根组结构折叠成 `assignment[group] = key`。
+///
+/// 校验（均基于当前 `ctx`，不依赖种子目录里备份的旧输入）：
+/// - 仅处理属于动态/受限组的字根名；固定字根名不在 `ctx.root_to_group` 中，跳过；
+/// - 键位必须 ∈ 该组 `allowed_keys`，否则返回 `Err`（含字根名与键位）；
+/// - 同组多个子字根名映射到不同键位（组内不一致）返回 `Err`（含组信息）。
+///
+/// 缺失组（种子未覆盖到的组）从其 `allowed_keys` 用 `rng` 随机合法填充，使最终分配为
+/// 当前方案下的合法分配；返回随机填充的组数 `filled` 供调用方日志提醒。
+///
+/// 所有运行时量（`ctx.num_groups`、各组 `allowed_keys`）均取自 `ctx`，不写死。
+///
+/// # 返回值
+/// - `Ok((assignment, filled))`：`assignment` 长度为 `ctx.num_groups`，每组键位均合法；
+///   `filled` 为随机填充的缺失组数。
+/// - `Err(msg)`：键位非法或组内不一致。
+pub fn keymap_to_assignment(
+    ctx: &crate::context::OptContext,
+    root_to_key: &HashMap<String, u8>,
+    rng: &mut impl rand::Rng,
+) -> Result<(Vec<u8>, usize), String> {
+    let n = ctx.num_groups;
+    // None = 未赋值；用于检测缺失组与组内不一致
+    let mut chosen: Vec<Option<u8>> = vec![None; n];
+
+    for (name, &key) in root_to_key {
+        // 仅处理属于动态/受限组的字根名；固定字根（fixed_roots）不在 root_to_group 中 → 跳过
+        let gi = match ctx.root_to_group.get(name) {
+            Some(&gi) => gi,
+            None => continue,
+        };
+        // 约束 1：键位必须在该组 allowed_keys 内
+        if !ctx.groups[gi].allowed_keys.contains(&key) {
+            return Err(format!(
+                "字根 '{}' 的键位 {} 不在组 {} 的 allowed_keys {:?} 内",
+                name, key, gi, ctx.groups[gi].allowed_keys
+            ));
+        }
+        // 约束 2：组内一致
+        match chosen[gi] {
+            Some(prev) if prev != key => {
+                return Err(format!(
+                    "组 {} 内字根映射到不同键位({} vs {})，种子与当前方案不一致",
+                    gi, prev, key
+                ));
+            }
+            _ => chosen[gi] = Some(key),
+        }
+    }
+
+    // 缺失组：随机合法填充
+    let mut filled = 0usize;
+    let mut assignment = vec![0u8; n];
+    for gi in 0..n {
+        match chosen[gi] {
+            Some(k) => assignment[gi] = k,
+            None => {
+                let allowed = &ctx.groups[gi].allowed_keys;
+                // allowed 恒非空（由 load_fixed/load_dynamic 保证）
+                assignment[gi] = allowed[rng.gen_range(0..allowed.len())];
+                filled += 1;
+            }
+        }
+    }
+    Ok((assignment, filled))
+}
+
 /// 加载键位分布配置
 /// 
 /// # 返回值
@@ -299,4 +369,160 @@ pub fn load_key_distribution(path: &str) -> [KeyDistConfig; 31] {
         }
     }
     cfg
+}
+
+// =========================================================================
+// 🧪 keymap → assignment 转换/校验测试（seed-optimize-from-result, 需求 4/5）
+// =========================================================================
+#[cfg(test)]
+mod keymap_assignment_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::context::OptContext;
+    use crate::types::{
+        ScaleConfig, SimpleCodeConfig, WeightConfig, EQUIV_TABLE_SIZE,
+    };
+    use proptest::prelude::*;
+    use rand::{thread_rng, Rng};
+
+    /// 由一组 `RootGroup` 构造最小 OptContext（不启用简码）。
+    fn make_ctx_from_groups(groups: Vec<RootGroup>) -> OptContext {
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(groups.len());
+        for (gi, g) in groups.iter().enumerate() {
+            let ch = char::from_u32(0x4e00 + gi as u32).unwrap();
+            splits.push((ch, vec![g.roots[0].clone()], 100u64));
+        }
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels: vec![] },
+            WeightConfig::default(),
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 由「每组的 allowed_keys」构造 ctx，组名为 g0/g1/...（每组单根）。
+    fn make_ctx(group_allowed: &[Vec<u8>]) -> OptContext {
+        let groups: Vec<RootGroup> = group_allowed
+            .iter()
+            .enumerate()
+            .map(|(gi, allowed)| RootGroup {
+                roots: vec![format!("g{gi}")],
+                allowed_keys: allowed.clone(),
+            })
+            .collect();
+        make_ctx_from_groups(groups)
+    }
+
+    /// 非空键位子集（取自 [0,1,2,3]，去重）。
+    fn subset() -> impl Strategy<Value = Vec<u8>> {
+        prop::collection::vec(0u8..4, 1..5).prop_map(|mut v| {
+            v.sort();
+            v.dedup();
+            v
+        })
+    }
+
+    /// 1..6 个组，每组一个非空 allowed_keys 子集。
+    fn groups_strategy() -> impl Strategy<Value = Vec<Vec<u8>>> {
+        prop::collection::vec(subset(), 1..6)
+    }
+
+    #[test]
+    fn group_internal_inconsistency_errors() {
+        // 同组两个子根映射到不同键 → Err（需求 4.4）
+        let groups = vec![RootGroup {
+            roots: vec!["a".to_string(), "b".to_string()],
+            allowed_keys: vec![0, 1, 2],
+        }];
+        let ctx = make_ctx_from_groups(groups);
+        let mut rng = thread_rng();
+        let mut m: HashMap<String, u8> = HashMap::new();
+        m.insert("a".to_string(), 0);
+        m.insert("b".to_string(), 1);
+        assert!(keymap_to_assignment(&ctx, &m, &mut rng).is_err());
+    }
+
+    #[test]
+    fn fixed_root_name_skipped() {
+        // 不属于任何组的字根名被跳过，不触发 allowed_keys 校验（需求 4.2）
+        let groups = vec![RootGroup {
+            roots: vec!["a".to_string()],
+            allowed_keys: vec![0, 1, 2],
+        }];
+        let ctx = make_ctx_from_groups(groups);
+        let mut rng = thread_rng();
+        let mut m: HashMap<String, u8> = HashMap::new();
+        m.insert("不在任何组的固定根".to_string(), 99); // 非法键但被跳过
+        let (asg, filled) = keymap_to_assignment(&ctx, &m, &mut rng).unwrap();
+        assert_eq!(filled, 1, "唯一组未覆盖应随机填充");
+        assert!(ctx.groups[0].allowed_keys.contains(&asg[0]));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        // Feature: seed-optimize-from-result, Property 1: 合法种子转换得到合法且一致的分配
+        #[test]
+        fn prop_full_coverage_legal(group_allowed in groups_strategy()) {
+            let ctx = make_ctx(&group_allowed);
+            let mut rng = thread_rng();
+            let mut root_to_key: HashMap<String, u8> = HashMap::new();
+            let mut chosen = vec![0u8; group_allowed.len()];
+            for gi in 0..group_allowed.len() {
+                let allowed = &group_allowed[gi];
+                let k = allowed[rng.gen_range(0..allowed.len())];
+                chosen[gi] = k;
+                root_to_key.insert(format!("g{gi}"), k);
+            }
+            let (asg, filled) = keymap_to_assignment(&ctx, &root_to_key, &mut rng).unwrap();
+            prop_assert_eq!(filled, 0);
+            for gi in 0..group_allowed.len() {
+                prop_assert_eq!(asg[gi], chosen[gi]);
+                prop_assert!(group_allowed[gi].contains(&asg[gi]));
+            }
+        }
+
+        // Feature: seed-optimize-from-result, Property 2: 非法键位被拒绝
+        #[test]
+        fn prop_illegal_key_rejected(group_allowed in groups_strategy(), pick in 0usize..100) {
+            let ctx = make_ctx(&group_allowed);
+            let mut rng = thread_rng();
+            let gi = pick % group_allowed.len();
+            let mut root_to_key: HashMap<String, u8> = HashMap::new();
+            // 99 永不在 allowed_keys（⊆ [0,3]）内 → 必为非法
+            root_to_key.insert(format!("g{gi}"), 99u8);
+            prop_assert!(keymap_to_assignment(&ctx, &root_to_key, &mut rng).is_err());
+        }
+
+        // Feature: seed-optimize-from-result, Property 3: 缺失组随机填充后分配合法且计数正确
+        #[test]
+        fn prop_partial_fill(group_allowed in groups_strategy(), mask in any::<u64>()) {
+            let n = group_allowed.len();
+            let ctx = make_ctx(&group_allowed);
+            let mut rng = thread_rng();
+            let mut root_to_key: HashMap<String, u8> = HashMap::new();
+            let mut covered = 0usize;
+            for gi in 0..n {
+                if (mask >> gi) & 1 == 1 {
+                    let allowed = &group_allowed[gi];
+                    let k = allowed[rng.gen_range(0..allowed.len())];
+                    root_to_key.insert(format!("g{gi}"), k);
+                    covered += 1;
+                }
+            }
+            let (asg, filled) = keymap_to_assignment(&ctx, &root_to_key, &mut rng).unwrap();
+            prop_assert_eq!(filled, n - covered);
+            for gi in 0..n {
+                prop_assert!(group_allowed[gi].contains(&asg[gi]));
+            }
+        }
+    }
 }

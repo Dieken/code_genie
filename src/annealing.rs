@@ -866,7 +866,7 @@ pub fn simulated_annealing(
 ) -> (Vec<u8>, f64, Metrics, SimpleMetrics) {
     // 向后兼容入口（测试/无 checkpoint 场景）：不写 checkpoint、不可中断、不 resume。
     let stop_flag = Arc::new(AtomicBool::new(false));
-    let r = simulated_annealing_resumable(ctx, cfg, thread_id, &stop_flag, None, None, usize::MAX);
+    let r = simulated_annealing_resumable(ctx, cfg, thread_id, &stop_flag, None, None, usize::MAX, None);
     (r.assignment, r.score, r.metrics, r.simple_metrics)
 }
 
@@ -876,6 +876,9 @@ pub fn simulated_annealing(
 /// - `resume`：若为 `Some(tc)`，从该线程检查点恢复（跳过 multi_start_init），从 `tc.current_step` 续算。
 /// - `ckpt_dir`：checkpoint 目录；为 `None` 时不写 checkpoint（向后兼容入口）。
 /// - `checkpoint_interval`：每隔多少步写一次 checkpoint（`usize::MAX` 实际等于不周期写）。
+/// - `seed`：若为 `Some(s)`（仅 fresh 路径生效），用 `s` 作为退火初始分配替代 `multi_start_init`
+///   （从既有结果播种微调）；走 fresh 路径（起始步 0、`new_full_only`、简码延迟激活），
+///   与 resume 续算互斥（`resume.is_some()` 时忽略 `seed`）。
 pub fn simulated_annealing_resumable(
     ctx: &OptContext,
     cfg: &Config,
@@ -884,6 +887,7 @@ pub fn simulated_annealing_resumable(
     resume: Option<&ThreadCheckpoint>,
     ckpt_dir: Option<&Path>,
     checkpoint_interval: usize,
+    seed: Option<&[u8]>,
 ) -> SaResult {
     let mut rng = thread_rng();
 
@@ -901,7 +905,12 @@ pub fn simulated_annealing_resumable(
         start_step = tc.current_step;
         evaluator = Evaluator::new(ctx, &assignment);
     } else {
-        assignment = multi_start_init(ctx, cfg, thread_id);
+        // fresh：seed 存在则用种子作为初始解（从既有结果播种），否则 multi_start_init。
+        // 两种情形均走 fresh 路径：起始步 0、new_full_only（简码延迟激活）。
+        assignment = match seed {
+            Some(s) => s.to_vec(),
+            None => multi_start_init(ctx, cfg, thread_id),
+        };
         start_step = 0;
         evaluator = Evaluator::new_full_only(ctx, &assignment);
     }
@@ -2598,7 +2607,7 @@ mod resume_tests {
         let stop = Arc::new(AtomicBool::new(false));
 
         // 1) fresh 运行至完成：应周期写出 thread-00.json。
-        let r0 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, None, Some(&ckpt_dir), interval);
+        let r0 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, None, Some(&ckpt_dir), interval, None);
         assert!(!r0.interrupted);
         let tpath = checkpoint::thread_path(&ckpt_dir, 0);
         assert!(tpath.exists(), "fresh 运行应写出 thread-00.json");
@@ -2608,7 +2617,7 @@ mod resume_tests {
         assert_eq!(tc.current_step % interval, 0);
 
         // 2) 从该检查点 resume 续算：best 不退化（单调），返回有效结果。
-        let r1 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, Some(&tc), Some(&ckpt_dir), interval);
+        let r1 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, Some(&tc), Some(&ckpt_dir), interval, None);
         assert!(!r1.interrupted);
         assert!(
             r1.score <= tc.best_score + 1e-9,
@@ -2630,7 +2639,7 @@ mod resume_tests {
         let stop = Arc::new(AtomicBool::new(false));
 
         // 先跑一次拿到一个合法 best_assignment 与分量。
-        let r0 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, None, Some(&ckpt_dir), usize::MAX);
+        let r0 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, None, Some(&ckpt_dir), usize::MAX, None);
         let mut tc = checkpoint::load_thread_checkpoint(&checkpoint::thread_path(&ckpt_dir, 0))
             .unwrap_or(ThreadCheckpoint {
                 thread_id: 0,
@@ -2651,9 +2660,45 @@ mod resume_tests {
         // 标记为「已完成」：current_step = total_steps。
         tc.current_step = total_steps;
 
-        let r1 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, Some(&tc), Some(&ckpt_dir), usize::MAX);
+        let r1 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, Some(&tc), Some(&ckpt_dir), usize::MAX, None);
         assert!(!r1.interrupted);
         assert!(r1.score <= tc.best_score + 1e-9);
         let _ = std::fs::remove_dir_all(&ckpt_dir);
+    }
+
+    // Feature: seed-optimize-from-result, Property 5: 播种起点不退化（种子被忠实采用）
+    #[test]
+    fn seed_start_does_not_regress() {
+        let ctx = make_ctx(8);
+        // 构造一个合法 Seed_Assignment：每组取其 allowed_keys[0]。
+        let seed: Vec<u8> = (0..ctx.num_groups)
+            .map(|gi| ctx.groups[gi].allowed_keys[0])
+            .collect();
+        // 种子起点的初始得分（以该种子直接构建评估器）。
+        let seed_init_score = Evaluator::new(&ctx, &seed).get_score(&ctx);
+
+        let total_steps = 500usize; // 极小步数
+        let cfg = tiny_cfg(total_steps);
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // 以 seed 播种走 fresh 路径（resume=None, ckpt_dir=None）。
+        let r = simulated_annealing_resumable(
+            &ctx,
+            &cfg,
+            0,
+            &stop,
+            None,
+            None,
+            usize::MAX,
+            Some(&seed),
+        );
+        assert!(!r.interrupted);
+        assert_eq!(r.assignment.len(), ctx.num_groups, "返回分配长度应等于组数");
+        assert!(
+            r.score <= seed_init_score + 1e-9,
+            "退火最优不应差于种子起点: {} > {}",
+            r.score,
+            seed_init_score
+        );
     }
 }
