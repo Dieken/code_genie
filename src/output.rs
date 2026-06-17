@@ -109,29 +109,8 @@ fn evaluator_simple_selection(ctx: &OptContext, assignment: &[u8]) -> Vec<(usize
     if !ctx.enable_simple_code || ctx.simple_config.levels.is_empty() {
         return Vec::new();
     }
-    let n = ctx.char_infos.len();
-    let cs = ctx.code_space;
-    let mut full_code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
-    for ci in 0..n {
-        full_code_to_chars[ctx.calc_code_only(ci, assignment)].push(ci);
-    }
-    let mut is_first = vec![false; n];
-    for chars in full_code_to_chars.iter() {
-        if chars.is_empty() {
-            continue;
-        }
-        let mut max_f = 0u64;
-        let mut first = usize::MAX;
-        for &ci in chars {
-            let f = ctx.char_infos[ci].frequency;
-            if f > max_f || (f == max_f && ci < first) {
-                max_f = f;
-                first = ci;
-            }
-        }
-        is_first[first] = true;
-    }
-    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first, true);
+    let (full_buckets, is_first) = crate::evaluator::build_full_buckets(ctx, assignment);
+    let se = SimpleEvaluator::new(ctx, assignment, &full_buckets, &is_first, true);
     se.selected_ordered(ctx, &is_first)
 }
 
@@ -225,35 +204,10 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         return;
     }
 
-    // 构建全码到汉字的映射
-    let n = ctx.char_infos.len();
-    let cs = ctx.code_space;
-    let mut full_code_to_chars: Vec<Vec<usize>> = vec![Vec::new(); cs];
-    for ci in 0..n {
-        let code = ctx.calc_code_only(ci, assignment);
-        full_code_to_chars[code].push(ci);
-    }
+    // 构建全码桶存储与首选标记（与 Evaluator::new 同口径），供 Efficiency 模式 sel_len 取值。
+    let (full_buckets, is_first_candidate) = crate::evaluator::build_full_buckets(ctx, assignment);
 
-    // 计算首选标记：每个非空全码桶取 (最大频率, 最小 ci) 为首选字（需求 5.1/5.2），
-    // 供 Efficiency 模式排序键的 sel_len 取值。
-    let mut is_first_candidate = vec![false; n];
-    for chars in full_code_to_chars.iter() {
-        if chars.is_empty() {
-            continue;
-        }
-        let mut max_f = 0u64;
-        let mut first = usize::MAX;
-        for &ci in chars {
-            let f = ctx.char_infos[ci].frequency;
-            if f > max_f || (f == max_f && ci < first) {
-                max_f = f;
-                first = ci;
-            }
-        }
-        is_first_candidate[first] = true;
-    }
-
-    let se = SimpleEvaluator::new(ctx, assignment, &full_code_to_chars, &is_first_candidate, true);
+    let se = SimpleEvaluator::new(ctx, assignment, &full_buckets, &is_first_candidate, true);
     let sm = se.get_simple_metrics(ctx);
 
     let mut out = String::new();

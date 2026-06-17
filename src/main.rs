@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
 mod annealing;
+mod bucket_store;
 mod calibrate;
 mod config;
 mod context;
@@ -970,6 +971,9 @@ fn run_optimize(cfg: &Config) {
 
     println!("\n  - 编码基数: {}", ctx.code_base);
     println!("  - 编码空间: {}", ctx.code_space);
+
+    // 桶存储后端选择日志（需求 12）：单线程、配置确认阶段输出一次。
+    evaluator::log_bucket_backends(&ctx);
 
     let root_usage = output::count_root_usage(&ctx);
 

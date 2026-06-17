@@ -252,6 +252,16 @@ impl OptContext {
         let code_base = EQUIV_TABLE_SIZE + 1;
         let code_space = crate::types::pow_base(code_base, max_parts);
 
+        // u32 编码键约束（需求 6.2/6.3）：BucketStore 以 u32 表示编码值与稀疏键。
+        // code_space = code_base^max_parts，max_parts ≤ 6 时 < u32::MAX；≥ 7 溢出，构建期报错终止
+        // 而非静默截断。规模数字（code_base/max_parts/code_space）均运行时计算（需求 12.6）。
+        assert!(
+            code_space <= u32::MAX as usize,
+            "编码空间 code_space = code_base^max_parts = {code_base}^{max_parts} = {code_space} \
+             超出 u32 表示范围（{}）。请减小 max_parts（当前 {max_parts}）使 code_base^max_parts ≤ u32::MAX。",
+            u32::MAX
+        );
+
         // 预计算每个组的加权频率总和
         // group_freq_sum[r] = sum of freq_f for each (ci, part) where part references group r
         let mut group_freq_sum = vec![0.0f64; num_groups];
