@@ -30,8 +30,8 @@ const SIMPLE_KEYS_CAP: usize = 12;
 /// 简码桶：映射到同一简码编码的候选字集合（局部排序对象）
 #[derive(Clone, Default)]
 struct SimpleBucket {
-    /// 映射到该简码编码的候选字 ci 列表（u32，需求 6.1）
-    members: Vec<u32>,
+    /// 映射到该简码编码的候选字 ci 列表（u32，需求 6.1）。内联小向量，≤2 成员不触碰堆。
+    members: crate::bucket_store::Members,
     /// 桶频率和
     freq_sum: u64,
 }
@@ -40,6 +40,12 @@ impl crate::bucket_store::Bucket for SimpleBucket {
     #[inline]
     fn is_empty(&self) -> bool {
         self.members.is_empty()
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.members.clear(); // 保留容量，不释放
+        self.freq_sum = 0;
     }
 }
 
@@ -5100,7 +5106,7 @@ mod rollback_roundtrip_tests {
                     let mut v: Vec<(u32, Vec<u32>, u64)> = lv
                         .buckets
                         .iter_nonempty()
-                        .map(|(c, b)| (c, b.members.clone(), b.freq_sum))
+                        .map(|(c, b)| (c, b.members.to_vec(), b.freq_sum))
                         .collect();
                     v.sort_by_key(|t| t.0);
                     v

@@ -4,8 +4,9 @@ set -euo pipefail
 shopt -s failglob
 
 
-: ${CODE_GENIE:=../target/release/code_genie}
-: ${DRYRUN:=false}
+: "${PROFILE:=release}"
+: "${CODE_GENIE:=../target/$PROFILE/code_genie}"
+: "${DRYRUN:=false}"
 
 
 [ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
@@ -14,6 +15,13 @@ shopt -s failglob
 
 which caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
 [ "$DRYRUN" = true ] && DRYRUN=echo || DRYRUN=
+
+if [ "$PROFILE" = profiling ]; then
+    which samply >/dev/null 2>&1 || cargo install samply
+    SAMPLY_RECORD="samply record"
+else
+    SAMPLY_RECORD=
+fi
 
 
 usage() {
@@ -154,7 +162,7 @@ echo "Running './prepare-inputs.sh' and 'code_genie $SUBCMD', writing log to $LO
         ./prepare-inputs.sh
     fi
 
-    time $DRYRUN $CAFFEINATE $CODE_GENIE $SUBCMD "${ARGS[@]}"
+    time $DRYRUN $CAFFEINATE $SAMPLY_RECORD $CODE_GENIE $SUBCMD "${ARGS[@]}"
     set +x
 
     date
