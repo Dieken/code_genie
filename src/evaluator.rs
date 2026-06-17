@@ -1808,6 +1808,7 @@ pub(crate) fn build_full_buckets(
 ) -> (BucketStore<FullBucket>, Vec<bool>) {
     let n = ctx.char_infos.len();
     let mut fb: BucketStore<FullBucket> = BucketStore::new(ctx.code_space);
+    fb.reserve_nonempty(n); // 稀疏后端预留 n_chars，避免 rehash、降低负载因子
     for ci in 0..n {
         let code = ctx.calc_code_only(ci, assignment);
         let b = fb.get_mut_or_insert(code as u32);
@@ -1943,6 +1944,8 @@ impl Evaluator {
         let n = ctx.char_infos.len();
         let cs = ctx.code_space;
         let mut full_buckets: BucketStore<FullBucket> = BucketStore::new(cs);
+        // 稀疏后端预留 n_chars 容量：避免退火期 rehash、降低负载因子（缩短探测、减少缓存缺失）。
+        full_buckets.reserve_nonempty(n);
         let mut char_bucket_pos = vec![0usize; n];
         let mut current_codes = Vec::with_capacity(n);
         let mut current_equiv_val = Vec::with_capacity(n);
@@ -2148,50 +2151,54 @@ impl Evaluator {
 
         // === 从旧桶移除 ===
         let pos = self.char_bucket_pos[ci];
-        let (old_bucket_cc, old_bucket_cf, new_old_cc, new_old_cf, old_first_set, old_now_empty) = {
-            let ob = self.full_buckets.get_mut_or_insert(old_code_u); // 旧桶一定非空
-            let old_len = ob.members.len();
-            // 旧桶的碰撞贡献（移除前）
-            let old_bucket_cc = old_len.saturating_sub(1);
-            let old_bucket_cf = if old_len >= 2 { ob.freq_sum - ob.max_freq } else { 0 };
+        // 旧桶一定非空：访问 + 移除（空时）在稀疏后端单次哈希查找内完成，省去额外的 remove 查找。
+        // 预借用 char_bucket_pos（与 full_buckets 为不相交字段），供闭包内重链 swap_remove 的尾元素。
+        let char_bucket_pos = &mut self.char_bucket_pos;
+        let simple_active = self.simple_active;
+        let (old_bucket_cc, old_bucket_cf, new_old_cc, new_old_cf, old_first_set) = self
+            .full_buckets
+            .modify_existing_remove_if_empty(old_code_u, |ob| {
+                let old_len = ob.members.len();
+                // 旧桶的碰撞贡献（移除前）
+                let old_bucket_cc = old_len.saturating_sub(1);
+                let old_bucket_cf = if old_len >= 2 { ob.freq_sum - ob.max_freq } else { 0 };
 
-            // swap_remove: 用最后一个元素替换被移除的元素
-            let last_idx = old_len - 1;
-            if pos != last_idx {
-                let moved_ci = ob.members[last_idx];
-                ob.members[pos] = moved_ci;
-                self.char_bucket_pos[moved_ci as usize] = pos;
-            }
-            ob.members.pop();
-
-            // 更新旧桶的频率统计与首选字（需求 5.3）
-            ob.freq_sum -= freq;
-            // 如果移除的是 max（含恰为首选字的情况），需要重扫。
-            // 简码激活时维护 (max, 首选)；未激活/简码关闭时仅维护 max（基线行为，性能不退化）。
-            let mut old_first_set: Option<u32> = None;
-            if freq >= ob.max_freq {
-                if ob.members.is_empty() {
-                    ob.max_freq = 0;
-                    if self.simple_active {
-                        ob.first = u32::MAX;
-                    }
-                } else if self.simple_active {
-                    let (mf, first) = Self::rescan_bucket_first(ctx, &ob.members);
-                    ob.max_freq = mf;
-                    ob.first = first;
-                    old_first_set = Some(first);
-                } else {
-                    ob.max_freq = Self::rescan_bucket_max(ctx, &ob.members);
+                // swap_remove: 用最后一个元素替换被移除的元素
+                let last_idx = old_len - 1;
+                if pos != last_idx {
+                    let moved_ci = ob.members[last_idx];
+                    ob.members[pos] = moved_ci;
+                    char_bucket_pos[moved_ci as usize] = pos;
                 }
-            }
+                ob.members.pop();
 
-            let new_old_len = ob.members.len();
-            let new_old_cc = new_old_len.saturating_sub(1);
-            let new_old_cf = if new_old_len >= 2 { ob.freq_sum - ob.max_freq } else { 0 };
-            let old_now_empty = ob.members.is_empty();
-            (old_bucket_cc, old_bucket_cf, new_old_cc, new_old_cf, old_first_set, old_now_empty)
-        };
-        // 旧桶若新首选翻转：标记 is_first_candidate 与 resort 种子（ob 借用已释放）。
+                // 更新旧桶的频率统计与首选字（需求 5.3）
+                ob.freq_sum -= freq;
+                // 如果移除的是 max（含恰为首选字的情况），需要重扫。
+                // 简码激活时维护 (max, 首选)；未激活/简码关闭时仅维护 max（基线行为，性能不退化）。
+                let mut old_first_set: Option<u32> = None;
+                if freq >= ob.max_freq {
+                    if ob.members.is_empty() {
+                        ob.max_freq = 0;
+                        if simple_active {
+                            ob.first = u32::MAX;
+                        }
+                    } else if simple_active {
+                        let (mf, first) = Self::rescan_bucket_first(ctx, &ob.members);
+                        ob.max_freq = mf;
+                        ob.first = first;
+                        old_first_set = Some(first);
+                    } else {
+                        ob.max_freq = Self::rescan_bucket_max(ctx, &ob.members);
+                    }
+                }
+
+                let new_old_len = ob.members.len();
+                let new_old_cc = new_old_len.saturating_sub(1);
+                let new_old_cf = if new_old_len >= 2 { ob.freq_sum - ob.max_freq } else { 0 };
+                (old_bucket_cc, old_bucket_cf, new_old_cc, new_old_cf, old_first_set)
+            });
+        // 旧桶若新首选翻转：标记 is_first_candidate 与 resort 种子。
         if let Some(first) = old_first_set {
             self.is_first_candidate[first as usize] = true;
             // 记录首选翻转（resort 种子）；apply_simple_for_move 才会清空它。
@@ -2200,10 +2207,7 @@ impl Evaluator {
                 self.simple_is_first_dirty.push(first as usize);
             }
         }
-        // 旧桶变空：移除条目以维持稀疏有界不变量（需求 2.1）。
-        if old_now_empty {
-            self.full_buckets.remove(old_code_u);
-        }
+        // 旧桶变空时的移除已在 modify_existing_remove_if_empty 内（同一次查找）完成。
 
         // === 插入新桶 ===
         let (new_bucket_cc, new_bucket_cf, after_new_cc, after_new_cf) = {
