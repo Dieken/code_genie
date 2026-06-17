@@ -14,6 +14,20 @@
 // 的条目集合恒等于「当前非空桶集合」，条目数 ≤ n_chars。
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
+
+/// 桶成员存储类型（汉字下标 ci，u32）。
+///
+/// 用 `SmallVec<[u32; 2]>` 而非 `Vec<u32>`：内联容量 2，与 `Vec<u32>` 同为 24 字节
+/// （`FullBucket`/`SimpleBucket` 结构体大小不变，内存估算不受影响），但成员数 ≤2 的桶
+/// （全码场景下绝大多数桶仅 1 个成员、少量 2 个）完全不触碰堆，消除退火热路径上桶空↔非空
+/// 转换时的 `malloc`/`free` 抖动（见 `BucketStore::remove` 与 `Bucket::reset`）。
+///
+/// 注：`SmallVec<[u32; N]>` 在本 smallvec 版本中 len/cap 各占一字（共 16 字节）+ 内联/堆
+/// 联合体（≥8 字节）。`N=2` 时联合体 8 字节 ⟹ 共 24 字节（与 `Vec<u32>` 等大）；`N=4` 时
+/// 联合体 16 字节 ⟹ 32 字节（会使 `FullBucket` 增至 56 字节）。故取 `N=2` 以零内存增长换取
+/// 对绝大多数小桶的内联化。成员超过 2 的桶（罕见的重码大桶）溢出到堆，行为与 `Vec` 一致。
+pub type Members = SmallVec<[u32; 2]>;
 
 /// 后端选择阈值（需求 12.6：唯一允许的编译期规模常量）。
 ///
@@ -64,6 +78,13 @@ pub(crate) fn set_test_threshold_override(v: Option<usize>) {
 pub trait Bucket: Default + Clone {
     /// 该桶是否为空（无成员）。
     fn is_empty(&self) -> bool;
+
+    /// 原地重置为空桶，**保留已分配的成员容量**（不释放底层缓冲）。
+    ///
+    /// 供密集后端的 `remove` 复用槽位：清空成员而非以 `Default` 替换，从而避免
+    /// 桶空↔非空反复转换时反复 `free`/`malloc` 成员缓冲（退火热路径的主要分配抖动来源）。
+    /// 重置后 `is_empty()` 必须为真。
+    fn reset(&mut self);
 }
 
 enum Backend<B: Bucket> {
@@ -167,11 +188,16 @@ impl<B: Bucket> BucketStore<B> {
         }
     }
 
-    /// 移除桶（密集：置回 `Default` 空桶且不缩容；稀疏：删除条目）（需求 2.1/2.2）。
+    /// 移除桶。
+    ///
+    /// - 密集后端：原地 `reset()` 清空成员（**保留容量**，不释放缓冲）且不缩容——避免桶
+    ///   空↔非空反复转换造成的 `free`/`malloc` 抖动（需求 2.2 + 性能）。重置后 `get` 返回 `None`。
+    /// - 稀疏后端：删除条目以维持「条目 ⟺ 非空桶」有界不变量（需求 2.1）；成员若为内联
+    ///   小桶（≤2 成员，在 `Members` 内联容量内）则无堆缓冲可释放，亦无抖动。
     #[inline]
     pub fn remove(&mut self, code: u32) {
         match &mut self.backend {
-            Backend::Dense(v) => v[code as usize] = B::default(),
+            Backend::Dense(v) => v[code as usize].reset(),
             Backend::Sparse(m) => {
                 m.remove(&code);
             }
@@ -229,8 +255,8 @@ impl<B: Bucket> BucketStore<B> {
 /// 成员用 `u32` 表示汉字下标 `ci`（n_chars 远小于 `u32::MAX`，需求 6.1）。
 #[derive(Clone)]
 pub struct FullBucket {
-    /// 桶成员（汉字下标 ci）。
-    pub members: Vec<u32>,
+    /// 桶成员（汉字下标 ci）。内联小向量，≤2 成员不触碰堆。
+    pub members: Members,
     /// 桶频率和。
     pub freq_sum: u64,
     /// 桶内最大频率。
@@ -243,7 +269,7 @@ impl Default for FullBucket {
     #[inline]
     fn default() -> Self {
         Self {
-            members: Vec::new(),
+            members: Members::new(),
             freq_sum: 0,
             max_freq: 0,
             first: u32::MAX,
@@ -255,6 +281,14 @@ impl Bucket for FullBucket {
     #[inline]
     fn is_empty(&self) -> bool {
         self.members.is_empty()
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.members.clear(); // 保留容量，不释放
+        self.freq_sum = 0;
+        self.max_freq = 0;
+        self.first = u32::MAX;
     }
 }
 
@@ -271,6 +305,10 @@ mod tests {
     impl Bucket for TestBucket {
         fn is_empty(&self) -> bool {
             self.members.is_empty()
+        }
+        fn reset(&mut self) {
+            self.members.clear();
+            self.freq_sum = 0;
         }
     }
 
@@ -375,5 +413,37 @@ mod tests {
         assert_eq!(b.first, u32::MAX);
         assert_eq!(b.freq_sum, 0);
         assert_eq!(b.max_freq, 0);
+    }
+
+    // 内存估算不变量：SmallVec<[u32;4]> 与 Vec<u32> 同为 24 字节，FullBucket 仍 48 字节，
+    // 故后端日志 `capacity × size_of::<FullBucket>()` 的内存估算不因内联化而改变。
+    #[test]
+    fn full_bucket_size_unchanged_48_bytes() {
+        assert_eq!(std::mem::size_of::<Members>(), 24, "Members(SmallVec<[u32;2]>) 应为 24 字节");
+        assert_eq!(std::mem::size_of::<FullBucket>(), 48, "FullBucket 应保持 48 字节，内存估算不变");
+    }
+
+    // remove 后 Dense 槽位保留成员容量（不释放），消除空↔非空转换的分配抖动。
+    #[test]
+    fn dense_remove_retains_member_capacity() {
+        let mut s: BucketStore<FullBucket> = BucketStore::new_with_threshold(16, usize::MAX);
+        assert_eq!(s.backend_kind(), BackendKind::Dense);
+        // 撑大某桶到溢出堆（>4 成员），记录其容量
+        {
+            let b = s.get_mut_or_insert(3);
+            for i in 0..8u32 {
+                b.members.push(i);
+            }
+        }
+        let cap_before = {
+            let b = s.get(3).unwrap();
+            b.members.capacity()
+        };
+        assert!(cap_before >= 8);
+        // remove 后该桶为空，但容量保留（reset 而非 Default），再插入复用
+        s.remove(3);
+        assert!(s.get(3).is_none(), "remove 后应判空");
+        let cap_after = s.get_mut_or_insert(3).members.capacity();
+        assert_eq!(cap_after, cap_before, "Dense remove 应原地重置并保留容量，不释放缓冲");
     }
 }
