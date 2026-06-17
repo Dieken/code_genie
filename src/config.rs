@@ -143,12 +143,18 @@ pub struct AnnealingConfig {
     /// 冲突组排序是否按频率加权（true=按字频之和，false=按汉字数量）
     #[serde(default = "default_conflict_weight_by_freq")]
     pub conflict_weight_by_freq: bool,
+
+    /// checkpoint 写出间隔比例：单位为占 total_steps 的比例，
+    /// 实际间隔步数 = max(1, floor(total_steps × ratio))（默认 0.05，约每 5% 写一次，与汇报频率一致）
+    #[serde(default = "default_checkpoint_interval_ratio")]
+    pub checkpoint_interval_ratio: f64,
 }
 
 fn default_conflict_probability() -> f64 { 0.0 }
 fn default_conflict_refresh_interval() -> usize { 1000 }
 fn default_conflict_sample_window() -> usize { 20 }
 fn default_conflict_weight_by_freq() -> bool { false }
+fn default_checkpoint_interval_ratio() -> f64 { 0.05 }
 
 /// 全码目标配置（对应 [targets.full_code] 段）
 #[derive(Debug, Clone, Deserialize)]
@@ -616,6 +622,7 @@ impl Default for Config {
                 conflict_refresh_interval: 1000,
                 conflict_sample_window: 20,
                 conflict_weight_by_freq: false,
+                checkpoint_interval_ratio: default_checkpoint_interval_ratio(),
             },
             simple_levels: vec![
                 SimpleLevelConfig {

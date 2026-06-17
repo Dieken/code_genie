@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 /// 键位空间大小（a-z + _ + ; + , + . + /）
 pub const KEY_SPACE: usize = 26;
 /// 当量表大小
@@ -124,7 +126,7 @@ impl Default for WeightConfig {
 }
 
 /// 缩放配置 - 用于将不同量纲的指标归一化
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ScaleConfig {
     /// 重码数缩放因子
     pub collision_count: f64,
@@ -195,7 +197,7 @@ pub struct RootGroup {
 }
 
 /// 评估指标
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Metrics {
     /// 重码数
     pub collision_count: usize,
@@ -235,7 +237,7 @@ pub struct SimpleMetricScores {
 }
 
 /// 简码评估指标
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct SimpleMetrics {
     /// 频率覆盖率
     pub weighted_freq_coverage: f64,

@@ -195,7 +195,7 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
         out.push_str(&format!("{}\t{}\n", ch, code_str));
     }
 
-    fs::write(format!("{}/output-combined.txt", dir), out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-combined.txt", dir), out).unwrap();
 }
 
 /// 保存简码输出
@@ -280,7 +280,7 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         ));
     }
 
-    fs::write(format!("{}/output-simple-codes.txt", dir), out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-simple-codes.txt", dir), out).unwrap();
 }
 
 /// 保存线程结果
@@ -344,7 +344,7 @@ pub fn save_thread_results(
         assignment,
         root_usage,
     );
-    fs::write(format!("{}/output-keymap.txt", thread_dir), &root_out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-keymap.txt", thread_dir), &root_out).unwrap();
 
     // 保存编码结果
     let mut root_to_key: HashMap<String, u8> = HashMap::new();
@@ -369,7 +369,7 @@ pub fn save_thread_results(
         let code_str: String = code_parts.into_iter().collect();
         code_out.push_str(&format!("{}\t{}\t{}\n", ch, code_str, freq));
     }
-    fs::write(format!("{}/output-encode.txt", thread_dir), code_out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-encode.txt", thread_dir), code_out).unwrap();
 
     save_key_distribution_to_dir(ctx, assignment, &thread_dir);
     save_equiv_distribution_to_dir(ctx, assignment, &thread_dir);
@@ -427,7 +427,7 @@ pub fn save_key_distribution_to_dir(ctx: &OptContext, assignment: &[u8], dir: &s
         }
     }
 
-    fs::write(format!("{}/output-distribution.txt", dir), out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-distribution.txt", dir), out).unwrap();
 }
 
 /// 保存当量分布到目录
@@ -467,7 +467,7 @@ pub fn save_equiv_distribution_to_dir(ctx: &OptContext, assignment: &[u8], dir: 
         out.push_str(&format!("{}\t{:.4}\t{}\n", ch, eq, freq));
     }
 
-    fs::write(format!("{}/output-equiv-dist.txt", dir), out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-equiv-dist.txt", dir), out).unwrap();
 }
 
 /// 保存结果到输出目录
@@ -526,7 +526,7 @@ pub fn save_results(
         assignment,
         root_usage,
     );
-    fs::write(format!("{}/output-keymap.txt", output_dir), &root_out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-keymap.txt", output_dir), &root_out).unwrap();
 
     // 保存编码结果
     let mut root_to_key: HashMap<String, u8> = HashMap::new();
@@ -551,7 +551,7 @@ pub fn save_results(
         let code_str: String = code_parts.into_iter().collect();
         code_out.push_str(&format!("{}\t{}\t{}\n", ch, code_str, freq));
     }
-    fs::write(format!("{}/output-encode.txt", output_dir), code_out).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/output-encode.txt", output_dir), code_out).unwrap();
 
     save_key_distribution_to_dir(ctx, assignment, output_dir);
     save_equiv_distribution_to_dir(ctx, assignment, output_dir);
@@ -637,7 +637,7 @@ pub fn save_summary(
         }
     }
 
-    fs::write(format!("{}/summary.txt", output_dir), summary).unwrap();
+    crate::fsutil::write_with_backup(format!("{}/summary.txt", output_dir), summary).unwrap();
 }
 
 // =========================================================================

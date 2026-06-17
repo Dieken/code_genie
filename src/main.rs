@@ -3,6 +3,8 @@
 // =========================================================================
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Local;
@@ -12,9 +14,11 @@ use rayon::prelude::*;
 mod annealing;
 mod bucket_store;
 mod calibrate;
+mod checkpoint;
 mod config;
 mod context;
 mod evaluator;
+mod fsutil;
 mod loader;
 mod output;
 mod schedule;
@@ -22,7 +26,8 @@ mod simple;
 mod types;
 mod validate;
 
-use crate::annealing::simulated_annealing;
+use crate::annealing::{simulated_annealing_resumable, SaResult};
+use crate::checkpoint::ThreadCheckpoint;
 use crate::calibrate::calibrate_scales;
 use crate::config::{Config, TargetsConfig};
 use crate::context::OptContext;
@@ -50,7 +55,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// 运行模拟退火优化（默认行为）
-    Optimize,
+    Optimize {
+        /// 输出目录：不存在则自动创建；存在则复用（允许非空），逐文件防覆盖（旧文件加时间戳归档）。
+        /// 缺省时使用 output-{时间戳}
+        #[arg(short = 'd', long = "output-dir")]
+        output_dir: Option<String>,
+    },
 
     /// 根据 keymap 为汉字编码
     Encode {
@@ -92,6 +102,13 @@ enum Commands {
         /// 评估输出文件
         #[arg(short = 'o', long, default_value = "output-evaluate.txt")]
         output: String,
+    },
+
+    /// 从既有 output 目录的 checkpoint 断点续算
+    Resume {
+        /// 之前运行的 output 目录（含 inputs/ 与 checkpoint/）
+        #[arg(short = 'd', long)]
+        dir: String,
     },
 }
 
@@ -135,7 +152,9 @@ fn main() {
                 &output,
             );
         }
-        Some(Commands::Optimize) | None => run_optimize(&cfg),
+        Some(Commands::Resume { dir }) => run_resume(&dir),
+        Some(Commands::Optimize { output_dir }) => run_optimize(&cfg, &cli.config, output_dir),
+        None => run_optimize(&cfg, &cli.config, None),
     }
 }
 
@@ -661,7 +680,7 @@ fn resolve_scale_config(cfg: &Config, calibrated: ScaleConfig) -> (ScaleConfig, 
     }
 }
 
-fn run_optimize(cfg: &Config) {
+fn run_optimize(cfg: &Config, cli_config_path: &str, output_dir_opt: Option<String>) {
     let start_time = Instant::now();
     println!("=== CodeGenie 码灵算法优化器 v10 ===");
 
@@ -708,11 +727,21 @@ fn run_optimize(cfg: &Config) {
     }
     println!("用指分布输出顺序: {}", cfg.keys.display_order);
 
-    // 创建输出目录
-    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let output_dir = format!("output-{}", timestamp);
+    // 创建/复用输出目录
+    let output_dir = match output_dir_opt {
+        // 指定 -d：不存在则创建，存在则复用（允许非空）；逐文件写入时防覆盖归档。
+        Some(d) => d,
+        // 缺省：output-{时间戳}
+        None => {
+            let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+            format!("output-{}", timestamp)
+        }
+    };
     std::fs::create_dir_all(&output_dir).expect("无法创建输出目录");
     println!("输出目录: {}", output_dir);
+
+    // 备份依赖输入文件到 {output_dir}/inputs/（需求 4），供 resume 用一致输入重建上下文。
+    backup_inputs(cfg, cli_config_path, &output_dir);
 
     // ==================== 加载数据 ====================
     let (fixed_roots, constrained) = loader::load_fixed(&cfg.files.fixed);
@@ -975,20 +1004,68 @@ fn run_optimize(cfg: &Config) {
     // 桶存储后端选择日志（需求 12）：单线程、配置确认阶段输出一次。
     evaluator::log_bucket_backends(&ctx);
 
-    let root_usage = output::count_root_usage(&ctx);
+    // 写出 checkpoint 元信息（需求 6）：校准已完成，scale_config 固定，运行期不再修改。
+    let ckpt_dir = checkpoint::checkpoint_dir(&output_dir);
+    std::fs::create_dir_all(&ckpt_dir).expect("无法创建 checkpoint 目录");
+    {
+        let meta = checkpoint::CheckpointMeta {
+            version: checkpoint::CHECKPOINT_VERSION,
+            timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            scale_config,
+            total_steps: cfg.annealing.total_steps,
+            num_threads: cfg.annealing.threads,
+            temp_start: cfg.annealing.temp_start,
+            temp_end: cfg.annealing.temp_end,
+            comfort_temp: cfg.annealing.comfort_temp,
+        };
+        if let Err(e) = checkpoint::save_meta(&meta, &ckpt_dir) {
+            eprintln!("⚠️ 写 checkpoint 元信息失败: {}", e);
+        }
+    }
 
-    // 并行执行模拟退火
+    // 安装 Ctrl-C 处理器（需求 8）：置位停止标志，退火线程检测后写最新 checkpoint 并退出。
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sf = Arc::clone(&stop_flag);
+        let _ = ctrlc::set_handler(move || sf.store(true, Ordering::Relaxed));
+    }
+    println!(
+        "💡 提示: 按 Ctrl-C 可暂停并保存检查点，之后用 `resume -d {}` 继续",
+        output_dir
+    );
+
+    // 并行执行模拟退火（带 checkpoint 与可中断）
     println!("\n🚀 开始优化...");
     let num_threads = cfg.annealing.threads;
-    let results: Vec<(Vec<u8>, f64, types::Metrics, SimpleMetrics)> = (0..num_threads)
+    let interval = annealing::checkpoint_interval(
+        cfg.annealing.total_steps,
+        cfg.annealing.checkpoint_interval_ratio,
+    );
+    let sa_results: Vec<SaResult> = (0..num_threads)
         .into_par_iter()
-        .map(|i| simulated_annealing(&ctx, cfg, i))
+        .map(|i| {
+            simulated_annealing_resumable(&ctx, cfg, i, &stop_flag, None, Some(&ckpt_dir), interval)
+        })
         .collect();
 
-    let all_results: Vec<(usize, Vec<u8>, f64, types::Metrics, SimpleMetrics)> = results
+    let interrupted = stop_flag.load(Ordering::Relaxed) || sa_results.iter().any(|r| r.interrupted);
+    finalize_and_save(cfg, &ctx, sa_results, &output_dir, start_time, interrupted);
+}
+
+/// 汇总各线程结果、打印最优、保存全部产物；optimize 与 resume 共用（需求 7.8）。
+fn finalize_and_save(
+    cfg: &Config,
+    ctx: &OptContext,
+    sa_results: Vec<SaResult>,
+    output_dir: &str,
+    start_time: Instant,
+    interrupted: bool,
+) {
+    let root_usage = output::count_root_usage(ctx);
+    let all_results: Vec<(usize, Vec<u8>, f64, types::Metrics, SimpleMetrics)> = sa_results
         .into_iter()
         .enumerate()
-        .map(|(i, (a, s, m, sm))| (i, a, s, m, sm))
+        .map(|(i, r)| (i, r.assignment, r.score, r.metrics, r.simple_metrics))
         .collect();
 
     // 找出最优结果
@@ -1003,13 +1080,14 @@ fn run_optimize(cfg: &Config) {
     // 打印最优结果
     let m = best_metrics;
     let sm = best_simple_metrics;
-    let best_eval = Evaluator::new(&ctx, &best_assignment);
-    let best_scores = best_eval.get_metric_scores(&ctx);
-    let simple_sub = best_eval.get_simple_metric_scores(&ctx);
+    let best_eval = Evaluator::new(ctx, &best_assignment);
+    let best_scores = best_eval.get_metric_scores(ctx);
+    let simple_sub = best_eval.get_simple_metric_scores(ctx);
     println!("\n=================================");
+    if interrupted {
+        println!("⏸️  优化已暂停（Ctrl-C），以下为当前最优；可继续续算");
+    }
     println!("🏆 最优结果 (线程 {}):", best_thread);
-    // 综合得分三分量（需求 28.4）：全码分量 = weight_full_code·total_full，
-    // 简码分量 = weight_simple_code·total_simple。
     if cfg.weights.simple_code.enabled {
         let full_comp = ctx.weights.weight_full_code * best_scores.total_full;
         let simple_comp = ctx.weights.weight_simple_code * best_scores.total_simple;
@@ -1038,31 +1116,228 @@ fn run_optimize(cfg: &Config) {
     println!("\n📁 保存所有线程结果...");
     for (tid, assignment, score, metrics, smetrics) in &all_results {
         save_thread_results(
-            &ctx,
+            ctx,
             assignment,
             *score,
             metrics,
             smetrics,
             *tid,
-            &output_dir,
+            output_dir,
             &root_usage,
         );
     }
 
     save_results(
-        &ctx,
+        ctx,
         &best_assignment,
         best_score,
         &best_metrics,
         &best_simple_metrics,
-        &output_dir,
+        output_dir,
         &root_usage,
     );
-    save_summary(cfg, &all_results, best_thread, &output_dir, elapsed);
+    save_summary(cfg, &all_results, best_thread, output_dir, elapsed);
 
     println!("\n所有结果已保存至 {}/", output_dir);
     println!("  - summary.txt              汇总排名");
     println!("  - output-*.txt             全局最优结果");
     println!("  - output-simple-codes.txt  简码分配");
     println!("  - thread-XX/               各线程结果");
+    if interrupted {
+        println!("\n⏸️  已暂停。继续续算：");
+        println!("   cargo run --release -- resume -d {}", output_dir);
+    }
+}
+
+/// 备份依赖输入文件到 `{output_dir}/inputs/`（需求 4）。失败仅告警，不中止。
+fn backup_inputs(cfg: &Config, cli_config_path: &str, output_dir: &str) {
+    let inputs_dir = format!("{}/inputs", output_dir);
+    if let Err(e) = std::fs::create_dir_all(&inputs_dir) {
+        eprintln!("⚠️ 创建 inputs 目录失败: {}", e);
+        return;
+    }
+    let srcs = [
+        cli_config_path,
+        cfg.files.fixed.as_str(),
+        cfg.files.dynamic.as_str(),
+        cfg.files.splits.as_str(),
+        cfg.files.pair_equiv.as_str(),
+        cfg.files.key_dist.as_str(),
+    ];
+    for src in srcs {
+        let base = std::path::Path::new(src)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| src.to_string());
+        let dst = format!("{}/{}", inputs_dir, base);
+        if let Err(e) = fsutil::copy_with_backup(src, &dst) {
+            eprintln!("⚠️ 备份输入文件 {} 失败: {}", src, e);
+        }
+    }
+    println!("已备份输入文件至 {}/", inputs_dir);
+}
+
+/// resume 子命令（需求 7）：从既有 output 目录的 checkpoint 续算，复用该目录。
+/// 对 inputs/ 与 meta.json 只读；从 inputs/ 重建上下文、复用 meta.scale_config（不重校准）。
+fn run_resume(dir: &str) {
+    let start_time = Instant::now();
+    println!("=== CodeGenie 断点续算 ===");
+    println!("  输出目录: {}", dir);
+
+    let ckpt_dir = checkpoint::checkpoint_dir(dir);
+
+    // 1) 读元信息（只读 + 版本校验，需求 6.4/7.4/11.4）
+    let meta = match checkpoint::load_meta(&ckpt_dir) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("❌ 无法加载 checkpoint 元信息: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // 2) 从备份的 inputs/ 读取配置与输入（只读，需求 7.2/7.3）。
+    let inputs_dir = format!("{}/inputs", dir);
+    let config_path = format!("{}/config.toml", inputs_dir);
+    let mut cfg = Config::load_from_path(&config_path);
+    // 将 files.* 重定向到 inputs/ 下的备份副本（按 basename），确保用一致输入重建。
+    let redirect = |p: &str| -> String {
+        let base = std::path::Path::new(p)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| p.to_string());
+        format!("{}/{}", inputs_dir, base)
+    };
+    cfg.files.fixed = redirect(&cfg.files.fixed);
+    cfg.files.dynamic = redirect(&cfg.files.dynamic);
+    cfg.files.splits = redirect(&cfg.files.splits);
+    cfg.files.pair_equiv = redirect(&cfg.files.pair_equiv);
+    cfg.files.key_dist = redirect(&cfg.files.key_dist);
+    let cfg = cfg;
+
+    // 3) 重建优化上下文（复用 meta.scale_config，跳过 calibrate，需求 6.3）。
+    let (fixed_roots, constrained) = loader::load_fixed(&cfg.files.fixed);
+    let dynamic_groups = loader::load_dynamic(&cfg.files.dynamic, &constrained, &cfg.keys.allowed);
+    let splits = loader::load_splits(&cfg.files.splits);
+    let equiv_table = loader::load_pair_equivalence(&cfg.files.pair_equiv);
+    let key_dist_config = loader::load_key_distribution(&cfg.files.key_dist);
+    if !validate::check_validation(&splits, &fixed_roots, &dynamic_groups) {
+        std::process::exit(1);
+    }
+    let simple_config = if cfg.weights.simple_code.enabled {
+        cfg.get_simple_code_config()
+    } else {
+        SimpleCodeConfig { levels: vec![] }
+    };
+    let weights = cfg.get_weight_config();
+    let ctx = OptContext::new_with_fixed(
+        &splits,
+        &fixed_roots,
+        &dynamic_groups,
+        equiv_table,
+        key_dist_config,
+        meta.scale_config,
+        simple_config,
+        weights,
+        cfg.get_targets_config(),
+        &cfg.get_fixed_simple_codes(),
+    );
+    evaluator::log_bucket_backends(&ctx);
+
+    // 4) 加载各线程检查点（数量须与 meta.num_threads 一致，需求 11.4）。
+    let num_threads = meta.num_threads;
+    let mut tcs: Vec<ThreadCheckpoint> = Vec::with_capacity(num_threads);
+    for i in 0..num_threads {
+        let path = checkpoint::thread_path(&ckpt_dir, i);
+        match checkpoint::load_thread_checkpoint(&path) {
+            Ok(tc) => tcs.push(tc),
+            Err(e) => {
+                eprintln!("❌ 无法加载线程检查点 {}: {}", path.display(), e);
+                std::process::exit(1);
+            }
+        }
+    }
+    println!(
+        "已加载 {} 个线程检查点；总步数 {}，从各线程断点续算",
+        num_threads, meta.total_steps
+    );
+
+    // 5) 安装 Ctrl-C，并行续算（resume=Some），收尾产出到同一目录（不新建、不改 inputs/meta）。
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sf = Arc::clone(&stop_flag);
+        let _ = ctrlc::set_handler(move || sf.store(true, Ordering::Relaxed));
+    }
+    println!("💡 提示: 按 Ctrl-C 可暂停并保存检查点");
+
+    let interval = annealing::checkpoint_interval(
+        cfg.annealing.total_steps,
+        cfg.annealing.checkpoint_interval_ratio,
+    );
+    let sa_results: Vec<SaResult> = (0..num_threads)
+        .into_par_iter()
+        .map(|i| {
+            simulated_annealing_resumable(
+                &ctx,
+                &cfg,
+                i,
+                &stop_flag,
+                Some(&tcs[i]),
+                Some(&ckpt_dir),
+                interval,
+            )
+        })
+        .collect();
+
+    let interrupted = stop_flag.load(Ordering::Relaxed) || sa_results.iter().any(|r| r.interrupted);
+    finalize_and_save(&cfg, &ctx, sa_results, dir, start_time, interrupted);
+}
+
+// =========================================================================
+// 🧪 输入备份测试（annealing-checkpoint-resume, 需求 4）
+// =========================================================================
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+
+    #[test]
+    fn backup_inputs_copies_all_dependency_files() {
+        // 准备临时源目录与 6 个依赖文件。
+        let base = std::env::temp_dir().join(format!("cg_backup_{}", std::process::id()));
+        let src = base.join("src");
+        let out = base.join("output-test");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+
+        let files = [
+            ("config.toml", "config-content"),
+            ("input-fixed.txt", "fixed-content"),
+            ("input-roots.txt", "roots-content"),
+            ("input-division.txt", "division-content"),
+            ("pair_equivalence.txt", "equiv-content"),
+            ("key_distribution.txt", "keydist-content"),
+        ];
+        for (name, content) in files {
+            std::fs::write(src.join(name), content).unwrap();
+        }
+
+        let mut cfg = Config::default();
+        cfg.files.fixed = src.join("input-fixed.txt").to_string_lossy().to_string();
+        cfg.files.dynamic = src.join("input-roots.txt").to_string_lossy().to_string();
+        cfg.files.splits = src.join("input-division.txt").to_string_lossy().to_string();
+        cfg.files.pair_equiv = src.join("pair_equivalence.txt").to_string_lossy().to_string();
+        cfg.files.key_dist = src.join("key_distribution.txt").to_string_lossy().to_string();
+        let config_path = src.join("config.toml").to_string_lossy().to_string();
+
+        backup_inputs(&cfg, &config_path, &out.to_string_lossy());
+
+        // 断言 inputs/ 下 6 个文件均存在且内容一致（按 basename）。
+        let inputs = out.join("inputs");
+        for (name, content) in files {
+            let dst = inputs.join(name);
+            assert!(dst.exists(), "缺少备份文件: {}", dst.display());
+            assert_eq!(std::fs::read_to_string(&dst).unwrap(), content, "{name} 内容不一致");
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

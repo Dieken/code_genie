@@ -34,6 +34,7 @@ perturb_temp_multiplier = 2.0     # 扰动时温度倍率 (temp * multiplier)
 perturb_collision_pairs_limit = 10 # 扰动时优先采样的冲突对上限
 reheat_factor = 1.0             # 设为 1.0 可关闭重新加热
 max_parts = 3                    # 最大码长
+checkpoint_interval_ratio = 0.05 # checkpoint 写出间隔（单位：占 total_steps 的比例）；间隔步数 = max(1, floor(total_steps × ratio))，默认 0.05（约每 5% 写一次，与汇报频率一致）
 
 # 冲突导向算子（默认关闭：conflict_probability = 0.0）
 conflict_probability = 0.0       # 每步执行冲突导向移动的概率（0.0~1.0），0.0 表示关闭本特性
