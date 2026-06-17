@@ -139,3 +139,37 @@ fn moling_config_toml_has_new_simple_code_items_with_comments() {
     // moling 为使用者实验文件，取值可被自由修改，故只校验存在性与带注释，不断言取值。
     check_config_file("moling/config.toml", false);
 }
+
+/// 校验 `[annealing]` 段的 `checkpoint_interval_ratio`（断点续算特性，需求 9.4）。
+/// `check_value` 为真时额外断言取值等于代码默认 0.05（仅示例文件）。
+fn check_checkpoint_interval_ratio(relative: &str, check_value: bool) {
+    let path = manifest_path(relative);
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("无法读取配置文件 {}: {e}", path.display()));
+    let parsed: toml::Value = toml::from_str(&raw)
+        .unwrap_or_else(|e| panic!("解析配置文件 {} 失败: {e}", path.display()));
+    let ann = parsed
+        .get("annealing")
+        .and_then(|s| s.as_table())
+        .unwrap_or_else(|| panic!("配置文件 {} 缺少 [annealing] 段", path.display()));
+    let value = ann
+        .get("checkpoint_interval_ratio")
+        .unwrap_or_else(|| panic!("[{relative}] [annealing] 缺少 `checkpoint_interval_ratio`"));
+    if check_value {
+        let got = value
+            .as_float()
+            .unwrap_or_else(|| panic!("[{relative}] `checkpoint_interval_ratio` 不是浮点数: {value:?}"));
+        assert_eq!(got, 0.05, "[{relative}] `checkpoint_interval_ratio` 默认值应为 0.05");
+    }
+    assert_line_has_comment(&raw, "checkpoint_interval_ratio");
+}
+
+#[test]
+fn config_toml_example_has_checkpoint_interval_ratio() {
+    check_checkpoint_interval_ratio("config.toml.example", true);
+}
+
+#[test]
+fn moling_config_toml_has_checkpoint_interval_ratio() {
+    check_checkpoint_interval_ratio("moling/config.toml", false);
+}

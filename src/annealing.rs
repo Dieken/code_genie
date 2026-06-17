@@ -4,13 +4,30 @@
 
 use rand::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
+use crate::checkpoint::{self, ThreadCheckpoint};
 use crate::config::Config;
 use crate::context::OptContext;
 use crate::evaluator::Evaluator;
 use crate::schedule::TemperatureSchedule;
 use crate::types::{char_to_key_index, Metrics, SimpleMetrics, GROUP_MARKER, KEY_SPACE};
+
+/// 退火主循环结果（可续算变体返回）。
+pub struct SaResult {
+    pub assignment: Vec<u8>,
+    pub score: f64,
+    pub metrics: Metrics,
+    pub simple_metrics: SimpleMetrics,
+    /// 是否因 stop_flag（Ctrl-C）提前中断。
+    pub interrupted: bool,
+}
+
+/// 退火主循环每隔多少步检查一次 stop_flag（Ctrl-C）。
+const STOP_CHECK_STRIDE: usize = 10_000;
 
 // =========================================================================
 // 简码有效权重渐进曲线（纯函数，需求 9）
@@ -85,6 +102,14 @@ pub(crate) fn ramp_log_points(p_start: f64, p_ramp: f64, w_target: f64) -> Vec<(
 ///
 /// 供退火主循环与 Property 12 属性测试调用。
 pub(crate) fn reconcile_interval(total_steps: usize, ratio: f64) -> usize {
+    (((total_steps as f64) * ratio).floor() as i64).max(1) as usize
+}
+
+/// 计算 checkpoint 写出步数间隔 = max(1, floor(total_steps × ratio))。
+///
+/// 单位：`ratio` 为占 `total_steps` 的比例（与 `reconcile_interval` 同口径）。
+/// 永不为 0（避免取模除零）。供退火主循环与属性测试调用。
+pub(crate) fn checkpoint_interval(total_steps: usize, ratio: f64) -> usize {
     (((total_steps as f64) * ratio).floor() as i64).max(1) as usize
 }
 
@@ -832,18 +857,63 @@ pub fn smart_init(ctx: &OptContext, cfg: &Config) -> Vec<u8> {
 // 🔥 模拟退火主循环
 // =========================================================================
 
+/// 向后兼容入口（测试/无 checkpoint 场景）：不写 checkpoint、不可中断、不 resume。
+#[allow(dead_code)]
 pub fn simulated_annealing(
     ctx: &OptContext,
     cfg: &Config,
     thread_id: usize,
 ) -> (Vec<u8>, f64, Metrics, SimpleMetrics) {
+    // 向后兼容入口（测试/无 checkpoint 场景）：不写 checkpoint、不可中断、不 resume。
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let r = simulated_annealing_resumable(ctx, cfg, thread_id, &stop_flag, None, None, usize::MAX, None);
+    (r.assignment, r.score, r.metrics, r.simple_metrics)
+}
+
+/// 可断点续算的模拟退火主循环。
+///
+/// - `stop_flag`：Ctrl-C 共享停止标志，置位时线程写出最新 checkpoint 并提前返回（`interrupted=true`）。
+/// - `resume`：若为 `Some(tc)`，从该线程检查点恢复（跳过 multi_start_init），从 `tc.current_step` 续算。
+/// - `ckpt_dir`：checkpoint 目录；为 `None` 时不写 checkpoint（向后兼容入口）。
+/// - `checkpoint_interval`：每隔多少步写一次 checkpoint（`usize::MAX` 实际等于不周期写）。
+/// - `seed`：若为 `Some(s)`（仅 fresh 路径生效），用 `s` 作为退火初始分配替代 `multi_start_init`
+///   （从既有结果播种微调）；走 fresh 路径（起始步 0、`new_full_only`、简码延迟激活），
+///   与 resume 续算互斥（`resume.is_some()` 时忽略 `seed`）。
+pub fn simulated_annealing_resumable(
+    ctx: &OptContext,
+    cfg: &Config,
+    thread_id: usize,
+    stop_flag: &Arc<AtomicBool>,
+    resume: Option<&ThreadCheckpoint>,
+    ckpt_dir: Option<&Path>,
+    checkpoint_interval: usize,
+    seed: Option<&[u8]>,
+) -> SaResult {
     let mut rng = thread_rng();
 
-    let mut assignment = multi_start_init(ctx, cfg, thread_id);
-    // SA 起始用 new_full_only：简码延迟激活，激活前完全不构建/不维护简码（需求 8.5/29 性能）。
-    // 激活时 activate_simple 在 simple_eval 为 None 时会据当前分配全量构建一次（需求 8.6），
-    // 故激活前无需急切构建，也无需周期对账维护简码状态。
-    let mut evaluator = Evaluator::new_full_only(ctx, &assignment);
+    let mut assignment;
+    let start_step: usize;
+    // 上一次写出（或 resume 恢复）的 checkpoint 时间戳，供归档命名（需求 13）。
+    let mut prev_ts: Option<String> = resume.map(|tc| tc.timestamp.clone());
+
+    // 初始化或从检查点恢复（需求 11.1）。
+    // - fresh：multi_start_init 起步，SA 起始用 new_full_only（简码延迟激活，激活前不构建/维护简码）。
+    // - resume：用检查点 assignment 重建评估器（Evaluator::new 急切构建简码），从 current_step 续算。
+    let mut evaluator;
+    if let Some(tc) = resume {
+        assignment = tc.assignment.clone();
+        start_step = tc.current_step;
+        evaluator = Evaluator::new(ctx, &assignment);
+    } else {
+        // fresh：seed 存在则用种子作为初始解（从既有结果播种），否则 multi_start_init。
+        // 两种情形均走 fresh 路径：起始步 0、new_full_only（简码延迟激活）。
+        assignment = match seed {
+            Some(s) => s.to_vec(),
+            None => multi_start_init(ctx, cfg, thread_id),
+        };
+        start_step = 0;
+        evaluator = Evaluator::new_full_only(ctx, &assignment);
+    }
 
     // === 简码延迟激活与权重渐进曲线配置（任务 10.1，需求 8/9/12/13/15）===
     // 简码是否启用（启用时延迟到进度阈值后再激活，早期探索阶段简码不贡献）。
@@ -915,7 +985,13 @@ pub fn simulated_annealing(
     let steps = cfg.annealing.total_steps;
     let n_groups = assignment.len();
     if n_groups == 0 {
-        return (best_assignment, best_score, best_metrics, best_simple_metrics);
+        return SaResult {
+            assignment: best_assignment,
+            score: best_score,
+            metrics: best_metrics,
+            simple_metrics: best_simple_metrics,
+            interrupted: false,
+        };
     }
 
     // 周期对账间隔 M = max(1, floor(total_steps × reconcile_interval_ratio))（需求 15.2）。
@@ -1017,8 +1093,109 @@ pub fn simulated_annealing(
     // 应零增长。计数已在 `reconcile` 中跨对账携带，不会被周期对账重置而掩盖回归。
     let full_rebuild_baseline = evaluator.full_rebuild_calls();
 
-    // 主循环
-    for step in 0..steps {
+    // === 从检查点恢复控制状态（需求 11.1/11.2/11.3）===
+    // 此前各 `let mut` 已按 fresh 初始化；resume 时用检查点值覆盖，并修正评估器简码激活态。
+    if let Some(tc) = resume {
+        best_assignment = tc.best_assignment.clone();
+        best_full_score = tc.best_full_score;
+        best_simple_score = tc.best_simple_score;
+        best_score = tc.best_score;
+        best_metrics = tc.best_metrics;
+        best_simple_metrics = tc.best_simple_metrics;
+        temp_multiplier = tc.temp_multiplier;
+        steps_since_improve = tc.steps_since_improve;
+        last_best_score = tc.last_best_score;
+        simple_activated = tc.simple_activated;
+        // 评估器简码激活态与闩锁一致：已激活则按当前进度设有效权重，否则保持未激活。
+        if simple_enabled {
+            if simple_activated {
+                let p_resume = start_step as f64 / steps as f64;
+                let w_eff_resume = w_simple_eff(p_resume, p_start, p_ramp, w_target);
+                evaluator.simple_active = true;
+                evaluator.current_simple_weight = w_eff_resume;
+            } else {
+                evaluator.simple_active = false;
+                evaluator.current_simple_weight = 0.0;
+            }
+            evaluator.score_dirty = true;
+            evaluator.full_score_dirty = true;
+        }
+        if thread_id == 0 {
+            println!(
+                "   [T0] 从检查点恢复 | 步数: {}/{} | 最优得分: {:.4} | 简码已激活: {}",
+                start_step, steps, best_score, simple_activated
+            );
+        }
+    }
+
+    // checkpoint 写出闭包：组装当前线程检查点并归档旧版后原子写（需求 1/13）。
+    // 写失败仅告警、不中断退火（需求 10.2）。`step` 为当前步（即下次从此步续算）。
+    let mut write_ckpt = |step: usize,
+                          assignment: &[u8],
+                          best_assignment: &[u8],
+                          best_full_score: f64,
+                          best_simple_score: f64,
+                          best_score: f64,
+                          best_metrics: Metrics,
+                          best_simple_metrics: SimpleMetrics,
+                          temp_multiplier: f64,
+                          steps_since_improve: usize,
+                          last_best_score: f64,
+                          simple_activated: bool,
+                          prev_ts: &mut Option<String>| {
+        if let Some(dir) = ckpt_dir {
+            let tc = ThreadCheckpoint {
+                thread_id,
+                timestamp: checkpoint::now_timestamp_ms(),
+                assignment: assignment.to_vec(),
+                current_step: step,
+                best_assignment: best_assignment.to_vec(),
+                best_full_score,
+                best_simple_score,
+                best_score,
+                best_metrics,
+                best_simple_metrics,
+                temp_multiplier,
+                steps_since_improve,
+                last_best_score,
+                simple_activated,
+            };
+            match checkpoint::save_thread_checkpoint(&tc, dir, prev_ts.as_deref()) {
+                Ok(()) => *prev_ts = Some(tc.timestamp),
+                Err(e) => eprintln!("⚠️ [T{}] 写 checkpoint 失败: {}", thread_id, e),
+            }
+        }
+    };
+
+    // 主循环（从 start_step 开始，支持断点续算）
+    for step in start_step..steps {
+        // === Ctrl-C 停止检查（每 STOP_CHECK_STRIDE 步）：写最新 checkpoint 后提前返回（需求 8.2）===
+        if step % STOP_CHECK_STRIDE == 0 && step > start_step && stop_flag.load(Ordering::Relaxed) {
+            if thread_id == 0 {
+                println!("\n   [T0] 收到停止信号，正在写出 checkpoint...");
+            }
+            write_ckpt(
+                step, &assignment, &best_assignment, best_full_score, best_simple_score,
+                best_score, best_metrics, best_simple_metrics, temp_multiplier,
+                steps_since_improve, last_best_score, simple_activated, &mut prev_ts,
+            );
+            return SaResult {
+                assignment: best_assignment,
+                score: best_score,
+                metrics: best_metrics,
+                simple_metrics: best_simple_metrics,
+                interrupted: true,
+            };
+        }
+        // === 周期写 checkpoint（每 checkpoint_interval 步，需求 1.2）===
+        if ckpt_dir.is_some() && step > start_step && step % checkpoint_interval == 0 {
+            write_ckpt(
+                step, &assignment, &best_assignment, best_full_score, best_simple_score,
+                best_score, best_metrics, best_simple_metrics, temp_multiplier,
+                steps_since_improve, last_best_score, simple_activated, &mut prev_ts,
+            );
+        }
+
         let p = step as f64 / steps as f64;
 
         // === 简码延迟激活与权重渐进（任务 10.1）===
@@ -1426,8 +1603,16 @@ pub fn simulated_annealing(
         );
     }
 
-    (best_assignment, best_score, best_metrics, best_simple_metrics)
+    SaResult {
+        assignment: best_assignment,
+        score: best_score,
+        metrics: best_metrics,
+        simple_metrics: best_simple_metrics,
+        interrupted: false,
+    }
 }
+
+// ===== end simulated_annealing_resumable =====
 
 // =========================================================================
 // 🧪 冲突导向算子测试（sa-conflict-operators）
@@ -2207,6 +2392,29 @@ mod reconcile_interval_tests {
         assert_eq!(reconcile_interval(2000, 0.05), 100); // floor(100.0) = 100
         assert_eq!(reconcile_interval(333, 0.05), 16); // floor(16.65) = 16
     }
+
+    proptest! {
+        // Feature: annealing-checkpoint-resume, Property 1: 检查点间隔换算
+        // 对任意 total_steps ≥ 1 与 ratio ∈ [0,1]：checkpoint_interval = max(1, floor(total_steps × ratio))，恒 ≥ 1。
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop1_checkpoint_interval(
+            total_steps in 1usize..2_000_000usize,
+            ratio in 0.0f64..1.0f64,
+        ) {
+            let n = checkpoint_interval(total_steps, ratio);
+            let expected = (((total_steps as f64) * ratio).floor() as i64).max(1) as usize;
+            prop_assert_eq!(n, expected);
+            prop_assert!(n >= 1);
+        }
+    }
+
+    #[test]
+    fn checkpoint_interval_matches_report_default() {
+        // 默认 0.05 ≈ steps/20，与汇报频率一致。
+        assert_eq!(checkpoint_interval(2_000_000, 0.05), 100_000);
+        assert_eq!(checkpoint_interval(1, 0.05), 1);
+    }
 }
 
 // =========================================================================
@@ -2326,5 +2534,171 @@ mod activation_latch_tests {
             states.push(latched);
         }
         assert_eq!(states, vec![false, false, true, true, true, true]);
+    }
+}
+
+// =========================================================================
+// 🧪 断点续算测试（annealing-checkpoint-resume, Property 5 / 需求 7/8）
+// =========================================================================
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::config::TargetsConfig;
+    use crate::types::{KeyDistConfig, RootGroup, ScaleConfig, SimpleCodeConfig, EQUIV_TABLE_SIZE};
+    use std::collections::HashMap;
+
+    /// 最小 OptContext（简码关闭）：n 个单字根组、单部件汉字，仅 2 个允许键制造重码。
+    fn make_ctx(n: usize) -> OptContext {
+        let allowed: Vec<u8> = vec![0, 1];
+        let mut groups = Vec::with_capacity(n);
+        let mut splits = Vec::with_capacity(n);
+        for i in 0..n {
+            let root = format!("r{i}");
+            groups.push(RootGroup { roots: vec![root.clone()], allowed_keys: allowed.clone() });
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, vec![root], (100 - i as u64).max(1)));
+        }
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut cfg = Config::default();
+        cfg.weights.simple_code.enabled = false;
+        let weights = cfg.get_weight_config();
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels: vec![] },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    fn tiny_cfg(total_steps: usize) -> Config {
+        let mut cfg = Config::default();
+        cfg.weights.simple_code.enabled = false;
+        cfg.annealing.total_steps = total_steps;
+        cfg.annealing.checkpoint_interval_ratio = 0.1; // interval = total/10
+        cfg
+    }
+
+    fn tmp_ckpt_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "cg_resume_{}_{}_{}",
+            tag,
+            std::process::id(),
+            checkpoint::now_timestamp_ms().replace('.', "")
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // Feature: annealing-checkpoint-resume, Property 5: resume 续算不重置进度且最优不退化
+    #[test]
+    fn fresh_run_writes_checkpoint_then_resume_continues() {
+        let ctx = make_ctx(8);
+        let total_steps = 3000usize;
+        let cfg = tiny_cfg(total_steps);
+        let interval = checkpoint_interval(total_steps, cfg.annealing.checkpoint_interval_ratio);
+        let ckpt_dir = tmp_ckpt_dir("e2e");
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // 1) fresh 运行至完成：应周期写出 thread-00.json。
+        let r0 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, None, Some(&ckpt_dir), interval, None);
+        assert!(!r0.interrupted);
+        let tpath = checkpoint::thread_path(&ckpt_dir, 0);
+        assert!(tpath.exists(), "fresh 运行应写出 thread-00.json");
+        let tc = checkpoint::load_thread_checkpoint(&tpath).unwrap();
+        // 最后一次周期写发生在 < total_steps 的某个 interval 倍数处。
+        assert!(tc.current_step > 0 && tc.current_step < total_steps);
+        assert_eq!(tc.current_step % interval, 0);
+
+        // 2) 从该检查点 resume 续算：best 不退化（单调），返回有效结果。
+        let r1 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, Some(&tc), Some(&ckpt_dir), interval, None);
+        assert!(!r1.interrupted);
+        assert!(
+            r1.score <= tc.best_score + 1e-9,
+            "resume 后 best 退化: {} > {}",
+            r1.score,
+            tc.best_score
+        );
+
+        let _ = std::fs::remove_dir_all(&ckpt_dir);
+    }
+
+    // 需求 7.9：current_step >= total_steps 的检查点 resume 时跳过主循环、直接收尾，不报错。
+    #[test]
+    fn resume_finished_checkpoint_skips_loop() {
+        let ctx = make_ctx(6);
+        let total_steps = 2000usize;
+        let cfg = tiny_cfg(total_steps);
+        let ckpt_dir = tmp_ckpt_dir("done");
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // 先跑一次拿到一个合法 best_assignment 与分量。
+        let r0 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, None, Some(&ckpt_dir), usize::MAX, None);
+        let mut tc = checkpoint::load_thread_checkpoint(&checkpoint::thread_path(&ckpt_dir, 0))
+            .unwrap_or(ThreadCheckpoint {
+                thread_id: 0,
+                timestamp: checkpoint::now_timestamp_ms(),
+                assignment: vec![0u8; ctx.num_groups],
+                current_step: 0,
+                best_assignment: vec![0u8; ctx.num_groups],
+                best_full_score: r0.score,
+                best_simple_score: 0.0,
+                best_score: r0.score,
+                best_metrics: r0.metrics,
+                best_simple_metrics: r0.simple_metrics,
+                temp_multiplier: 1.0,
+                steps_since_improve: 0,
+                last_best_score: r0.score,
+                simple_activated: false,
+            });
+        // 标记为「已完成」：current_step = total_steps。
+        tc.current_step = total_steps;
+
+        let r1 = simulated_annealing_resumable(&ctx, &cfg, 0, &stop, Some(&tc), Some(&ckpt_dir), usize::MAX, None);
+        assert!(!r1.interrupted);
+        assert!(r1.score <= tc.best_score + 1e-9);
+        let _ = std::fs::remove_dir_all(&ckpt_dir);
+    }
+
+    // Feature: seed-optimize-from-result, Property 5: 播种起点不退化（种子被忠实采用）
+    #[test]
+    fn seed_start_does_not_regress() {
+        let ctx = make_ctx(8);
+        // 构造一个合法 Seed_Assignment：每组取其 allowed_keys[0]。
+        let seed: Vec<u8> = (0..ctx.num_groups)
+            .map(|gi| ctx.groups[gi].allowed_keys[0])
+            .collect();
+        // 种子起点的初始得分（以该种子直接构建评估器）。
+        let seed_init_score = Evaluator::new(&ctx, &seed).get_score(&ctx);
+
+        let total_steps = 500usize; // 极小步数
+        let cfg = tiny_cfg(total_steps);
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // 以 seed 播种走 fresh 路径（resume=None, ckpt_dir=None）。
+        let r = simulated_annealing_resumable(
+            &ctx,
+            &cfg,
+            0,
+            &stop,
+            None,
+            None,
+            usize::MAX,
+            Some(&seed),
+        );
+        assert!(!r.interrupted);
+        assert_eq!(r.assignment.len(), ctx.num_groups, "返回分配长度应等于组数");
+        assert!(
+            r.score <= seed_init_score + 1e-9,
+            "退火最优不应差于种子起点: {} > {}",
+            r.score,
+            seed_init_score
+        );
     }
 }

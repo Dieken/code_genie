@@ -3,6 +3,8 @@
 // =========================================================================
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Local;
@@ -12,9 +14,11 @@ use rayon::prelude::*;
 mod annealing;
 mod bucket_store;
 mod calibrate;
+mod checkpoint;
 mod config;
 mod context;
 mod evaluator;
+mod fsutil;
 mod loader;
 mod output;
 mod schedule;
@@ -22,7 +26,8 @@ mod simple;
 mod types;
 mod validate;
 
-use crate::annealing::simulated_annealing;
+use crate::annealing::{simulated_annealing_resumable, SaResult};
+use crate::checkpoint::ThreadCheckpoint;
 use crate::calibrate::calibrate_scales;
 use crate::config::{Config, TargetsConfig};
 use crate::context::OptContext;
@@ -50,7 +55,21 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// 运行模拟退火优化（默认行为）
-    Optimize,
+    Optimize {
+        /// 输出目录：不存在则自动创建；存在则复用（允许非空），逐文件防覆盖（旧文件加时间戳归档）。
+        /// 缺省时使用 output-{时间戳}
+        #[arg(short = 'd', long = "output-dir")]
+        output_dir: Option<String>,
+
+        /// 从既有 output 目录播种：读取 {DIR}/thread-NN/output-keymap.txt 作为各线程初始解
+        /// （按 thread-NN 编号轮询映射）。与 --seed-keymap 互斥。
+        #[arg(long = "seed-dir")]
+        seed_dir: Option<String>,
+
+        /// 从单个 keymap 文件播种：所有退火线程使用同一初始解。与 --seed-dir 互斥。
+        #[arg(long = "seed-keymap")]
+        seed_keymap: Option<String>,
+    },
 
     /// 根据 keymap 为汉字编码
     Encode {
@@ -92,6 +111,13 @@ enum Commands {
         /// 评估输出文件
         #[arg(short = 'o', long, default_value = "output-evaluate.txt")]
         output: String,
+    },
+
+    /// 从既有 output 目录的 checkpoint 断点续算
+    Resume {
+        /// 之前运行的 output 目录（含 inputs/ 与 checkpoint/）
+        #[arg(short = 'd', long)]
+        dir: String,
     },
 }
 
@@ -135,7 +161,13 @@ fn main() {
                 &output,
             );
         }
-        Some(Commands::Optimize) | None => run_optimize(&cfg),
+        Some(Commands::Resume { dir }) => run_resume(&dir),
+        Some(Commands::Optimize {
+            output_dir,
+            seed_dir,
+            seed_keymap,
+        }) => run_optimize(&cfg, &cli.config, output_dir, seed_dir, seed_keymap),
+        None => run_optimize(&cfg, &cli.config, None, None, None),
     }
 }
 
@@ -661,12 +693,96 @@ fn resolve_scale_config(cfg: &Config, calibrated: ScaleConfig) -> (ScaleConfig, 
     }
 }
 
-fn run_optimize(cfg: &Config) {
+/// 线程→种子的轮询映射（需求 7）：线程 `thread_id` 使用第 `thread_id % k` 个种子。
+/// `k` 为种子个数（调用方保证 `k >= 1`）。
+fn seed_index(thread_id: usize, k: usize) -> usize {
+    thread_id % k
+}
+
+/// 解析两个互斥的播种来源选项为「种子 keymap 文件路径」序列（需求 1/2/3）。
+///
+/// - 两者均为 `None`：返回空 `Vec`（不播种，保持基线行为）。
+/// - 同时指定：返回 `Err`（互斥）。
+/// - `--seed-keymap <FILE>`：校验文件存在 → 返回 `vec![FILE]`（K = 1）。
+/// - `--seed-dir <DIR>`：枚举 `{DIR}/thread-{NN}/output-keymap.txt`（NN 为两位数字），
+///   按 NN 升序收集；为空则 `Err`。仅触碰 thread-NN 子目录，不读 `inputs/`、`checkpoint/`。
+fn resolve_seed_paths(
+    seed_dir: Option<&str>,
+    seed_keymap: Option<&str>,
+) -> Result<Vec<String>, String> {
+    match (seed_dir, seed_keymap) {
+        (Some(_), Some(_)) => {
+            Err("--seed-dir 与 --seed-keymap 互斥，不能同时指定".to_string())
+        }
+        (None, None) => Ok(Vec::new()),
+        (None, Some(file)) => {
+            if !std::path::Path::new(file).is_file() {
+                return Err(format!("--seed-keymap 指定的文件不存在: {}", file));
+            }
+            Ok(vec![file.to_string()])
+        }
+        (Some(dir), None) => {
+            let dir_path = std::path::Path::new(dir);
+            if !dir_path.is_dir() {
+                return Err(format!("--seed-dir 指定的目录不存在: {}", dir));
+            }
+            // 收集 (NN, keymap_path)，按 NN 升序
+            let mut found: Vec<(u32, String)> = Vec::new();
+            let entries = std::fs::read_dir(dir_path)
+                .map_err(|e| format!("无法读取目录 {}: {}", dir, e))?;
+            for entry in entries.flatten() {
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                // 仅匹配 thread-{NN}
+                let nn = match name.strip_prefix("thread-") {
+                    Some(s) if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) => {
+                        match s.parse::<u32>() {
+                            Ok(n) => n,
+                            Err(_) => continue,
+                        }
+                    }
+                    _ => continue,
+                };
+                let keymap = entry.path().join("output-keymap.txt");
+                if keymap.is_file() {
+                    found.push((nn, keymap.to_string_lossy().to_string()));
+                }
+            }
+            if found.is_empty() {
+                return Err(format!(
+                    "--seed-dir {} 下未找到任何 thread-NN/output-keymap.txt",
+                    dir
+                ));
+            }
+            found.sort_by_key(|(nn, _)| *nn);
+            Ok(found.into_iter().map(|(_, p)| p).collect())
+        }
+    }
+}
+
+fn run_optimize(
+    cfg: &Config,
+    cli_config_path: &str,
+    output_dir_opt: Option<String>,
+    seed_dir: Option<String>,
+    seed_keymap: Option<String>,
+) {
     let start_time = Instant::now();
     println!("=== CodeGenie 码灵算法优化器 v10 ===");
 
     // 验证配置
     cfg.validate_weights();
+
+    // 解析种子来源（互斥校验 + 路径收集，需求 1/2/3）：尽早失败，避免做完校准才报错。
+    let seed_paths = match resolve_seed_paths(seed_dir.as_deref(), seed_keymap.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ 种子参数无效: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // 打印配置信息
     println!(
@@ -708,11 +824,21 @@ fn run_optimize(cfg: &Config) {
     }
     println!("用指分布输出顺序: {}", cfg.keys.display_order);
 
-    // 创建输出目录
-    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let output_dir = format!("output-{}", timestamp);
+    // 创建/复用输出目录
+    let output_dir = match output_dir_opt {
+        // 指定 -d：不存在则创建，存在则复用（允许非空）；逐文件写入时防覆盖归档。
+        Some(d) => d,
+        // 缺省：output-{时间戳}
+        None => {
+            let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+            format!("output-{}", timestamp)
+        }
+    };
     std::fs::create_dir_all(&output_dir).expect("无法创建输出目录");
     println!("输出目录: {}", output_dir);
+
+    // 备份依赖输入文件到 {output_dir}/inputs/（需求 4），供 resume 用一致输入重建上下文。
+    backup_inputs(cfg, cli_config_path, &output_dir);
 
     // ==================== 加载数据 ====================
     let (fixed_roots, constrained) = loader::load_fixed(&cfg.files.fixed);
@@ -975,20 +1101,121 @@ fn run_optimize(cfg: &Config) {
     // 桶存储后端选择日志（需求 12）：单线程、配置确认阶段输出一次。
     evaluator::log_bucket_backends(&ctx);
 
-    let root_usage = output::count_root_usage(&ctx);
+    // 写出 checkpoint 元信息（需求 6）：校准已完成，scale_config 固定，运行期不再修改。
+    let ckpt_dir = checkpoint::checkpoint_dir(&output_dir);
+    std::fs::create_dir_all(&ckpt_dir).expect("无法创建 checkpoint 目录");
+    {
+        let meta = checkpoint::CheckpointMeta {
+            version: checkpoint::CHECKPOINT_VERSION,
+            timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            scale_config,
+            total_steps: cfg.annealing.total_steps,
+            num_threads: cfg.annealing.threads,
+            temp_start: cfg.annealing.temp_start,
+            temp_end: cfg.annealing.temp_end,
+            comfort_temp: cfg.annealing.comfort_temp,
+        };
+        if let Err(e) = checkpoint::save_meta(&meta, &ckpt_dir) {
+            eprintln!("⚠️ 写 checkpoint 元信息失败: {}", e);
+        }
+    }
 
-    // 并行执行模拟退火
+    // 安装 Ctrl-C 处理器（需求 8）：置位停止标志，退火线程检测后写最新 checkpoint 并退出。
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sf = Arc::clone(&stop_flag);
+        let _ = ctrlc::set_handler(move || sf.store(true, Ordering::Relaxed));
+    }
+    println!(
+        "💡 提示: 按 Ctrl-C 可暂停并保存检查点，之后用 `resume -d {}` 继续",
+        output_dir
+    );
+
+    // 并行执行模拟退火（带 checkpoint 与可中断）
     println!("\n🚀 开始优化...");
     let num_threads = cfg.annealing.threads;
-    let results: Vec<(Vec<u8>, f64, types::Metrics, SimpleMetrics)> = (0..num_threads)
+
+    // 从既有结果构造种子分配（ctx 就绪后；需求 4/5/7/8）。空 = 不播种，保持基线行为。
+    let seeds: Vec<Vec<u8>> = if seed_paths.is_empty() {
+        Vec::new()
+    } else {
+        let mut rng = rand::thread_rng();
+        let mut v = Vec::with_capacity(seed_paths.len());
+        for p in &seed_paths {
+            let map = loader::load_keymap(p, &cfg.files.splits);
+            match loader::keymap_to_assignment(&ctx, &map, &mut rng) {
+                Ok((asg, filled)) => {
+                    // 种子未覆盖任何组（filled 等于全部组数）：视为无有效编码行或与当前方案
+                    // 完全不匹配，报错退出（需求 2.3）。
+                    if ctx.num_groups > 0 && filled == ctx.num_groups {
+                        eprintln!(
+                            "❌ 种子 {} 未覆盖任何字根组（无有效编码行或与当前方案不匹配）",
+                            p
+                        );
+                        std::process::exit(1);
+                    }
+                    if filled > 0 {
+                        println!("⚠️ 种子 {} 有 {} 个组未被覆盖，已随机合法填充", p, filled);
+                    }
+                    v.push(asg);
+                }
+                Err(e) => {
+                    eprintln!("❌ 种子 {} 无效: {}", p, e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        println!(
+            "🌱 播种来源: {} 个种子；{} 线程按 round-robin(i % K) 映射",
+            v.len(),
+            num_threads
+        );
+        v
+    };
+
+    let interval = annealing::checkpoint_interval(
+        cfg.annealing.total_steps,
+        cfg.annealing.checkpoint_interval_ratio,
+    );
+    let sa_results: Vec<SaResult> = (0..num_threads)
         .into_par_iter()
-        .map(|i| simulated_annealing(&ctx, cfg, i))
+        .map(|i| {
+            let seed_ref = if seeds.is_empty() {
+                None
+            } else {
+                Some(seeds[seed_index(i, seeds.len())].as_slice())
+            };
+            simulated_annealing_resumable(
+                &ctx,
+                cfg,
+                i,
+                &stop_flag,
+                None,
+                Some(&ckpt_dir),
+                interval,
+                seed_ref,
+            )
+        })
         .collect();
 
-    let all_results: Vec<(usize, Vec<u8>, f64, types::Metrics, SimpleMetrics)> = results
+    let interrupted = stop_flag.load(Ordering::Relaxed) || sa_results.iter().any(|r| r.interrupted);
+    finalize_and_save(cfg, &ctx, sa_results, &output_dir, start_time, interrupted);
+}
+
+/// 汇总各线程结果、打印最优、保存全部产物；optimize 与 resume 共用（需求 7.8）。
+fn finalize_and_save(
+    cfg: &Config,
+    ctx: &OptContext,
+    sa_results: Vec<SaResult>,
+    output_dir: &str,
+    start_time: Instant,
+    interrupted: bool,
+) {
+    let root_usage = output::count_root_usage(ctx);
+    let all_results: Vec<(usize, Vec<u8>, f64, types::Metrics, SimpleMetrics)> = sa_results
         .into_iter()
         .enumerate()
-        .map(|(i, (a, s, m, sm))| (i, a, s, m, sm))
+        .map(|(i, r)| (i, r.assignment, r.score, r.metrics, r.simple_metrics))
         .collect();
 
     // 找出最优结果
@@ -1003,13 +1230,14 @@ fn run_optimize(cfg: &Config) {
     // 打印最优结果
     let m = best_metrics;
     let sm = best_simple_metrics;
-    let best_eval = Evaluator::new(&ctx, &best_assignment);
-    let best_scores = best_eval.get_metric_scores(&ctx);
-    let simple_sub = best_eval.get_simple_metric_scores(&ctx);
+    let best_eval = Evaluator::new(ctx, &best_assignment);
+    let best_scores = best_eval.get_metric_scores(ctx);
+    let simple_sub = best_eval.get_simple_metric_scores(ctx);
     println!("\n=================================");
+    if interrupted {
+        println!("⏸️  优化已暂停（Ctrl-C），以下为当前最优；可继续续算");
+    }
     println!("🏆 最优结果 (线程 {}):", best_thread);
-    // 综合得分三分量（需求 28.4）：全码分量 = weight_full_code·total_full，
-    // 简码分量 = weight_simple_code·total_simple。
     if cfg.weights.simple_code.enabled {
         let full_comp = ctx.weights.weight_full_code * best_scores.total_full;
         let simple_comp = ctx.weights.weight_simple_code * best_scores.total_simple;
@@ -1038,31 +1266,337 @@ fn run_optimize(cfg: &Config) {
     println!("\n📁 保存所有线程结果...");
     for (tid, assignment, score, metrics, smetrics) in &all_results {
         save_thread_results(
-            &ctx,
+            ctx,
             assignment,
             *score,
             metrics,
             smetrics,
             *tid,
-            &output_dir,
+            output_dir,
             &root_usage,
         );
     }
 
     save_results(
-        &ctx,
+        ctx,
         &best_assignment,
         best_score,
         &best_metrics,
         &best_simple_metrics,
-        &output_dir,
+        output_dir,
         &root_usage,
     );
-    save_summary(cfg, &all_results, best_thread, &output_dir, elapsed);
+    save_summary(cfg, &all_results, best_thread, output_dir, elapsed);
 
     println!("\n所有结果已保存至 {}/", output_dir);
     println!("  - summary.txt              汇总排名");
     println!("  - output-*.txt             全局最优结果");
     println!("  - output-simple-codes.txt  简码分配");
     println!("  - thread-XX/               各线程结果");
+    if interrupted {
+        println!("\n⏸️  已暂停。继续续算：");
+        println!("   cargo run --release -- resume -d {}", output_dir);
+    }
+}
+
+/// 备份依赖输入文件到 `{output_dir}/inputs/`（需求 4）。失败仅告警，不中止。
+fn backup_inputs(cfg: &Config, cli_config_path: &str, output_dir: &str) {
+    let inputs_dir = format!("{}/inputs", output_dir);
+    if let Err(e) = std::fs::create_dir_all(&inputs_dir) {
+        eprintln!("⚠️ 创建 inputs 目录失败: {}", e);
+        return;
+    }
+    let srcs = [
+        cli_config_path,
+        cfg.files.fixed.as_str(),
+        cfg.files.dynamic.as_str(),
+        cfg.files.splits.as_str(),
+        cfg.files.pair_equiv.as_str(),
+        cfg.files.key_dist.as_str(),
+    ];
+    for src in srcs {
+        let base = std::path::Path::new(src)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| src.to_string());
+        let dst = format!("{}/{}", inputs_dir, base);
+        if let Err(e) = fsutil::copy_with_backup(src, &dst) {
+            eprintln!("⚠️ 备份输入文件 {} 失败: {}", src, e);
+        }
+    }
+    println!("已备份输入文件至 {}/", inputs_dir);
+}
+
+/// resume 子命令（需求 7）：从既有 output 目录的 checkpoint 续算，复用该目录。
+/// 对 inputs/ 与 meta.json 只读；从 inputs/ 重建上下文、复用 meta.scale_config（不重校准）。
+fn run_resume(dir: &str) {
+    let start_time = Instant::now();
+    println!("=== CodeGenie 断点续算 ===");
+    println!("  输出目录: {}", dir);
+
+    let ckpt_dir = checkpoint::checkpoint_dir(dir);
+
+    // 1) 读元信息（只读 + 版本校验，需求 6.4/7.4/11.4）
+    let meta = match checkpoint::load_meta(&ckpt_dir) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("❌ 无法加载 checkpoint 元信息: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // 2) 从备份的 inputs/ 读取配置与输入（只读，需求 7.2/7.3）。
+    let inputs_dir = format!("{}/inputs", dir);
+    let config_path = format!("{}/config.toml", inputs_dir);
+    let mut cfg = Config::load_from_path(&config_path);
+    // 将 files.* 重定向到 inputs/ 下的备份副本（按 basename），确保用一致输入重建。
+    let redirect = |p: &str| -> String {
+        let base = std::path::Path::new(p)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| p.to_string());
+        format!("{}/{}", inputs_dir, base)
+    };
+    cfg.files.fixed = redirect(&cfg.files.fixed);
+    cfg.files.dynamic = redirect(&cfg.files.dynamic);
+    cfg.files.splits = redirect(&cfg.files.splits);
+    cfg.files.pair_equiv = redirect(&cfg.files.pair_equiv);
+    cfg.files.key_dist = redirect(&cfg.files.key_dist);
+    let cfg = cfg;
+
+    // 3) 重建优化上下文（复用 meta.scale_config，跳过 calibrate，需求 6.3）。
+    let (fixed_roots, constrained) = loader::load_fixed(&cfg.files.fixed);
+    let dynamic_groups = loader::load_dynamic(&cfg.files.dynamic, &constrained, &cfg.keys.allowed);
+    let splits = loader::load_splits(&cfg.files.splits);
+    let equiv_table = loader::load_pair_equivalence(&cfg.files.pair_equiv);
+    let key_dist_config = loader::load_key_distribution(&cfg.files.key_dist);
+    if !validate::check_validation(&splits, &fixed_roots, &dynamic_groups) {
+        std::process::exit(1);
+    }
+    let simple_config = if cfg.weights.simple_code.enabled {
+        cfg.get_simple_code_config()
+    } else {
+        SimpleCodeConfig { levels: vec![] }
+    };
+    let weights = cfg.get_weight_config();
+    let ctx = OptContext::new_with_fixed(
+        &splits,
+        &fixed_roots,
+        &dynamic_groups,
+        equiv_table,
+        key_dist_config,
+        meta.scale_config,
+        simple_config,
+        weights,
+        cfg.get_targets_config(),
+        &cfg.get_fixed_simple_codes(),
+    );
+    evaluator::log_bucket_backends(&ctx);
+
+    // 4) 加载各线程检查点（数量须与 meta.num_threads 一致，需求 11.4）。
+    let num_threads = meta.num_threads;
+    let mut tcs: Vec<ThreadCheckpoint> = Vec::with_capacity(num_threads);
+    for i in 0..num_threads {
+        let path = checkpoint::thread_path(&ckpt_dir, i);
+        match checkpoint::load_thread_checkpoint(&path) {
+            Ok(tc) => tcs.push(tc),
+            Err(e) => {
+                eprintln!("❌ 无法加载线程检查点 {}: {}", path.display(), e);
+                std::process::exit(1);
+            }
+        }
+    }
+    println!(
+        "已加载 {} 个线程检查点；总步数 {}，从各线程断点续算",
+        num_threads, meta.total_steps
+    );
+
+    // 5) 安装 Ctrl-C，并行续算（resume=Some），收尾产出到同一目录（不新建、不改 inputs/meta）。
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sf = Arc::clone(&stop_flag);
+        let _ = ctrlc::set_handler(move || sf.store(true, Ordering::Relaxed));
+    }
+    println!("💡 提示: 按 Ctrl-C 可暂停并保存检查点");
+
+    let interval = annealing::checkpoint_interval(
+        cfg.annealing.total_steps,
+        cfg.annealing.checkpoint_interval_ratio,
+    );
+    let sa_results: Vec<SaResult> = (0..num_threads)
+        .into_par_iter()
+        .map(|i| {
+            simulated_annealing_resumable(
+                &ctx,
+                &cfg,
+                i,
+                &stop_flag,
+                Some(&tcs[i]),
+                Some(&ckpt_dir),
+                interval,
+                None,
+            )
+        })
+        .collect();
+
+    let interrupted = stop_flag.load(Ordering::Relaxed) || sa_results.iter().any(|r| r.interrupted);
+    finalize_and_save(&cfg, &ctx, sa_results, dir, start_time, interrupted);
+}
+
+// =========================================================================
+// 🧪 输入备份测试（annealing-checkpoint-resume, 需求 4）
+// =========================================================================
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+
+    #[test]
+    fn backup_inputs_copies_all_dependency_files() {
+        // 准备临时源目录与 6 个依赖文件。
+        let base = std::env::temp_dir().join(format!("cg_backup_{}", std::process::id()));
+        let src = base.join("src");
+        let out = base.join("output-test");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+
+        let files = [
+            ("config.toml", "config-content"),
+            ("input-fixed.txt", "fixed-content"),
+            ("input-roots.txt", "roots-content"),
+            ("input-division.txt", "division-content"),
+            ("pair_equivalence.txt", "equiv-content"),
+            ("key_distribution.txt", "keydist-content"),
+        ];
+        for (name, content) in files {
+            std::fs::write(src.join(name), content).unwrap();
+        }
+
+        let mut cfg = Config::default();
+        cfg.files.fixed = src.join("input-fixed.txt").to_string_lossy().to_string();
+        cfg.files.dynamic = src.join("input-roots.txt").to_string_lossy().to_string();
+        cfg.files.splits = src.join("input-division.txt").to_string_lossy().to_string();
+        cfg.files.pair_equiv = src.join("pair_equivalence.txt").to_string_lossy().to_string();
+        cfg.files.key_dist = src.join("key_distribution.txt").to_string_lossy().to_string();
+        let config_path = src.join("config.toml").to_string_lossy().to_string();
+
+        backup_inputs(&cfg, &config_path, &out.to_string_lossy());
+
+        // 断言 inputs/ 下 6 个文件均存在且内容一致（按 basename）。
+        let inputs = out.join("inputs");
+        for (name, content) in files {
+            let dst = inputs.join(name);
+            assert!(dst.exists(), "缺少备份文件: {}", dst.display());
+            assert_eq!(std::fs::read_to_string(&dst).unwrap(), content, "{name} 内容不一致");
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+// =========================================================================
+// 🧪 播种来源解析与线程映射测试（seed-optimize-from-result, 需求 1/2/3/7）
+// =========================================================================
+#[cfg(test)]
+mod seed_path_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn tmp_base(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "cg_seed_{}_{}_{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn mutually_exclusive_errors() {
+        // 同时指定 --seed-dir 与 --seed-keymap → Err（需求 3.1）
+        assert!(resolve_seed_paths(Some("d"), Some("k")).is_err());
+    }
+
+    #[test]
+    fn none_returns_empty() {
+        // 均未指定 → 空 Vec（不播种，需求 3.2）
+        assert_eq!(resolve_seed_paths(None, None).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn seed_keymap_single_file() {
+        let base = tmp_base("kf");
+        std::fs::create_dir_all(&base).unwrap();
+        let f = base.join("km.txt");
+        std::fs::write(&f, "口\tWko\t1\n").unwrap();
+        let paths = resolve_seed_paths(None, Some(&f.to_string_lossy())).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], f.to_string_lossy());
+        // 不存在的文件 → Err（需求 2.3）
+        assert!(resolve_seed_paths(None, Some("/no/such/file.txt")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn seed_dir_collects_thread_dirs_sorted() {
+        let base = tmp_base("sd");
+        // 故意乱序创建 thread-02, thread-00, thread-10，且各含 output-keymap.txt
+        for nn in ["02", "00", "10"] {
+            let d = base.join(format!("thread-{}", nn));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("output-keymap.txt"), "口\tWko\t1\n").unwrap();
+        }
+        // 干扰项：inputs/ 与 checkpoint/ 不应被收集（需求 1.5）
+        std::fs::create_dir_all(base.join("inputs")).unwrap();
+        std::fs::create_dir_all(base.join("checkpoint")).unwrap();
+        // 干扰项：thread-03 无 output-keymap.txt → 不收集
+        std::fs::create_dir_all(base.join("thread-03")).unwrap();
+
+        let paths = resolve_seed_paths(Some(&base.to_string_lossy()), None).unwrap();
+        assert_eq!(paths.len(), 3, "应只收集 3 个含 keymap 的 thread 目录");
+        // 按 NN 升序：00, 02, 10
+        assert!(paths[0].ends_with("thread-00/output-keymap.txt"));
+        assert!(paths[1].ends_with("thread-02/output-keymap.txt"));
+        assert!(paths[2].ends_with("thread-10/output-keymap.txt"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn seed_dir_empty_errors() {
+        let base = tmp_base("empty");
+        std::fs::create_dir_all(&base).unwrap();
+        // 无任何 thread-NN/output-keymap.txt → Err（需求 1.4）
+        assert!(resolve_seed_paths(Some(&base.to_string_lossy()), None).is_err());
+        // 不存在的目录 → Err
+        assert!(resolve_seed_paths(Some("/no/such/dir"), None).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        // Feature: seed-optimize-from-result, Property 4: 线程→种子轮询映射
+        #[test]
+        fn prop_round_robin_mapping(k in 1usize..16, t in 1usize..64) {
+            // 线程 i 映射到 i % k
+            for i in 0..t {
+                prop_assert_eq!(seed_index(i, k), i % k);
+            }
+            // 被使用的种子下标集合
+            let used: std::collections::HashSet<usize> = (0..t).map(|i| seed_index(i, k)).collect();
+            if t < k {
+                // T<K：恰为 {0..T-1}
+                let expected: std::collections::HashSet<usize> = (0..t).collect();
+                prop_assert_eq!(used, expected);
+            }
+            // K==1：所有线程映射到 0
+            if k == 1 {
+                for i in 0..t {
+                    prop_assert_eq!(seed_index(i, k), 0);
+                }
+            }
+        }
+    }
 }
