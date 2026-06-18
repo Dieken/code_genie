@@ -1988,29 +1988,47 @@ impl Evaluator {
         let mut total_collisions = 0usize;
         let mut collision_frequency = 0u64;
         let mut is_first_candidate = vec![false; n];
-        // 收集需要写回 first 的 (code, first_ci)，避免在遍历不可变借用期间可变借用。
-        let mut first_updates: Vec<(u32, u32)> = Vec::new();
-        full_buckets.for_each_nonempty(|code, b| {
-            let cnt = b.members.len();
-            if cnt >= 2 {
-                total_collisions += cnt - 1;
-                collision_frequency += b.freq_sum - b.max_freq;
-            }
-            // 首选字：桶内 (最大频率, 最小 ci)（需求 5.1/5.2）
-            let mut max_f = 0u64;
-            let mut first = u32::MAX;
-            for &ci in &b.members {
-                let f = ctx.char_infos[ci as usize].frequency;
-                if f > max_f || (f == max_f && ci < first) {
-                    max_f = f;
-                    first = ci;
+        // 是否需要维护简码首选字簿记（bucket.first / is_first_candidate）。
+        // 仅当本次确将构建 SimpleEvaluator 时才需要；build_simple=false（Init/校准 warmup、
+        // 主循环激活前 fresh 起步）或简码关闭时跳过：这些场景 simple_eval=None、
+        // has_simple_impact 恒 false、激活时由 rebuild_first_candidates 据当前桶一次性重建，
+        // 故构建期计算/写回 first（稀疏后端为 O(非空桶) 次哈希查找）纯属浪费（需求：性能）。
+        let need_simple =
+            build_simple && ctx.enable_simple_code && !ctx.simple_config.levels.is_empty();
+        if need_simple {
+            // 收集需要写回 first 的 (code, first_ci)，避免在遍历不可变借用期间可变借用。
+            let mut first_updates: Vec<(u32, u32)> = Vec::new();
+            full_buckets.for_each_nonempty(|code, b| {
+                let cnt = b.members.len();
+                if cnt >= 2 {
+                    total_collisions += cnt - 1;
+                    collision_frequency += b.freq_sum - b.max_freq;
                 }
+                // 首选字：桶内 (最大频率, 最小 ci)（需求 5.1/5.2）
+                let mut max_f = 0u64;
+                let mut first = u32::MAX;
+                for &ci in &b.members {
+                    let f = ctx.char_infos[ci as usize].frequency;
+                    if f > max_f || (f == max_f && ci < first) {
+                        max_f = f;
+                        first = ci;
+                    }
+                }
+                first_updates.push((code, first));
+            });
+            for (code, first) in first_updates {
+                full_buckets.get_mut_or_insert(code).first = first;
+                is_first_candidate[first as usize] = true;
             }
-            first_updates.push((code, first));
-        });
-        for (code, first) in first_updates {
-            full_buckets.get_mut_or_insert(code).first = first;
-            is_first_candidate[first as usize] = true;
+        } else {
+            // 仅全码碰撞统计；跳过简码专属的 first / is_first_candidate（激活时重建）。
+            full_buckets.for_each_nonempty(|_code, b| {
+                let cnt = b.members.len();
+                if cnt >= 2 {
+                    total_collisions += cnt - 1;
+                    collision_frequency += b.freq_sum - b.max_freq;
+                }
+            });
         }
 
         let inv_tf = if ctx.total_frequency > 0 {
@@ -2024,7 +2042,7 @@ impl Evaluator {
             0.0
         };
 
-        let simple_eval = if build_simple && ctx.enable_simple_code && !ctx.simple_config.levels.is_empty() {
+        let simple_eval = if need_simple {
             Some(SimpleEvaluator::new(ctx, assignment, &full_buckets, &is_first_candidate, simple_output_scope))
         } else {
             None

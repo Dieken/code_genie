@@ -352,6 +352,7 @@ code_genie 是一个使用 Rust 编写的输入法编码方案优化器，核心
 4. THE 激活时一次性重建的首选字结果 SHALL 与「自始至终对每步移动增量维护首选字」在激活时刻的状态完全一致（正确性保证）。
 5. THE 「激活前不维护、激活时重建」策略 SHALL 成立，因为激活前没有任何读者读取首选标记（`has_simple_impact` 在 `!simple_active` 时短路返回 false，简码分量贡献为 0），且其重建开销为 O(字数)，远小于激活前在每步移动里反复增量维护的累计开销。
 6. WHERE 简码整体关闭（`enable_simple_code == false`），THE 全码优化的行为、逻辑与单步热路径性能 SHALL 与基线版本 `27fcc6d` 保持一致（仅允许日志层面的差异）。
+7. WHILE 构建评估器且本次无需简码（`build_simple == false`，即 `Evaluator::new_full_only`：Init/校准 warmup、坐标下降、SA 主循环延迟激活前 fresh 起步），THE 主评估器 SHALL 在 `new_impl` 的全量构建中跳过首选字（`is_first_candidate`/`bucket_first`）的计算与写回，仅保留全码碰撞统计（`total_collisions`/`collision_frequency`）。此为对需求 24.2「`new_full_only` 整个过程不执行任何简码计算」的落实——首选字是简码专属簿记，构建期亦不应在该上下文计算；激活时由需求 25.3 的一次性重建据当前分配恢复，正确性不受影响（需求 25.4/25.5）。在稀疏后端（`code_space > 阈值`，如 `max_parts=5`）下，这还消除了每次构建评估器时对每个非空桶 `get_mut_or_insert(code).first = first` 的 O(非空桶 ≤ n_chars) 次哈希写回（Init 阶段约 `候选数` 次构建尤为显著）。
 
 ### 需求 26：简码激活时重定价最优解（修复最优解冻结）
 
