@@ -338,6 +338,11 @@
     - `update_char` 三处首选翻转登记加 `if ctx.simple_is_candidate[...]` 守卫，只 push 候选字，缩小 `apply_simple_for_move` 的种子扫描；与「push 全部、apply 时过滤」行为等价
     - 由 prop1（增量=全量）、prop3（首选一致）、b1（stage2 局部）现有属性测试保证正确性
     - _Requirements: 25.1_
+  - [x] 21.5 构建期首选字初始化门控（补 21.1 对 `new_impl` 的遗漏）
+    - `new_impl` 引入 `need_simple = build_simple && enable_simple_code && !levels.empty()`：为真才计算并写回 `bucket.first`/`is_first_candidate`，否则只做全码碰撞统计；`simple_eval` 构建复用同一 `need_simple`
+    - `build_simple=false`（`new_full_only`：Init/校准 warmup、坐标下降、SA fresh 起步）不再无条件计算首选字；激活时由 `rebuild_first_candidates`（21.2）重建，正确性不变。稀疏后端下消除每次构建对每个非空桶的 `get_mut_or_insert().first` 写回（O(非空桶) 次哈希）
+    - 校准的「观测 1 次」不受影响：校准结束的 `Evaluator::new(initial_assignment)` 为 `build_simple=true` ⟹ `need_simple=true`，照常构建 `SimpleEvaluator` 并读取 `initial_simple_metrics`（需求 24.7/24.8）
+    - _Requirements: 24.2, 25.7_
 
 - [x] 22. 简码激活时重定价最优解（需求 26）
   - [x] 22.1 激活分支内对 `best_assignment` 重算真实简码分量

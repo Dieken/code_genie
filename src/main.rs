@@ -923,10 +923,16 @@ fn run_optimize(
     let all_manual = full_code_scale_set && simple_code_scale_set;
 
     let weights = cfg.get_weight_config();
-    let (scale_config, scale_source) = if all_manual {
-        println!("\n📐 ScaleConfig 已全部手动配置，跳过自动校准...");
-        resolve_scale_config(cfg, types::ScaleConfig::default())
-    } else {
+    // 校准分支会构建 temp_ctx（含完整全码/简码预计算）。为避免退火前重复构建，
+    // 校准后复用 temp_ctx 作为正式 ctx，仅就地更新评分用的 scale/targets（二者不参与
+    // 构建期预计算，仅评分路径读取）。all_manual（手动 scale 跳过校准）无 temp_ctx，
+    // 正式 ctx 仍需单独构建一次。
+    let (scale_config, scale_source, calib_ctx): (types::ScaleConfig, &'static str, Option<OptContext>) =
+        if all_manual {
+            println!("\n📐 ScaleConfig 已全部手动配置，跳过自动校准...");
+            let (sc, src) = resolve_scale_config(cfg, types::ScaleConfig::default());
+            (sc, src, None)
+        } else {
         println!("\n📐 正在进行初始尺度校准...");
         let temp_scale = types::ScaleConfig::default();
         let temp_ctx = OptContext::new_with_fixed(
@@ -1059,7 +1065,9 @@ fn run_optimize(
         }
 
         let calibrated = calibrate_scales(&initial_metrics, &initial_simple_metrics, &weights);
-        resolve_scale_config(cfg, calibrated)
+        let (sc, src) = resolve_scale_config(cfg, calibrated);
+        // 复用校准期构建的 temp_ctx 作为正式 ctx（省去退火前第二次完整构建）。
+        (sc, src, Some(temp_ctx))
     };
 
     println!("  ScaleConfig 来源: {}", scale_source);
@@ -1078,22 +1086,34 @@ fn run_optimize(
     }
 
     // ==================== 正式优化 ====================
-    let equiv_table_2 = loader::load_pair_equivalence(&cfg.files.pair_equiv);
-    let key_dist_config_2 = loader::load_key_distribution(&cfg.files.key_dist);
-
     let targets_config = cfg.get_targets_config();
-    let ctx = OptContext::new_with_fixed(
-        &splits,
-        &fixed_roots,
-        &dynamic_groups,
-        equiv_table_2,
-        key_dist_config_2,
-        scale_config,
-        simple_config,
-        weights,
-        targets_config,
-        &cfg.get_fixed_simple_codes(),
-    );
+    let ctx = match calib_ctx {
+        // 复用校准期构建的上下文（含全码/简码预计算），仅就地更新评分用的 scale/targets。
+        // 二者不参与 OptContext 构建期预计算、仅在评分路径读取，故就地替换等价于用最终
+        // scale/targets 重新构建——消除退火前的重复构建（含简码预计算）。
+        Some(mut c) => {
+            c.scale_config = scale_config;
+            c.targets_config = targets_config;
+            c
+        }
+        // all_manual：跳过了校准、无可复用上下文，正式 ctx 单独构建一次。
+        None => {
+            let equiv_table_2 = loader::load_pair_equivalence(&cfg.files.pair_equiv);
+            let key_dist_config_2 = loader::load_key_distribution(&cfg.files.key_dist);
+            OptContext::new_with_fixed(
+                &splits,
+                &fixed_roots,
+                &dynamic_groups,
+                equiv_table_2,
+                key_dist_config_2,
+                scale_config,
+                simple_config,
+                weights,
+                targets_config,
+                &cfg.get_fixed_simple_codes(),
+            )
+        }
+    };
 
     println!("\n  - 编码基数: {}", ctx.code_base);
     println!("  - 编码空间: {}", ctx.code_space);

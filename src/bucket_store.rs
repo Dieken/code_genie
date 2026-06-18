@@ -136,6 +136,19 @@ impl<B: Bucket> BucketStore<B> {
         self.kind
     }
 
+    /// 为稀疏后端预留容纳 `n` 个非空桶的容量（密集后端为 no-op）。
+    ///
+    /// 稀疏后端非空桶数恒 ≤ n_chars，构造后按 n_chars 预留可：
+    /// (1) 避免退火期反复 rehash（插入/删除churn 触发的扩容）；
+    /// (2) 降低负载因子、缩短探测序列，减少 `get_mut_or_insert`/`get_mut` 的缓存缺失。
+    /// 这是 `update_char` 在 max_parts=5（稀疏）场景下的主要单步开销来源（需求：性能）。
+    #[inline]
+    pub fn reserve_nonempty(&mut self, n: usize) {
+        if let Backend::Sparse(m) = &mut self.backend {
+            m.reserve(n);
+        }
+    }
+
     /// 容量上界。
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -185,6 +198,41 @@ impl<B: Bucket> BucketStore<B> {
         match &mut self.backend {
             Backend::Dense(v) => &mut v[code as usize],
             Backend::Sparse(m) => m.entry(code).or_default(),
+        }
+    }
+
+    /// 访问**已存在**的桶并就地修改；回调返回后若桶变空则移除——稀疏后端单次哈希查找
+    /// 即完成「访问 + 条件移除」，省去「`get_mut` 再 `remove`」的第二次查找（退火热路径）。
+    ///
+    /// 调用方须保证 `code` 当前非空（否则 panic）。密集后端：原地修改并在空时 `reset()`
+    /// （保留容量）；稀疏后端：用 `Entry` 在同一查找内修改并按需删除条目（维持有界不变量）。
+    #[inline]
+    pub fn modify_existing_remove_if_empty<R>(
+        &mut self,
+        code: u32,
+        f: impl FnOnce(&mut B) -> R,
+    ) -> R {
+        match &mut self.backend {
+            Backend::Dense(v) => {
+                let b = &mut v[code as usize];
+                let r = f(b);
+                if b.is_empty() {
+                    b.reset();
+                }
+                r
+            }
+            Backend::Sparse(m) => match m.entry(code) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let r = f(e.get_mut());
+                    if e.get().is_empty() {
+                        e.remove();
+                    }
+                    r
+                }
+                std::collections::hash_map::Entry::Vacant(_) => {
+                    panic!("modify_existing_remove_if_empty: 桶 {code} 不存在（应为非空）")
+                }
+            },
         }
     }
 
