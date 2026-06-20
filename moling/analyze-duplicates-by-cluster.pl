@@ -15,9 +15,6 @@ use Getopt::Long;
 use List::Util qw/sum/;
 use autodie;
 
-if ($ENV{USE_YAOLING_RULE}) { $ENV{USE_YULING_RULE} = 1; $ENV{USE_VOWEL} = 1; }
-if ($ENV{USE_YUELING_RULE}) { $ENV{USE_YULING_RULE} = 1; $ENV{USE_VOWEL} = 1; }
-
 # 注意这个文件的韵码是字根的韵母，默认 USE_VOWEL 环境变量没定义时，
 # 韵码是用的首笔字根通过退火算法计算得出，应使用 output-xxxx
 # 目录下由 ./generate-root-chart.sh 脚本生成的 roots.tsv 文件
@@ -124,7 +121,7 @@ sub calculate_dups($chaifens, $roots, $clusters) {
 
         my @code;
 
-        if ($ENV{USE_YULING_RULE}) {      # 使用宇浩灵明单字编码规则
+        if ($ENV{ENCODE_RULE} eq "yuling") {    # 使用宇浩灵明单字编码规则
             push @code, exists $clusters->{$cf->[0]} ? $clusters->{$cf->[0]} : "$cf->[0].A";
             push @code, substr($roots->{$cf->[0]}, 0, 1) if length($roots->{$cf->[0]}) > 1;
             push @code, substr($roots->{$cf->[0]}, -1) if @$cf == 1;
@@ -137,7 +134,7 @@ sub calculate_dups($chaifens, $roots, $clusters) {
 
                 push @code, split(//, $roots->{$cf->[-1]});
             }
-        } else {                          # 使用魔灵单字编码规则
+        } else {                                # 使用魔灵单字编码规则
             for (@$cf) {
                 push @code, exists $clusters->{$_} ? $clusters->{$_} : "$_.A";
             }

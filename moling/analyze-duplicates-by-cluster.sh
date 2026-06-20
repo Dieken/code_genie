@@ -6,6 +6,8 @@
 set -euo pipefail
 shopt -s failglob
 
+. ./init.sh
+
 no_cluster=$(./analyze-duplicates-by-cluster.pl --cluster "" |
     grep -E '动重|静重|组数' |
     sed -e 's/:/\t/' |

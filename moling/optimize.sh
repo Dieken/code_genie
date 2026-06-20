@@ -6,18 +6,18 @@ shopt -s failglob
 
 : "${PROFILE:=release}"
 : "${CODE_GENIE:=../target/$PROFILE/code_genie}"
-: "${DRYRUN:=false}"
+: "${DRYRUN:=0}"
+: "${NO_PREPARE:=0}"
+: "${NO_BUILD:=0}"
 
 
-[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
-[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
-
+[ "${SCHEMA:-}" -a -f "config-${SCHEMA:-}.toml" ] && CONFIG="-c config-$SCHEMA.toml" || CONFIG="-c config.toml"
 
 which caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
-[ "$DRYRUN" = true ] && DRYRUN=echo || DRYRUN=
+[ "$DRYRUN" = 1 ] && DRYRUN=echo || DRYRUN=
 
 if [ "$PROFILE" = profiling ]; then
-    which samply >/dev/null 2>&1 || cargo install samply
+    which samply >/dev/null 2>&1 || $DRYRUN cargo install samply
     SAMPLY_RECORD="samply record"
 else
     SAMPLY_RECORD=
@@ -41,10 +41,9 @@ usage() {
 
 环境变量:
   CODE_GENIE    code_genie 可执行文件路径（默认 ../target/release/code_genie）
-  DRYRUN        =true 时只打印将执行的命令，不真正运行（默认 false）
+  DRYRUN        =1 时只打印将执行的命令，跳过执行（默认执行）
+  NO_BUILD      =1 时跳过 cargo build（默认执行）
   NO_PREPARE    =1 时跳过 ./prepare-inputs.sh（默认执行）
-  USE_YAOLING_RULE / USE_YUELING_RULE / USE_YULING_RULE / USE_VOWEL / OPTIMIZE_KEYS
-                方案相关开关，原样记录到 COMMENT.txt 并影响 prepare-inputs.sh
 
 行为:
   - 输入一句话备注，追加写入 <DIR>/COMMENT.txt（用 >> 保留历史，便于 resume 复用）。
@@ -105,7 +104,7 @@ mkdir -p "$OUT"
 
 # (3) 备注：输入一句话备注，追加写入 COMMENT.txt；如果 resume 复用 $OUT 则备注会追加写入 COMMENT.txt（而不是覆盖），以保留之前的备注。
 read -e -p "一句话备注： " comment
-comment="USE_VOWEL=${USE_VOWEL:-} USE_YULING_RULE=${USE_YULING_RULE:-} USE_YAOLING_RULE=${USE_YAOLING_RULE:-} USE_YUELING_RULE=${USE_YUELING_RULE:-} OPTIMIZE_KEYS=${OPTIMIZE_KEYS:-} $0 $SUBCMD $@ : $comment"
+comment="$0 $CONFIG $SUBCMD $@ : $comment"
 echo "$comment" >> "$OUT/COMMENT.txt"
 
 
@@ -139,12 +138,12 @@ fi
 
 LOG="$OUT/optimize-$TS.log"
 date
-echo "Running './prepare-inputs.sh' and 'code_genie $SUBCMD', writing log to $LOG ..."
+echo "Running './prepare-inputs.sh' and '$CODE_GENIE $CONFIG $SUBCMD', writing log to $LOG ..."
 {
     date
 
     echo '检查优化相关环境变量：---->'
-    env | grep -E 'USE_|OPTIMIZE_|ENABLE_|DISABLE_|NO_'
+    env | grep -E 'SCHEM|USE_|OPTIMIZE_|ENABLE_|DISABLE_|NO_'
     echo '<--------------------------'
 
     [ -e ../.git ] && {
@@ -155,14 +154,18 @@ echo "Running './prepare-inputs.sh' and 'code_genie $SUBCMD', writing log to $LO
     }
 
     set -x
-    if [ "${NO_PREPARE:-}" = 1 ]; then
+    if [ "$NO_PREPARE" = 1 ]; then
         echo "NO_PREPARE=1，跳过 ./prepare-inputs.sh"
     else
         echo "NO_PREPARE 不为 1，执行 ./prepare-inputs.sh"
-        ./prepare-inputs.sh
+        $DRYRUN ./prepare-inputs.sh
     fi
 
-    time $DRYRUN $CAFFEINATE $SAMPLY_RECORD $CODE_GENIE $SUBCMD "${ARGS[@]}"
+    echo
+    [ "$NO_BUILD" = 1 ] || $DRYRUN cargo build --profile="$PROFILE"
+    echo
+
+    time $DRYRUN $CAFFEINATE $SAMPLY_RECORD $CODE_GENIE $CONFIG $SUBCMD "${ARGS[@]}"
     set +x
 
     date

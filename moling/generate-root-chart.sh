@@ -3,18 +3,9 @@
 set -euo pipefail
 shopt -s failglob
 
+. ./init.sh
+
 : "${TYPER_ROOT:="$HOME/home/typer"}"
-
-[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
-[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
-
-# 默认开启潇明的空格简码，并且优先空格简以跟码灵保持一致
-[ "${USE_XIAOMING_RULE:-}" = 1 ] && [ -z "${ENABLE_SPACE_SHORTCODE:-}" ] && export ENABLE_SPACE_SHORTCODE=1
-[ "${USE_XIAOMING_RULE:-}" = 1 ] && [ -z "${PREFER_SPACE_SHORTCODE:-}" ] && export PREFER_SPACE_SHORTCODE=1
-
-# 优先空格简意味着开启空格简
-[ "${PREFER_SPACE_SHORTCODE:-}" = 1 ] && export ENABLE_SPACE_SHORTCODE=1
-
 
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=typer
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=../../typer
@@ -171,7 +162,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
   $roots{$F[0]} = lc($F[1]);
 
   END {
-      if ($ENV{USE_XIAOMING_RULE}) {
+      if ($ENV{ENCODE_RULE} eq "xiaoming") {
           print "的\td";
           print "是\tj";
           print "不\tk";
@@ -193,7 +184,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
           @b = split /\s+/, $a[1];
           $s = "";
 
-          if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+          if ($ENV{ENCODE_RULE} eq "yuling") {          # 使用宇浩灵明单字编码规则
               for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
               $s .= substr($roots{$b[0]}, 0, 1);
@@ -209,7 +200,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
                   $s .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
                   $s .= substr($roots{$b[-1]}, -1);
               }
-          } elsif ($ENV{USE_XIAOMING_RULE}) {   # 使用潇明单字编码规则
+          } elsif ($ENV{ENCODE_RULE} eq "xiaoming") {   # 使用潇明单字编码规则
               for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
               $s = substr($roots{$b[0]}, 0, 2);
@@ -222,7 +213,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
               } else {
                   $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[2]}, 0, 1) . substr($roots{$b[-1]}, 0, 1);
               }
-          } else {                      # 使用魔灵单字编码规则
+          } else {                                      # 使用魔灵单字编码规则
               for (@b) {
                   die "Unknown root: $_ in $_\n" unless exists $roots{$_};
                   $s .= substr($roots{$_}, 0, 1);
@@ -237,11 +228,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
               $s .= substr($roots{$r}, 1);
           }
 
-          if ($ENV{USE_XIAOMING_RULE}) {
-            $s = substr($s, 0, 5) if length($s) > 5;
-          } else {
-            $s = substr($s, 0, 4) if length($s) > 4;
-          }
+          $s = substr($s, 0, $ENV{MAX_CODE_LEN}) if length($s) > $ENV{MAX_CODE_LEN};
 
           $len = length($s);
           if (exists $full_codes{$s}) {
@@ -253,11 +240,11 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
           $chars{$a[0]} = { code => $s, len => $len, freq => $a[2],
                             y => substr($roots{$b[-1]}, -1), seq => $. };
 
-          $chars{$a[0]}{y} = substr($roots{$b[-1]}, 1, 1) if $ENV{USE_XIAOMING_RULE};
+          $chars{$a[0]}{y} = substr($roots{$b[-1]}, 1, 1) if $ENV{ENCODE_RULE} eq "xiaoming";
       }
 
       %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
-      $short_chars{"在"} = 1 if $ENV{USE_XIAOMING_RULE};
+      $short_chars{"在"} = 1 if $ENV{ENCODE_RULE} eq "xiaoming";
 
       %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
 
@@ -275,11 +262,11 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
             $s = "";
 
             if ($ENV{PREFER_SPACE_SHORTCODE}) {
-                $s = substr($v->{code}, 0, $i - 1) . "_" unless $ENV{USE_XIAOMING_RULE} && $i > 2;  # 潇明只有 A_ 空格简
+                $s = substr($v->{code}, 0, $i - 1) . "_" unless $ENV{ENCODE_RULE} eq "xiaoming" && $i > 2;  # 潇明只有 A_ 空格简
             }
 
             if (! $s || exists $short_codes{$s}) {
-                if ($ENV{USE_XIAOMING_RULE}) {
+                if ($ENV{ENCODE_RULE} eq "xiaoming") {
                     if (length($v->{code}) == 3) {                  # 字根字
                         next unless $ENV{ENABLE_SPACE_SHORTCODE};
                         $s = substr($v->{code}, 0, 1) . "_";        # 只可能是二简 A_
@@ -305,7 +292,7 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             if (exists $short_codes{$s}) {
                 next unless $ENV{ENABLE_SPACE_SHORTCODE};
-                next if $ENV{USE_XIAOMING_RULE} && $i > 2;      # 潇明只有 A_ 空格简
+                next if $ENV{ENCODE_RULE} eq "xiaoming" && $i > 2;  # 潇明只有 A_ 空格简
                 $s = substr($v->{code}, 0, $i - 1) . "_";
                 next if exists $short_codes{$s};
             }

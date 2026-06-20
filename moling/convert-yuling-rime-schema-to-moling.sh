@@ -6,8 +6,7 @@ YULING="${1:-靈明輸入法_v3.12.0-beta.20260410.105121}"
 MOLING="${2:-output-20260506-000635}"
 YUSTAR="${3:-星陳輸入法_v3.11.0}"
 
-[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
-[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+. ./init.sh
 
 echo "使用灵明方案 \"$YULING\"、星陈方案 \"$YUSTAR\" 和魔灵码表 \"$MOLING\""
 
@@ -77,7 +76,7 @@ for s in chaifen chaifen_tw; do
         @b = @{ $chaifen{$F[0]} };
         $code = "";
 
-        if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+        if ($ENV{ENCODE_RULE} eq "yuling") {    # 使用宇浩灵明单字编码规则
             for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
             $code .= substr($roots{$b[0]}, 0, 1);
@@ -93,7 +92,7 @@ for s in chaifen chaifen_tw; do
                 $code .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
                 $code .= substr($roots{$b[-1]}, -1);
             }
-        } else {                      # 使用魔灵单字编码规则
+        } else {                                # 使用魔灵单字编码规则
             for (@b) {
                 die "Unknown root $_\n" unless exists $roots{$_};
                 $code .= substr($roots{$_}, 0, 1);
@@ -134,7 +133,7 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -lanE '
     @b = split /\s+/, $F[1];
     $code = "";
 
-    if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+    if ($ENV{ENCODE_RULE} eq "yuling") {    # 使用宇浩灵明单字编码规则
         for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
         $code .= substr($roots{$b[0]}, 0, 1);
@@ -150,7 +149,7 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -lanE '
             $code .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
             $code .= substr($roots{$b[-1]}, -1);
         }
-    } else {                      # 使用魔灵单字编码规则
+    } else {                                # 使用魔灵单字编码规则
         for (@b) {
             die "Unknown root $_\n" unless exists $roots{$_};
             $code .= substr($roots{$_}, 0, 1);
@@ -231,7 +230,7 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
             my @b = split /\s+/, $a[1];
             $code = "";
 
-            if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+            if ($ENV{ENCODE_RULE} eq "yuling") {    # 使用宇浩灵明单字编码规则
                 for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
                 $chaifen{$a[0]} = \@b;
@@ -249,7 +248,7 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
                     $code .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
                     $code .= substr($roots{$b[-1]}, -1);
                 }
-            } else {                      # 使用魔灵单字编码规则
+            } else {                                # 使用魔灵单字编码规则
                 for (@b) {
                     die "Unknown root $_\n" unless exists $roots{$_};
                     $code .= substr($roots{$_}, 0, 1);
@@ -276,7 +275,7 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
     for (@a) { die "Unknown char in $ARGV: $_\n" unless exists $codes{$_}; }
 
     if (@a == 2) {
-        if ($ENV{USE_YULING_RULE}) {        # 使用宇浩灵明二字词编码规则
+        if ($ENV{ENCODE_RULE} eq "yuling") {        # 使用宇浩灵明二字词编码规则
             my $code = "";
             my $seq = $chaifen{ $a[0] };
             if (@$seq == 1) {   # 首字是单根字
@@ -299,7 +298,7 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
             $code .= substr($roots{ $seq->[-1] }, 1);       # 末根 SY
 
             print "$F[0]\t", substr($code, 0, 4);
-        } else {                            # 使用魔灵二字词编码规则
+        } else {                                    # 使用魔灵二字词编码规则
             if (length($codes{$a[0]}) == 2) {
                 warn "Ignore word $F[0] because full code of $a[0] is two letters.\n";
                 next;

@@ -23,17 +23,12 @@
 
 > 推荐 Windows 用户使用 [MSYS2](https://packages.msys2.org/) 来运行以下工具，在 MSYS2 里使用 `pacman -S git rust perl` 安装 Git、Rust、Perl，参照 [TUNA crates.io 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)配置 Cargo。
 
-1. 在上层目录运行 `cargo build --release` 构建码灵；
-2. 在本目录运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；
+1. 视情况调整 `config.toml`(如果 `config-$SCHEMA.toml` 存在则优化用此文件)；
+2. 运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；
 
 `optimize.sh` 调用了 `prepare-inputs.sh`(可以使用环境变量 `NO_PREPARE=1` 跳过)，后者接受几个环境变量来定制行为：
 
-* `USE_MIXED_FREQ`：非零时表示组合台版繁体字频的权重，默认为 0.1，设置为空或 0 时表示只使用简体字频；
-* `USE_VOWEL`: 设置为 1 表示字根的补码使用字根的韵母，默认是使用字根的首笔笔画；
-* `USE_YULING_RULE`： 设置为 1 表示使用宇浩灵明的单字编码规则，并从宇浩灵明字根表初始化 `roots.txt`(如果文件不存在)，后续需手动维护此文件，默认是使用魔灵的单字编码规则；
-* `USE_YAOLING_RULE`: 设置为 1 表示使用 @Evildoer 的妖灵规则（大根声码映射且韵码固定），包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
-* `USE_YUELING_RULE`: 设置为 1 表示使用 @枕月 的月灵规则(韵码仿日月映射)，包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
-* `USE_XIAOMING_RULE`: 设置为 1 表示使用 @恷子 的潇明规则([仿潇湘的五码方案](https://github.com/Dieken/code_genie/commit/741a1571b37505806e4058c2c6952935f6aa57a5))，默认关闭，使用魔灵规则；
+* `SCHEMA`：值为 moling, moqing, xiaoming, yaoling, yueling, yuling 中的一个，表示优化对应方案，默认为 moling；
 * `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
     * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w，可以使用环境变量 `OPTIMIZE_KEY_0` 设置；
     * 包含 y 时，使用退火算法决定声母 y 的按键，默认使用 k，可以使用环境变量 `OPTIMIZE_KEY_y` 设置；
@@ -48,6 +43,7 @@
     * 包含 8 时，使用退火算法决定声码在键盘左手侧时笔画「撇」的按键，默认使用 i；
     * 包含 9 时，使用退火算法决定声码在键盘右手侧时笔画「点」的按键，默认使用 e；
     * 包含 A 时，使用退火算法决定声码在键盘左手侧时笔画「折」的按键，默认使用 u；
+* 更多开关参考 `init.sh` 开头部分以及 `prepare-inputs.sh`；
 
 例如：
 
@@ -55,26 +51,26 @@
 # 查看帮助
 ./optimize.sh -h
 
-# 优化全部十个键映射，使用字根首笔作为韵码
-OPTIMIZE_KEYS=012345qryz ./optimize.sh
+# 优化魔灵
+./optimize.sh
 
-# 优化全部五个键映射，使用字根韵母作为韵码
-USE_VOWEL=1 OPTIMIZE_KEYS=0qryz ./optimize.sh
+# 优化魔卿
+SCHEMA=moqing ./optimize.sh
 
-# 计算妖灵
-rm roots.txt # 从灵明字根表初始化
-## !!! 初次计算时注释掉 [scale] 段，设置 [targets.full_code] 里 enabled = false，参考下面的「优化指北」
-USE_YAOLING_RULE=1 ./optimize.sh
+# 优化潇明
+SCHEMA=xiaoming ./optimize.sh
 
-# 计算月灵
-## !!! 注意提前调整 roots.txt 的字根拼音
-## !!! 初次计算时注释掉 [scale] 段，设置 [targets.full_code] 里 enabled = false，参考下面的「优化指北」
-USE_YUELING_RULE=1 ./optimize.sh
+# 优化妖灵
+## 从灵明字根表初始化
+SCHEMA=yaoling ./optimize.sh
 
-# 计算潇明
-## !!! 修改 config.toml 中的 max_parts = 5，
-## !!! 初次计算时注释掉 [scale] 段，设置 [targets.full_code] 里 enabled = false，参考下面的「优化指北」
-USE_XIAOMING_RULE=1 ./optimize.sh
+# 优化月灵
+## 从灵明字根表初始化，注意调整 roots-yueling.txt 的字根拼音
+SCHEMA=yueling ./optimize.sh
+
+# 优化灵明
+## 从灵明字根表初始化，注意调整 roots-yueling.txt 的字根拼音
+SCHEMA=yuling ./optimize.sh
 ```
 
 注意：开启按键映射后，`roots.txt` 中的字根声码不是最终版，关闭 `USE_VOWEL` 使用字根首笔时，
@@ -133,19 +129,20 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 ## 文件说明
 
 * 脚本程序
-    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-inputs.sh` 和 `code_genie optimize`，支持环境变量 `USE_YULING_RULE`
-    * `prepare-inputs.sh`         准备码灵输入文件所用的脚本，支持环境变量 `USE_YULING_RULE`
+    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-inputs.sh` 和 `code_genie optimize`，支持环境变量 `SCHEMA`
+    * `prepare-inputs.sh`         准备码灵输入文件所用的脚本，支持环境变量 `SCHEMA`
+    * `init.sh`                   各个方案的默认配置
     * `stat-moling-roots.pl`      统计优化出的魔灵码表和字根表
     * `generate-root-chart.sh`    生成字根表和字根图
     * `batch-test-weights.sh`     批处理优化以探测合理的权重参数范围
     * `analyze-duplicates-by-cluster.pl`
-                                  分析字根聚类带来的重码，支持环境变量 `USE_YULING_RULE`
+                                  分析字根聚类带来的重码，支持环境变量 `SCHEMA`
     * `analyze-duplicates-by-cluster.sh`
-                                  评估 roots-cluster.txt 中每一行聚类单独可能带来的重码，支持环境变量 `USE_YULING_RULE`
+                                  评估 roots-cluster.txt 中每一行聚类单独可能带来的重码，支持环境变量 `SCHEMA`
     * `analyze-results-of-batch-test-weights.sh`
                                   分析 `batch-test-weights.sh` 的运行结果
     * `convert-yuling-rime-schema-to-moling.sh`
-                                  转换灵明 RIME 方案为魔灵 RIME 方案，支持环境变量 `USE_YULING_RULE`
+                                  转换灵明 RIME 方案为魔灵 RIME 方案，支持环境变量 `SCHEMA`
     * `compare-optimization-results.sh`
                                   比较 `output-<TIMESTAMP>/thread-<NN>` 的优化结果，依赖[命令行版本的宇浩测评](https://github.com/Dieken/yuhao-assess/tree/cli)
 

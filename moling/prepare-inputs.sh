@@ -3,68 +3,72 @@
 set -euo pipefail
 shopt -s failglob
 
-# 默认的声母映射，对月灵、妖灵、潇明不生效
-: "${OPTIMIZE_KEY_0:=w}"        # 首根笔画时，多次退火优化都选择了 w
-: "${OPTIMIZE_KEY_y:=k}"        # y 热力太高，首根笔画时，多次退火优化都选择映射到 k
-: "${OPTIMIZE_KEY_z:=v}"        # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
-export OPTIMIZE_KEY_0 OPTIMIZE_KEY_y OPTIMIZE_KEY_z
+#########################################################################################################################
 
-: "${USE_MIXED_FREQ:=0.1}"
+. ./init.sh
 
-[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
-[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+#########################################################################################################################
 
+if [ "$FULL_FREQ_TXT" = full-freq.txt ]; then
+    if [ "$USE_MIXED_FREQ" -a "$USE_MIXED_FREQ" != 0 ]; then
+        echo "(0) 生成简繁混合字频表 full-freq.txt ，繁体字频权重=$USE_MIXED_FREQ ..."
+        [ -f charAbsoluteFrequencySC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencySC.json
+        [ -f charAbsoluteFrequencyTC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencyTC.json
 
-if [ "$USE_MIXED_FREQ" -a "$USE_MIXED_FREQ" != 0 ]; then
-    echo "(0) 生成简繁混合字频表 full-freq.txt ，繁体字频权重=$USE_MIXED_FREQ ..."
-    [ -f charAbsoluteFrequencySC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencySC.json
-    [ -f charAbsoluteFrequencyTC.json ] || curl -O https://ceping.shurufa.app/data/charAbsoluteFrequencyTC.json
+        USE_MIXED_FREQ="$USE_MIXED_FREQ" perl -CSDA -Mautodie -Mutf8 -lE 'use JSON::PP; use POSIX; use List::Util qw/max/;
+            sub read_file {
+                open my $fh, "<", $_[0];
+                binmode($fh);
+                local $/;
+                my $data = <$fh>;
+                close $fh;
+                return $data;
+            }
 
-    USE_MIXED_FREQ="$USE_MIXED_FREQ" perl -CSDA -Mautodie -Mutf8 -lE 'use JSON::PP; use POSIX; use List::Util qw/max/;
-        sub read_file {
-            open my $fh, "<", $_[0];
-            binmode($fh);
-            local $/;
-            my $data = <$fh>;
-            close $fh;
-            return $data;
-         }
+            $r = $ENV{USE_MIXED_FREQ} + 0;
+            $h = decode_json(read_file("charAbsoluteFrequencySC.json"));
+            $h2 = decode_json(read_file("charAbsoluteFrequencyTC.json"));
 
-         $r = $ENV{USE_MIXED_FREQ} + 0;
-         $h = decode_json(read_file("charAbsoluteFrequencySC.json"));
-         $h2 = decode_json(read_file("charAbsoluteFrequencyTC.json"));
+            # 使用 max 以保持简体高频字顺序和繁体高频字各自的顺序
+            for (keys %$h2) { $h->{$_} = max($h->{$_} // 0, $r * $h2->{$_}) }
 
-         # 使用 max 以保持简体高频字顺序和繁体高频字各自的顺序
-         for (keys %$h2) { $h->{$_} = max($h->{$_} // 0, $r * $h2->{$_}) }
-
-         for (sort { $h->{$b} <=> $h->{$a} || $a cmp $b } %$h) {
-             print "$_\t", ceil($h->{$_});
-         }
-    ' > full-freq.txt
+            for (sort { $h->{$b} <=> $h->{$a} || $a cmp $b } %$h) {
+                print "$_\t", ceil($h->{$_});
+            }
+        ' > full-freq.txt
+    else
+        echo '(0) 生成简体字频表 full-freq.txt ...'
+        perl -CSDA -lanE 'print "$F[0]\t$F[1]"' beiyu-char-freq.txt > full-freq.txt
+    fi
 else
-    echo '(0) 生成简体字频表 full-freq.txt ...'
-    perl -CSDA -lanE 'print "$F[0]\t$F[1]"' beiyu-char-freq.txt > full-freq.txt
+    echo "(0) 使用方案自行提供的字频表 $FULL_FREQ_TXT ..."
 fi
 
 
 echo '(1) 从 yuhao_charsets.lua 生成简繁常用字符集 chars.txt ...'
+# 注意不要改变此文件内容，此文件也被用于生成 roots.txt 时判断字根是否常用字，
+# 方案自行提供的算码字集可以放在 chars-$SCHEMA.txt 中。
 perl -CSDA -lnE 'print if (/\[\[/ .. eof) && /^\p{Han}$/' yuhao_charsets.lua | LC_ALL=C sort -u > chars.txt
+[ "$CHARS_TXT" = "chars.txt" ] || echo "    !!! 使用方案自行提供的算码字集 $CHARS_TXT ..."
 
 
-echo '(2) 从字频表 full-freq.txt 生成简繁常用字符集的字频表 freq.txt ...'
-perl -CSDA -Mautodie -Mutf8 -lanE 'BEGIN { open my $fh, "chars.txt"; while (<$fh>) {chomp; $h{$_} = 1} }
+echo "(2) 从字频表 $FULL_FREQ_TXT 生成算码字符集的字频表 freq.txt ..."
+perl -CSDA -Mautodie -Mutf8 -lanE '
+  BEGIN { open my $fh, $ENV{CHARS_TXT}; while (<$fh>) {chomp; $h{$_} = 1} }
+
   next unless defined $F[1] && $F[1] > 0;
   next unless exists $h{$F[0]};
   print "$F[0]\t$F[1]";
   delete $h{$F[0]};
+
   END {
       @a = sort keys %h;
       warn "    WARN: " .  scalar(@a) . " 个字符没有权重!\n" if @a != 0;
       for (@a) { print "$_\t0" }
-  }' full-freq.txt  > freq.txt
+  }' "$FULL_FREQ_TXT"  > freq.txt
 
 
-echo '(3) 从宇浩星陈方案的大陆字形拆分表 yustar_chaifen.dict.yaml 生成简繁常用字符集的拆分表 chaifen.txt 和 chaifen-all.txt ...'
+echo '(3) 从宇浩星陈方案的大陆字形拆分表 yustar_chaifen.dict.yaml 生成算码字符集的拆分表 chaifen.txt 和 全字集拆分表 chaifen-all.txt ...'
 perl -CSDA -Mautodie -Mutf8 -lanE '
   BEGIN {
     open my $fh, "freq.txt";
@@ -100,7 +104,7 @@ for s in chaifen chaifen_tw; do
     f=yustar_$s.dict.yaml
     [ -f "$f" ] && perl -CSDA -Mautodie -Mutf8 -lanE '
     BEGIN {
-        open my $fh, "full-freq.txt";
+        open my $fh, $ENV{FULL_FREQ_TXT};
         while (<$fh>) {
             chomp;
             @a = split;
@@ -161,7 +165,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
     next if "$F[0] $_" eq "糸 mì";      # 使用更低频的 sī
     next if "$F[0] $_" =~ /^[長长] zh/; # 使用更低频的 cháng
 
-    if ($F[0] eq "土") {
+    if ($F[0] eq "土" && $ENV{USE_PINYIN_DU_FOR_TU}) {
       print "土\tdù\t0";    # 使用「杜」dù 音
     } else {
       print "$F[0]\t$_\t", ($F[-1] =~ /^\d/ ? $F[-1] : "0");
@@ -170,9 +174,12 @@ perl -CSDA -Mautodie -Mutf8 -lanE '
 
 
 echo '(6) 从 roots-pinyin.txt 修正并生成字根声码韵码表 roots.txt ...'
-if [ "${USE_YULING_RULE:-}" = 1 ]; then
-    if [ ! -e roots.txt ]; then
-        echo "    !!! 使用宇浩灵明字根初始化 roots.txt ..."
+if [ "$ROOTS_TXT" != roots.txt ]; then
+    echo "    !!! 使用方案自行提供的字根声码韵码表 $ROOTS_TXT ..."
+    if [ -s "$ROOTS_TXT" ]; then
+        echo "    !!! 已存在 ${ROOTS_TXT}，跳过初始化，如果需要重新初始化，请使用命令 ': > $ROOTS_TXT' 清空它。"
+    else
+        echo "    !!! 使用宇浩灵明字根初始化 $ROOTS_TXT ..."
         curl -s https://shurufa.app/zigen-ling.csv |
             perl -CSDA -Mutf8 -F, -lanE '
             BEGIN {
@@ -190,9 +197,7 @@ if [ "${USE_YULING_RULE:-}" = 1 ]; then
             next if $.==1;
             print $h{$F[0]}, "\t", substr($F[1], 1), "\t", join(" ", @F[2..$#F]);
             print "卄\t", substr($F[1], 1), "\t", join(" ", @F[2..$#F]) if $h{$F[0]} eq "艹";
-            ' | LC_ALL=C sort -u -k2,2 -k1,1 > roots.txt
-    else
-        echo "    !!! 已存在 roots.txt，跳过生成，直接使用它（如果需要重新初始化，请先删除它）..."
+            ' | LC_ALL=C sort -u -k2,2 -k1,1 > $ROOTS_TXT
     fi
 else
 perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
@@ -214,7 +219,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
     close $fh;
     undef $fh;
 
-    open $fh, "chars.txt";
+    open $fh, "chars.txt";      # 常用字集，不是算码字集 $CHARS_TXT
     while (<$fh>) {
         chomp;
         $common_chars{$_} = 1;
@@ -229,7 +234,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       "屮"     => "ca",  # ce，取 cao
       "丶"     => "da",  # zu, 取 dian
       "乀"     => "da",  # fu, 与 丶 归并
-      "土"     => $ENV{USE_XIAOMING_RULE} ? "tu" : "du",    # tu, 音托时取 du，潇明会重新映射声母
+      "土"     => $ENV{USE_PINYIN_DU_FOR_TU} ? "du" : "tu",    # tu, 音托时取 du
       "朩"     => "mu",  # de, 与 木 归并
       "丨"     => "su",  # gu, 取 shu
       "丆"     => "ca",  # ha, 与 厂 归并
@@ -281,12 +286,11 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       $a =~ s/[^aeuio]//;
   }
 
-  unless ($ENV{USE_XIAOMING_RULE}) {                        # 潇明会重新映射所有声母
-      my $consonant = substr($a, 0, 1);
-      if ($ENV{OPTIMIZE_KEYS} !~ /$consonant/ && ($consonant = $ENV{"OPTIMIZE_KEY_$consonant"})) {
-        $a =~ s/^./$consonant/;
-      }
+  my $consonant = substr($a, 0, 1);
+  if ($ENV{OPTIMIZE_KEYS} !~ /$consonant/ && ($consonant = $ENV{"OPTIMIZE_KEY_$consonant"})) {
+    $a =~ s/^./$consonant/;
   }
+
   print "$F[0]\t$a\t", length($a) > 1 ? $pinyin{$F[0]} : "";
 ' roots-freq.txt | LC_ALL=C sort -k2,2 -k1,1 > roots.txt
 fi
@@ -374,6 +378,7 @@ perl -CSDA -F'\t' -lanE '
 
 
 echo '(8) 生成码灵输入文件 input-fixed.txt, 大码约束 ...'
+[ "$ROOTS_CLUSTER_TXT" = roots-cluster.txt ] || echo "    !!! 使用方案自行提供的字根聚类表 $ROOTS_CLUSTER_TXT ..."
 perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
   BEGIN {
     open my $fh, "roots-freq.txt";
@@ -384,29 +389,29 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
     }
     undef $h;
 
-    open $fh, "roots-cluster.txt";
+    open $fh, $ENV{ROOTS_CLUSTER_TXT};
     while (<$fh>) {
       next if /^\s*#/ || /^\s*$/;
-      next if /^\s*一\s+f/i && $ENV{USE_XIAOMING_RULE};     # 潇明的 F 属于 B 区，不能用作大码，跳过这个宇码惯例
+      next if /^\s*一\s+f/i && $ENV{ALL_ROOT_KEYS} !~ /f/i;     # 对 F 用作 B 区的方案，跳过宇码传统的「一」大码 F 约束
       chomp;
       @a = split /\t/, $_, 2;
-      die "Invalid line in roots-cluster.txt: $_\n" if $a[0] =~ /[a-z]/ || $a[1] =~ /[^a-z\s]/;
+      die "Invalid line in $ENV{ROOTS_CLUSTER_TXT}: $_\n" if $a[0] =~ /[a-z]/ || $a[1] =~ /[^a-z\s]/;
       $a[0] =~ s/^\s*|\s*$//g;
       $a[1] =~ s/^\s*|\s*$//g;
       @b = sort split /\s+/, $a[0];
-      $a = sum(map { $freq{$_} // die "ERROR: Unknown root $_ in roots-cluster.txt" } @b);
-      if ($a >= 2.5) {
-        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "asghl" : "sdfghjkl";
-      } elsif ($a >= 1.5) {
-        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "wruo asghl vnm" : "wr sdfghjkl vnm";
+      $a = sum(map { $freq{$_} // die "ERROR: Unknown root $_ in $ENV{ROOTS_CLUSTER_TXT}" } @b);
+      if ($a >= $ENV{TOP_ROOT_FREQ}) {
+        $a[1] ||= $ENV{TOP_ROOT_KEYS};
+      } elsif ($a >= $ENV{HOT_ROOT_FREQ}) {
+        $a[1] ||= $ENV{HOT_ROOT_KEYS};
       } else {
-        $a[1] ||= $ENV{USE_XIAOMING_RULE} ? "qwrtyuop asghl xcvbnm" : "qwrtyp sdfghjkl xcvbnm";
+        $a[1] ||= $ENV{ALL_ROOT_KEYS};
       }
       $a[1] = join(" ", split /\s*/, $a[1]);
       printf "# freq=%.8f\n", $a;
       print join(" ", map { "$_.A" } @b), "\t$a[1]";
       for (@b) {
-        die "ERROR: root $_ in multiple clusters, check roots-cluster.txt!\n" if exists $h{$_};
+        die "ERROR: root $_ in multiple clusters, check $ENV{ROOTS_CLUSTER_TXT}!\n" if exists $h{$_};
         $h{$_} = 1;
       }
     }
@@ -414,16 +419,16 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -MList::Util=sum -lanE '
 
   next if $h{$F[0]};
   $a = $freq{$F[0]};
-  if ($a >= 2.5) {
-    $b = $ENV{USE_XIAOMING_RULE} ? "asghl" : "sdfghjkl";
-  } elsif ($a >= 1.5) {
-    $b = $ENV{USE_XIAOMING_RULE} ? "wruo asghl vnm" : "wr sdfghjkl vnm";
+  if ($a >= $ENV{TOP_ROOT_FREQ}) {
+    $b = $ENV{TOP_ROOT_KEYS};
+  } elsif ($a >= $ENV{HOT_ROOT_FREQ}) {
+    $b = $ENV{HOT_ROOT_KEYS};
   } else {
-    $b = $ENV{USE_XIAOMING_RULE} ? "qwrtyuop asghl xcvbnm" : "qwrtyp sdfghjkl xcvbnm";
+    $b = $ENV{ALL_ROOT_KEYS};
   }
   printf "# freq=%.8f\n", $a;
   print "$F[0].A\t", join(" ", split /\s*/, $b);
-' roots.txt > input-fixed.txt
+' "$ROOTS_TXT" > input-fixed.txt
 
 
 echo '(9) 添加码灵输入文件 input-fixed.txt, 声码和韵码约束 ...'
@@ -442,6 +447,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
         "忄"        => "4",
         "乃"        => "5",
         "乙"        => "5",
+        "{纟上}"    => "6",
       );
 
       open my $fh, "yuhao-zigens.csv";
@@ -450,20 +456,21 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
         chomp;
         @a = split /,/;
         $b = substr($a[4], 0, 1);
-        $b = "5" if $b eq "6" && ! $ENV{USE_XIAOMING_RULE};
+        $b = "5" if $b eq "6" && $ENV{USE_STROKE_5_FOR_6};
         die "Conflict strokes: $_ vs. previously $strokes{$a[1]}\n" if exists $strokes{$a[1]} && $strokes{$a[1]} ne $b;
         $strokes{$a[1]} = $b unless exists $strokes{$a[1]} || exists $stroke_overrides{$a[1]};
       }
       close $fh;
 
       while (my ($k, $v) = each %stroke_overrides) {
+        $v = "5" if $v eq "6" && $ENV{USE_STROKE_5_FOR_6};
         $strokes{$k} = $v;
       }
     }
   }
 
   # 潇明声码约束
-  if ($ENV{USE_XIAOMING_RULE}) {
+  if ($ENV{SCHEMA} eq "xiaoming") {
     %stroke_mapping = qw( 1 d 2 k 3 f 4 j 5 i 6 e );
     if (length($F[1]) > 1) {
         push @{ $xiaoming_consonants{ substr($F[1], 0, 1) } }, $F[0];
@@ -485,7 +492,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
   if (length($F[1]) > 1) {
     $a = substr($F[1], 0, 1);
 
-    if ($ENV{USE_YAOLING_RULE}) {
+    if ($ENV{SCHEMA} eq "yaoling") {
         push @{ $yaoling_consonants{$a} }, $F[0];    # 妖灵的声母重新映射到声码，并且对应固定的韵码
     } else {
         if ($ENV{OPTIMIZE_KEYS} =~ /$a/) {
@@ -498,13 +505,13 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
 
   # 韵码约束
   if ($ENV{USE_VOWEL}) {    # 使用韵母作为字根的补码
-    if ($ENV{USE_YAOLING_RULE}) {           # 妖灵的声母重新映射到声码，并且对应固定的韵码
+    if ($ENV{SCHEMA} eq "yaoling") {        # 妖灵的声母重新映射到声码，并且对应固定的韵码
         if (length($F[1]) > 1) {
             # 同声母的大根的韵码固定，后面跟声码约束一起输出
         } else {
             print "$F[0].Y\t", substr($F[1], -1);   # 小根复用灵明的韵码
         }
-    } elsif ($ENV{USE_YUELING_RULE}) {      # 月灵的韵码仿日月的映射
+    } elsif ($ENV{SCHEMA} eq "yueling") {   # 月灵的韵码仿日月的映射
         my $pinyin = $F[2] // "";
 
         $pinyin =~ s/^\s+//;                # 去掉开头的空白和后面的注释
@@ -552,18 +559,18 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
   END {
     for (sort keys %consonants) {
         print "# $_";
-        print join(" ", map { "$_.S" } @{ $consonants{$_} }), "\t", join(" ", split /\s*/, "qwrtyp sdfghjkl xcvbnm");
+        print join(" ", map { "$_.S" } @{ $consonants{$_} }), "\t", join(" ", split /\s*/, $ENV{ALL_ROOT_KEYS});
     }
 
     for (sort keys %yaoling_consonants) {
         print "# $_";
-        print join(" ", map { "$_.S" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, "qwrtyp sdfghjkl xcvbnm");
-        print join(" ", map { "$_.Y" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, "aeuio");
+        print join(" ", map { "$_.S" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, $ENV{ALL_ROOT_KEYS});
+        print join(" ", map { "$_.Y" } @{ $yaoling_consonants{$_} }), "\t", join(" ", split /\s*/, $ENV{B_AREA_KEYS});
     }
 
     for (sort keys %yueling_vowels) {
         print "# $_";
-        print join(" ", map { "$_.Y" } @{ $yueling_vowels{$_} }), "\t", join(" ", split /\s*/, "aeuio");
+        print join(" ", map { "$_.Y" } @{ $yueling_vowels{$_} }), "\t", join(" ", split /\s*/, $ENV{B_AREA_KEYS});
     }
 
     # 按拆分里字根首笔使用情况以及字频加权统计，字根首笔折(5)和竖(2)少，横(1)、撇(3)、点(4) 多
@@ -576,14 +583,14 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
           die "No constraint found for $stroke!\n" unless exists $stroke_constraint{$stroke};
           print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, $stroke_constraint{$stroke});
       } elsif ($stroke =~ /^[0qwrtypsdfghjklzxcvbnm]$/) {   # 待映射的声母的韵母约束
-          print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, "aeuio");
+          print join(" ", map { "$_.Y" } @a), "\t", join(" ", split /\s*/, $ENV{B_AREA_KEYS});
       } else {
           die "No mapping found for $stroke!\n" unless exists $stroke_mapping{$stroke};
           print join("\n", map { "$_.Y\t$stroke_mapping{$stroke}" } @a);
       }
     }
   }
-' roots.txt >> input-fixed.txt
+' "$ROOTS_TXT" >> input-fixed.txt
 
 
 echo '(10) 添加码灵输入文件 input-fixed.txt, 飞键约束 ...'
@@ -600,7 +607,7 @@ echo '(11) 生成空的 input-roots.txt, 所有字根已定义于 input-fixed.tx
 echo '(12) 生成码灵输入文件 input-division.txt ...'
 perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   BEGIN {
-    open my $fh, "roots.txt";
+    open my $fh, $ENV{ROOTS_TXT};
     while (<$fh>) {
       chomp;
       @a = split;
@@ -622,7 +629,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
 
   for (@a) { die "Bad root $_\n" unless exists $h{$_} || exists $h2{$_}; }
 
-  if ($ENV{USE_YULING_RULE}) {      # 使用宇浩灵明单字编码规则
+  if ($ENV{ENCODE_RULE} eq "yuling") {          # 使用宇浩灵明单字编码规则
     push @b, "$a[0].A";
     push @b, "$a[0].S" if length($h{$a[0]}) > 1;
     push @b, "$a[0].Y" if @a == 1;
@@ -636,7 +643,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
       push @b, "$a[-1].S" if length($h{$a[-1]}) > 1;
       push @b, "$a[-1].Y";
     }
-  } elsif ($ENV{USE_XIAOMING_RULE}) {   # 使用潇明单字编码规则
+  } elsif ($ENV{ENCODE_RULE} eq "xiaoming") {   # 使用潇明单字编码规则
     push @b, "$a[0].A", "$a[0].S";
     if (@a == 1) {
         push @b, "$a[0].Y";
@@ -647,7 +654,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     } else {
         push @b, "$a[1].A", "$a[2].A", "$a[-1].A";
     }
-  } else {                          # 使用魔灵单字编码规则
+  } else {                                      # 使用魔灵单字编码规则
     for (@a) { push @b, "$_.A" }
     $b[0] = "$a[0].U" if exists $h2{$a[0]};
     if (@a == 2) {
@@ -662,15 +669,14 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
     push @b, "$a.Y";
   }
 
-  if ($ENV{USE_XIAOMING_RULE}) {
-      @b = @b[0..4] if @b > 5;
-  } else {
-      @b = @b[0..3] if @b > 4;
-  }
+  @b = @b[0 .. ($ENV{MAX_CODE_LEN} - 1)] if @b > $ENV{MAX_CODE_LEN};
+
   print "$F[0]\t", join(" ", @b), "\t$F[2]";
 ' chaifen.txt > input-division.txt
 
-if sed -ne '/^\s*\[weights.simple_code\]/,/^\s*\[/p' config.toml | grep -qi '^\s*enabled\s*=\s*true'; then
+CONFIG_TOML=config.toml
+[ -f "config-$SCHEMA.toml" ] && CONFIG_TOML="config-$SCHEMA.toml"
+if sed -ne '/^\s*\[weights.simple_code\]/,/^\s*\[/p' "$CONFIG_TOML" | grep -qi '^\s*enabled\s*=\s*true'; then
     echo '(13) 替换 input-fixed.txt 和 input-division.txt 中的 .A, .S, .Y  为 .0, .1, .2 以让码灵能计算简码 ...'
     perl -CSDA -i -lpE 's/(\S)\.A/\1.0/g;  s/(\S)\.S/\1.1/g;  s/(\S)\.Y/\1.2/g' input-fixed.txt input-division.txt
 fi
