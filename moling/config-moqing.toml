@@ -56,24 +56,24 @@ display_order = "qwertyuiopasdfghjklzxcvbnm"
 # -------------------------------------------------------------------------
 [weights.full_code]
 # 全码部分权重（总和应为 1.0）
-collision_count = 0.01    # 重码数权重
+collision_count = 0.13    # 重码数权重
 collision_rate = 0.47     # 重码率权重
-equivalence = 0.50        # 当量权重
+equivalence = 0.36        # 当量权重
 equiv_cv = 0.01           # 当量变异系数权重
-distribution = 0.01       # 分布偏差权重
+distribution = 0.03       # 分布偏差权重
 
 [weights.simple_code]
 # 简码优化开关与权重
-enabled = false          # 是否启用简码优化
-full_code_weight = 0.4   # 全码目标总权重
-simple_code_weight = 0.6 # 简码目标总权重
+enabled = true           # 是否启用简码优化
+full_code_weight = 0.6   # 全码目标总权重
+simple_code_weight = 0.4 # 简码目标总权重
 
 # 简码内部子权重（总和应为 1.0）
-collision_count = 0.01   # 重码数权重
-collision_rate = 0.47    # 重码率权重
-freq = 0.01              # 频率覆盖权重
-equiv = 0.50             # 当量权重
-dist = 0.01              # 分布偏差权重
+collision_count = 0.1    # 重码数权重
+collision_rate = 0.3     # 重码率权重
+freq = 0.2               # 频率覆盖权重
+equiv = 0.2              # 当量权重
+dist = 0.2               # 分布偏差权重
 
 # 简码评估性能优化：激活、权重渐进、候选字与对账配置
 simple_start_progress = 0.4      # 简码计算激活进度阈值（进度 = 当前步/总步数；建议落在舒适区前沿，默认 0.4）
