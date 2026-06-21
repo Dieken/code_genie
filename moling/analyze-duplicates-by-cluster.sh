@@ -13,7 +13,7 @@ no_cluster=$(./analyze-duplicates-by-cluster.pl --cluster "" |
     sed -e 's/:/\t/' |
     LC_ALL=C sort)
 
-grep -v '^#' roots-cluster.txt |
+grep -v '^#' $ROOTS_CLUSTER_TXT |
     grep -v '^\s*$' |
     sed -e 's/\t.*//' |
     while read cluster; do

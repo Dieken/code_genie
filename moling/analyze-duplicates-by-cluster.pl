@@ -19,9 +19,9 @@ use autodie;
 # 韵码是用的首笔字根通过退火算法计算得出，应使用 output-xxxx
 # 目录下由 ./generate-root-chart.sh 脚本生成的 roots.tsv 文件
 # 并去掉其中的大码。
-my $roots_file = "roots.txt";
+my $roots_file = schema_aware_file("roots", "txt");
 my $chaifen_file = "chaifen.txt";
-my $cluster_file = "roots-cluster.txt";
+my $cluster_file = schema_aware_file("roots-cluster", "txt");
 my $max_dups = 9;
 
 GetOptions(
@@ -41,6 +41,14 @@ dump_dups($total_weights, $clusters,
 
 
 ########################################################################
+sub schema_aware_file($file, $ext) {
+    if ($ENV{SCHEMA} && -f "$file-$ENV{SCHEMA}.$ext") {
+        return "$file-$ENV{SCHEMA}.$ext";
+    } else {
+        return "$file.$ext";
+    }
+}
+
 sub read_roots($file) {
     my %roots;
 
@@ -133,6 +141,19 @@ sub calculate_dups($chaifens, $roots, $clusters) {
                 }
 
                 push @code, split(//, $roots->{$cf->[-1]});
+            }
+        } elsif ($ENV{ENCODE_RULE} eq "moqing") {   # 使用魔清单字编码规则
+            my @dama = map { exists $clusters->{$_} ? $clusters->{$_} : "$_.A" } @$cf;
+            if (@$cf == 1) {
+                my $s = $roots->{$cf->[0]};
+                $s = "v$s" if length($s) == 1;      # 无音补声母 v
+                push @code, $dama[0], substr($s, 0, 1), substr($s, 0, 1);
+            } elsif (@$cf == 2) {
+                my $s = $roots->{$cf->[1]};
+                $s = "v$s" if length($s) == 1;      # 无音补声母 v
+                push @code, $dama[0], $dama[1], substr($s, 0, 1);
+            } else {
+                push @code, $dama[0], $dama[1], $dama[-1];
             }
         } else {                                # 使用魔灵单字编码规则
             for (@$cf) {
