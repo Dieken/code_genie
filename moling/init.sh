@@ -123,6 +123,7 @@ esac
 
 : "${ENABLE_SPACE_SHORTCODE:=0}"                # 是否启用空格简码，默认关闭
 : "${PREFER_SPACE_SHORTCODE:=0}"                # 是否优先使用空格简码，默认优先使用韵码简码
+: "${SIMPLE_PROTECT_TOP_N:=8000}"               # 简码不会抢前 N 个高频字的码位
 
 # 优先空格简意味着开启空格简
 [ "${PREFER_SPACE_SHORTCODE:-}" = 1 ] && export ENABLE_SPACE_SHORTCODE=1

@@ -9,9 +9,10 @@ shopt -s failglob
 : "${DRYRUN:=0}"
 : "${NO_PREPARE:=0}"
 : "${NO_BUILD:=0}"
+: "${SCHEMA:=moling}"
 
 
-[ "${SCHEMA:-}" -a -f "config-${SCHEMA:-}.toml" ] && CONFIG="-c config-$SCHEMA.toml" || CONFIG="-c config.toml"
+[ -f "config-$SCHEMA.toml" ] && CONFIG="config-$SCHEMA.toml" || CONFIG="config.toml"
 
 which caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -imsu" || CAFFEINATE=
 [ "$DRYRUN" = 1 ] && DRYRUN=echo || DRYRUN=
@@ -104,7 +105,7 @@ mkdir -p "$OUT"
 
 # (3) 备注：输入一句话备注，追加写入 COMMENT.txt；如果 resume 复用 $OUT 则备注会追加写入 COMMENT.txt（而不是覆盖），以保留之前的备注。
 read -e -p "一句话备注： " comment
-comment="$0 $CONFIG $SUBCMD $@ : $comment"
+comment="$0 -c $CONFIG $SUBCMD $@ : $comment"
 echo "$comment" >> "$OUT/COMMENT.txt"
 
 
@@ -113,33 +114,35 @@ BAK="$OUT/source"
 if [ -d "$BAK" ]; then
     echo "备份目录 $BAK 已存在，跳过输入文件备份！"
 else
+    files="$CONFIG"
+    [ -f "init-$SCHEMA.sh" ] && files+=" init-$SCHEMA.sh"
+    for f in chars full-freq roots roots-cluster; do
+        [ -f "$f-$SCHEMA.txt" ] && files+=" $f-$SCHEMA.txt" || files+=" $f.txt"
+    done
+
     mkdir -p "$BAK"
     # backup configuration for later review
     cp batch-test-weights.txt \
-       chaifen.txt \
+       chaifen*.txt \
        charAbsoluteFrequency*.json \
-       chars*.txt \
-       config*.toml \
        freq.txt \
-       full-freq*.txt \
-       init*.sh \
+       init.sh \
        input-division.txt \
        input-fixed.txt \
        input-roots.txt \
        key_distribution.txt \
        pair_equivalence.txt \
        prepare-inputs.sh \
-       roots-cluster*.txt \
        roots-fly.txt \
        roots-freq.txt \
        roots-pinyin.txt \
-       roots*.txt \
+       $files \
        "$BAK/"
 fi
 
 LOG="$OUT/optimize-$TS.log"
 date
-echo "Running './prepare-inputs.sh' and '$CODE_GENIE $CONFIG $SUBCMD', writing log to $LOG ..."
+echo "Running './prepare-inputs.sh' and '$CODE_GENIE -c $CONFIG $SUBCMD', writing log to $LOG ..."
 {
     date
 
@@ -166,7 +169,7 @@ echo "Running './prepare-inputs.sh' and '$CODE_GENIE $CONFIG $SUBCMD', writing l
     [ "$NO_BUILD" = 1 ] || $DRYRUN cargo build --profile="$PROFILE"
     echo
 
-    time $DRYRUN $CAFFEINATE $SAMPLY_RECORD $CODE_GENIE $CONFIG $SUBCMD "${ARGS[@]}"
+    time $DRYRUN $CAFFEINATE $SAMPLY_RECORD $CODE_GENIE -c $CONFIG $SUBCMD "${ARGS[@]}"
     set +x
 
     date
