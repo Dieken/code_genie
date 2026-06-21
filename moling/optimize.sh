@@ -118,21 +118,22 @@ else
     cp batch-test-weights.txt \
        chaifen.txt \
        charAbsoluteFrequency*.json \
-       chars.txt \
-       config.toml \
+       chars*.txt \
+       config*.toml \
        freq.txt \
-       full-freq.txt \
+       full-freq*.txt \
+       init*.sh \
        input-division.txt \
        input-fixed.txt \
        input-roots.txt \
        key_distribution.txt \
        pair_equivalence.txt \
        prepare-inputs.sh \
-       roots-cluster.txt \
+       roots-cluster*.txt \
        roots-fly.txt \
        roots-freq.txt \
        roots-pinyin.txt \
-       roots.txt \
+       roots*.txt \
        "$BAK/"
 fi
 
