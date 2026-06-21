@@ -1326,15 +1326,20 @@ fn backup_inputs(cfg: &Config, cli_config_path: &str, output_dir: &str) {
         eprintln!("⚠️ 创建 inputs 目录失败: {}", e);
         return;
     }
-    let srcs = [
-        cli_config_path,
+    // config 文件固定备份为 config.toml，确保 resume 能用硬编码路径找到它。
+    let dst = format!("{}/config.toml", inputs_dir);
+    if let Err(e) = fsutil::copy_with_backup(cli_config_path, &dst) {
+        eprintln!("⚠️ 备份输入文件 {} 失败: {}", cli_config_path, e);
+    }
+
+    let data_srcs = [
         cfg.files.fixed.as_str(),
         cfg.files.dynamic.as_str(),
         cfg.files.splits.as_str(),
         cfg.files.pair_equiv.as_str(),
         cfg.files.key_dist.as_str(),
     ];
-    for src in srcs {
+    for src in data_srcs {
         let base = std::path::Path::new(src)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -1508,6 +1513,45 @@ mod backup_tests {
             assert!(dst.exists(), "缺少备份文件: {}", dst.display());
             assert_eq!(std::fs::read_to_string(&dst).unwrap(), content, "{name} 内容不一致");
         }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// config 文件名非 config.toml 时，备份后应固定叫 config.toml，确保 resume 能找到它。
+    #[test]
+    fn backup_inputs_renames_config_to_config_toml() {
+        let base = std::env::temp_dir().join(format!("cg_backup_rename_{}", std::process::id()));
+        let src = base.join("src");
+        let out = base.join("output-test");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+
+        // config 文件使用非默认名称
+        let custom_config = "my-custom-config.toml";
+        std::fs::write(src.join(custom_config), "custom-config-content").unwrap();
+        std::fs::write(src.join("input-fixed.txt"), "fixed").unwrap();
+        std::fs::write(src.join("input-roots.txt"), "roots").unwrap();
+        std::fs::write(src.join("input-division.txt"), "division").unwrap();
+        std::fs::write(src.join("pair_equivalence.txt"), "equiv").unwrap();
+        std::fs::write(src.join("key_distribution.txt"), "keydist").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.files.fixed = src.join("input-fixed.txt").to_string_lossy().to_string();
+        cfg.files.dynamic = src.join("input-roots.txt").to_string_lossy().to_string();
+        cfg.files.splits = src.join("input-division.txt").to_string_lossy().to_string();
+        cfg.files.pair_equiv = src.join("pair_equivalence.txt").to_string_lossy().to_string();
+        cfg.files.key_dist = src.join("key_distribution.txt").to_string_lossy().to_string();
+        let config_path = src.join(custom_config).to_string_lossy().to_string();
+
+        backup_inputs(&cfg, &config_path, &out.to_string_lossy());
+
+        let inputs = out.join("inputs");
+        // 固定备份为 config.toml，内容与源文件一致
+        let dst = inputs.join("config.toml");
+        assert!(dst.exists(), "备份的 config 文件应命名为 config.toml");
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "custom-config-content");
+        // 原始文件名不应出现在 inputs/ 下
+        assert!(!inputs.join(custom_config).exists(), "不应以原始文件名备份 config");
 
         let _ = std::fs::remove_dir_all(&base);
     }
