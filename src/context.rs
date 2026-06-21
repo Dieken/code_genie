@@ -88,7 +88,9 @@ pub struct OptContext {
     /// 其中 effective_simple_len = 指令步数 + (该级 space_commit ? 1 : 0)（需求 4.5/20.3/20.4）
     pub simple_base_saving: Vec<Vec<i64>>,
     /// 出简长度资格（需求 22）：simple_eligible[ci][li] 为真当且仅当
-    /// effective_simple_len(li) < full_len(ci)，即简码有效长度严格短于全码长度。
+    /// 核心码长（指令步数，不含尾随空格）严格小于全码长度 full_len(ci)。
+    /// 资格判定不计入 space_commit 的空格，避免空格上屏级别在全码-简码=1 时被误拒；
+    /// base_saving 与当量/分布统计仍以 effective_simple_len（含空格）计算。
     /// 退火前静态确定，全量重建与增量更新两条路径共用同一判定。
     pub simple_eligible: Vec<Vec<bool>>,
     /// 每级简码桶向量容量 = code_base^L（L = 该级各候选指令长度的最大值）
@@ -368,7 +370,10 @@ impl OptContext {
 
             // base_saving 预计算：simple_base_saving[ci][li] = full_len - effective_simple_len
             // 其中 effective_simple_len = 指令步数 + (该级 space_commit ? 1 : 0)（需求 20.3/20.4）。
-            // 同时预计算出简长度资格 simple_eligible[ci][li] = effective_simple_len < full_len（需求 22）。
+            // 同时预计算出简长度资格 simple_eligible[ci][li]（需求 22）：
+            // 资格判定只看「核心码长」（指令步数，不含尾随空格），即 step_count < full_len。
+            // 这样 space_commit=true 的级别不会因空格使有效长度追平全码而被误拒。
+            // base_saving 与当量/分布仍以 effective_simple_len（含空格）计算，反映真实击键成本。
             simple_base_saving = vec![vec![0i64; n_levels]; n_chars];
             simple_eligible = vec![vec![false; n_levels]; n_chars];
             for ci in 0..n_chars {
@@ -382,8 +387,8 @@ impl OptContext {
                     let space = if simple_config.levels[li].space_commit { 1 } else { 0 };
                     let effective_simple_len = step_count + space;
                     simple_base_saving[ci][li] = full_len - effective_simple_len;
-                    // 仅当该级有有效简码指令（step_count > 0）且有效长度严格短于全码时才合格。
-                    simple_eligible[ci][li] = step_count > 0 && effective_simple_len < full_len;
+                    // 资格判定：核心码长（step_count）严格短于全码，与是否空格上屏无关。
+                    simple_eligible[ci][li] = step_count > 0 && step_count < full_len;
                 }
             }
 
@@ -805,7 +810,8 @@ impl OptContext {
         total / n as f64
     }
 
-    /// 出简长度资格（需求 22）：判断候选字 `ci` 在级别 `li` 的有效简码长度是否严格短于全码长度。
+    /// 出简长度资格（需求 22）：判断候选字 `ci` 在级别 `li` 的核心码长（指令步数）是否严格短于全码长度。
+    /// 资格判定不计入 space_commit 的尾随空格，避免空格上屏级别在全码-简码=1 时被误拒。
     /// 不合格时视同 `calc_simple_code` 返回 `None`（不进桶、不出简）。
     #[inline]
     pub fn simple_is_eligible(&self, ci: usize, level_idx: usize) -> bool {

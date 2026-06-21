@@ -5999,12 +5999,11 @@ mod space_commit_and_length_tests {
         // Feature: simple-code-perf-optimization, Property 20: 简码长度严格短于全码
         //
         // 对任意候选字 ci 与级别 li，该字在该级出简（进入简码桶且 current_simple_code[ci] != -1）
-        // 当且仅当其有效简码长度 effective_simple_len(li) = 指令步数 + (space_commit ? 1 : 0)
-        // 严格小于全码长度 full_len(ci) = char_infos[ci].parts.len()。任何被分配（含退火分配）
-        // 的简码，其有效长度都严格小于对应字的全码长度。
+        // 当且仅当其核心码长（指令步数，不含尾随空格）严格小于全码长度 full_len(ci)。
+        // 资格判定不计入 space_commit 的尾随空格；base_saving 与当量/分布仍以有效长度（含空格）计算。
         #[test]
         fn prop20_simple_len_strictly_shorter_than_full(
-            // n_roots ∈ 1..=3 覆盖「合格」与「不合格（含 None 级别与 effective>=full）」两种分支，
+            // n_roots ∈ 1..=3 覆盖「合格」与「不合格（含 None 级别与 step>=full）」两种分支，
             // 同时把 code_space 控制在 code_base^3（约 3.3 万），避免 build_simple_eval 大分配。
             specs in prop::collection::vec((1u64..=200, 1usize..=3), 1..=6),
             space in prop::collection::vec(any::<bool>(), 3),
@@ -6015,39 +6014,37 @@ mod space_commit_and_length_tests {
             let n_levels = ctx.simple_config.levels.len();
             let asg = vec![0u8; ctx.num_groups];
 
-            // (A) 资格谓词与重算一致：eligible ⟺ (step>0 && step + space < full_len)
+            // (A) 资格谓词与重算一致：eligible ⟺ (step > 0 && step < full_len)
+            // 资格判定只看核心码长，不含 space_commit 的尾随空格。
             for ci in 0..n_chars {
                 let full_len = ctx.char_infos[ci].parts.len();
                 for li in 0..n_levels {
                     let sc = step_count(&ctx, ci, li);
-                    let space_bit = if sp[li] { 1 } else { 0 };
-                    let effective = sc + space_bit;
-                    let expected = sc > 0 && effective < full_len;
+                    let expected = sc > 0 && sc < full_len;
                     prop_assert_eq!(ctx.simple_is_eligible(ci, li), expected,
                         "eligibility 谓词与重算不一致 (ci={}, li={}, sc={}, space={}, full={})",
-                        ci, li, sc, space_bit, full_len);
+                        ci, li, sc, if sp[li] { 1 } else { 0 }, full_len);
                 }
             }
 
-            // (B) 进入简码桶 / 出简的字其有效长度必严格短于全码
+            // (B) 进入简码桶 / 出简的字其核心码长必严格短于全码
             let se = build_simple_eval(&ctx, &asg);
             for li in 0..n_levels {
                 for ci in 0..n_chars {
                     let full_len = ctx.char_infos[ci].parts.len();
                     let sc = step_count(&ctx, ci, li);
-                    let effective = sc + if sp[li] { 1 } else { 0 };
 
-                    // 进入简码桶（current_simple_code != -1）⟹ 合格 ⟹ 有效长度 < 全码
+                    // 进入简码桶（current_simple_code != -1）⟹ 合格 ⟹ 核心码长 < 全码
                     if se.levels[li].current_simple_code[ci] != -1 {
                         prop_assert!(ctx.simple_is_eligible(ci, li),
                             "入桶字必合格 (ci={}, li={})", ci, li);
-                        prop_assert!(effective < full_len,
-                            "入桶字有效长度 {} 应 < 全码 {} (ci={}, li={})", effective, full_len, ci, li);
+                        prop_assert!(sc < full_len,
+                            "入桶字核心码长 {} 应 < 全码 {} (ci={}, li={})", sc, full_len, ci, li);
                     }
-                    // 被实际出简（selected）⟹ 有效长度 < 全码
+                    // 被实际出简（selected）⟹ 核心码长 < 全码
                     if se.levels[li].selected[ci] {
-                        prop_assert!(effective < full_len,
-                            "出简字有效长度 {} 应 < 全码 {} (ci={}, li={})", effective, full_len, ci, li);
+                        prop_assert!(sc < full_len,
+                            "出简字核心码长 {} 应 < 全码 {} (ci={}, li={})", sc, full_len, ci, li);
                     }
                 }
             }

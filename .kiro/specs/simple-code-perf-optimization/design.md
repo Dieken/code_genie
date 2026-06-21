@@ -449,7 +449,7 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 
 #### 简码长度严格短于全码（需求 22）
 
-- **静态资格过滤**：候选字 `ci` 仅当其在级别 `li` 的有效简码长度 `effective_simple_len(li) < full_len(ci)` 时才允许进入该级简码桶；其中 `effective_simple_len = 指令步数 + (space_commit ? 1 : 0)`，`full_len = char_infos[ci].parts.len()`。该资格为退火前静态预计算（可与 `simple_base_saving` 一并计算，或新增 `simple_eligible[ci][li]` 位图），全量重建与增量更新两条路径共用同一判定，保证一致（需求 22.4）。
+- **静态资格过滤**：候选字 `ci` 仅当其在级别 `li` 的**核心码长**（指令步数，不含尾随空格）严格小于全码长度 `full_len(ci)` 时才允许进入该级简码桶；`full_len = char_infos[ci].parts.len()`。资格判定不计入 `space_commit` 的尾随空格，使 `space_commit=true` 的级别在「全码-简码=1」时不被误拒（例如三码方案的二码简码加空格后有效长度=3，但核心码长=2<3，仍合格）。`base_saving` 与当量/分布统计仍以 `effective_simple_len = 指令步数 + (space_commit ? 1 : 0)` 计算，反映真实击键成本。该资格为退火前静态预计算（与 `simple_base_saving` 一并计算，使用 `simple_eligible[ci][li]` 位图），全量重建与增量更新两条路径共用同一判定，保证一致（需求 22.4）。
 - 在 `rebuild_selection` 与 `apply_move_incremental` 的「候选字入桶」步骤加入该资格判定：不合格的 `(ci, li)` 既不进入桶、也不计 `current_simple_code`，等价于 `calc_simple_code` 返回 `None` 的处理路径。
 - 固定简码若违反该约束则在加载期拒绝（需求 22.3）。
 
@@ -628,7 +628,7 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 
 ### Property 20: 简码长度严格短于全码
 
-*对任意* 候选字 `ci` 与级别 `li`，该字在该级出简（进入简码桶且 `current_simple_code[ci] != -1`）当且仅当其有效简码长度 `effective_simple_len(li) = 指令步数 + (space_commit ? 1 : 0)` 严格小于全码长度 `full_len(ci) = char_infos[ci].parts.len()`。任何被分配（含固定简码与退火分配）的简码，其有效长度都严格小于对应字的全码长度。
+*对任意* 候选字 `ci` 与级别 `li`，该字在该级出简（进入简码桶且 `current_simple_code[ci] != -1`）当且仅当其**核心码长**（指令步数，不含尾随空格）严格小于全码长度 `full_len(ci) = char_infos[ci].parts.len()`。资格判定不计入 `space_commit` 的尾随空格。任何被分配（含固定简码与退火分配）的简码，其核心码长（去除结尾 `_`）都严格小于对应字的全码长度。
 
 **Validates: Requirements 22.1, 22.2, 22.3, 22.4**
 

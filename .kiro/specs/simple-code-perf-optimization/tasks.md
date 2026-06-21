@@ -267,15 +267,16 @@
     - **Property 19: 固定简码的恒定出简贡献**，proptest ≥100 次迭代（含级别归属/一致性校验、跨移动序列 `all_assigned_flags` 恒真与常量贡献）
     - **Validates: Requirements 21.3, 21.4, 21.5, 21.6, 21.7, 21.8, 21.9**
 
-- [x] 16. 简码长度严格短于全码（需求 22）
+- [x] 16. 简码长度必须严格短于全码（需求 22）
   - [x] 16.1 静态长度资格过滤
-    - `src/context.rs` 预计算每个 `(ci, li)` 的出简资格：`effective_simple_len(li) = 指令步数 + (space_commit ? 1 : 0) < full_len(ci)`（可与 `simple_base_saving` 一并算，或新增 `simple_eligible` 位图）
+    - `src/context.rs` 预计算每个 `(ci, li)` 的出简资格：核心码长（指令步数，不含尾随空格）`step_count < full_len(ci)`；与 `simple_base_saving` 一并计算到 `simple_eligible` 位图
+    - 资格判定**不计入** `space_commit` 的尾随空格，避免三码方案二码加空格级别被误拒；`base_saving` 与当量/分布仍以 `effective_simple_len = step_count + (space_commit ? 1 : 0)` 计算
     - 在 `rebuild_selection` 与 `apply_move_incremental` 的候选字入桶步骤加入该资格判定：不合格的 `(ci, li)` 等价于 `calc_simple_code` 返回 `None`
-    - 固定简码若违反约束在加载期拒绝（见 15.1）
+    - 固定简码若违反约束（核心码长 ≥ 全码长度）在加载期拒绝（见 15.1）
     - _Requirements: 22.1, 22.2, 22.4_
 
   - [x] 16.2 编写长度约束属性测试
-    - **Property 20: 简码长度严格短于全码**，proptest ≥100 次迭代
+    - **Property 20: 简码长度严格短于全码（核心码长口径）**，proptest ≥100 次迭代
     - **Validates: Requirements 22.1, 22.2, 22.3, 22.4**
 
 - [x] 17. 回归校验与 Checkpoint
