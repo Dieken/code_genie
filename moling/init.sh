@@ -20,9 +20,9 @@ case "$SCHEMA" in
 
         : "${USE_PINYIN_DU_FOR_TU:=1}"  # “土” 使用 du
 
-        : "${OPTIMIZE_KEY_0:=w}"        # 首根笔画时，多次退火优化都选择了 w
-        : "${OPTIMIZE_KEY_y:=k}"        # y 热力太高，首根笔画时，多次退火优化都选择映射到 k
-        : "${OPTIMIZE_KEY_z:=v}"        # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+        : "${OPTIMIZE_KEY_0=w}"         # 首根笔画时，多次退火优化都选择了 w
+        : "${OPTIMIZE_KEY_y=k}"         # y 热力太高，首根笔画时，多次退火优化都选择映射到 k
+        : "${OPTIMIZE_KEY_z=v}"         # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
         export OPTIMIZE_KEY_0 OPTIMIZE_KEY_y OPTIMIZE_KEY_z
 
         ;;
@@ -33,8 +33,8 @@ case "$SCHEMA" in
 
         : "${USE_MIXED_FREQ:=0}"        # 三码方案空间小，默认只优化简体 8105 通规字
 
-        : "${OPTIMIZE_KEYS:=0}"         # 优化零声母的映射
-        : "${OPTIMIZE_KEY_z:=v}"        # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+        : "${OPTIMIZE_KEYS=0}"          # 优化零声母的映射
+        : "${OPTIMIZE_KEY_z=v}"         # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
         export OPTIMIZE_KEY_z OPTIMIZE_KEYS
 
         : "${TOP_ROOT_KEYS:=asdfghjkl}"                 # 高频字根大码约束
@@ -92,9 +92,9 @@ case "$SCHEMA" in
 
         : "${USE_MIXED_FREQ:=1.0}"      # 与灵明官方版本一致，默认简繁字频等权重
 
-        : "${OPTIMIZE_KEY_0:=j}"        # 映射到 j，https://shurufa.app/docs/ling#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
-        : "${OPTIMIZE_KEY_q:=k}"        # 映射到 k，https://shurufa.app/docs/ling#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
-        : "${OPTIMIZE_KEY_z:=v}"        # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
+        : "${OPTIMIZE_KEY_0=j}"         # 映射到 j，https://shurufa.app/docs/ling#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E5%A3%B0%E6%AF%8D%E7%9A%84%E5%A3%B0%E7%A0%81%E6%98%AF-j
+        : "${OPTIMIZE_KEY_q=k}"         # 映射到 k，https://shurufa.app/docs/ling#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A3%B0%E7%A0%81%E4%B8%8D%E7%94%A8-q-%E9%94%AE
+        : "${OPTIMIZE_KEY_z=v}"         # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
         export OPTIMIZE_KEY_0 OPTIMIZE_KEY_q OPTIMIZE_KEY_z
 
         ;;
