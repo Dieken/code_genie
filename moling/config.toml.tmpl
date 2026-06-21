@@ -18,12 +18,12 @@ key_dist = "key_distribution.txt"    # 用指分布文件
 [annealing]
 threads = @@THREADS@@             # 并行线程数
 total_steps = @@TOTAL_STEPS@@     # 总迭代步数
-temp_start = 100.0         # 初始温度
-temp_end = 0.000001      # 结束温度
-comfort_temp = 0.4       # 舒适温度区间
+temp_start = 0.005       # 初始温度
+temp_end = 0.00005       # 结束温度
+comfort_temp = 0.0005    # 舒适温度区间
 comfort_width = 0.15     # 舒适区宽度
-comfort_slowdown = 0.7   # 舒适区减速因子
-swap_probability = 0.35   # 交换操作概率
+comfort_slowdown = 0.6   # 舒适区减速因子
+swap_probability = 0.35  # 交换操作概率
 
 # 以下参数基于 total_steps 的比例计算
 min_improve_steps_ratio = 0.1    # 最小改进步数比例 (total_steps / 10)
@@ -34,6 +34,13 @@ perturb_temp_multiplier = 2.0     # 扰动时温度倍率 (temp * multiplier)
 perturb_collision_pairs_limit = 10 # 扰动时优先采样的冲突对上限
 reheat_factor = 1.0             # 设为 1.0 可关闭重新加热
 max_parts = 4                    # 最大码长
+checkpoint_interval_ratio = 0.05 # checkpoint 写出间隔（单位：占 total_steps 的比例）；间隔步数 = max(1, floor(total_steps × ratio))，默认 0.05（约每 5% 写一次，与汇报频率一致）
+
+# 冲突导向算子（默认关闭：conflict_probability = 0.0）
+conflict_probability = 0.0       # 每步执行冲突导向移动的概率（0.0~1.0），0.0 表示关闭本特性
+conflict_refresh_interval = 1000 # 每隔多少步重建一次冲突缓存；0 表示初始化后不再重建
+conflict_sample_window = 20      # 在排序后冲突列表的前 N 个冲突组中采样
+conflict_weight_by_freq = false  # 冲突排序：false=按汉字数量(优化重码数)，true=按字频之和(优化重码率)
 
 # -------------------------------------------------------------------------
 # ⌨️ 键位配置
@@ -57,7 +64,7 @@ distribution = @@DISTRIBUTION@@       # 分布偏差权重
 
 [weights.simple_code]
 # 简码优化开关与权重
-enabled = false           # 是否启用简码优化
+enabled = false          # 是否启用简码优化
 full_code_weight = 0.6   # 全码目标总权重
 simple_code_weight = 0.4 # 简码目标总权重
 
@@ -67,6 +74,16 @@ collision_rate = 0.3     # 重码率权重
 freq = 0.2               # 频率覆盖权重
 equiv = 0.2              # 当量权重
 dist = 0.2               # 分布偏差权重
+
+# 简码评估性能优化：激活、权重渐进、候选字与对账配置
+simple_start_progress = 0.4      # 简码计算激活进度阈值（进度 = 当前步/总步数；建议落在舒适区前沿，默认 0.4）
+simple_ramp_progress = 0.1       # 有效权重从 0 渐进到目标权重的进度长度（默认 0.1）
+simple_activation_reheat = 1.2   # 激活当刻温度升温倍率（独立于 reheat_factor；合理范围 [1.0, temp_start/激活基温]，默认 1.2）
+simple_coverage_ratio = 1.0      # 候选字累计字频覆盖率阈值（默认 1.0）
+simple_active_coverage = 0.90    # 退火期 active 候选覆盖率（须 ≤ simple_coverage_ratio）；其余(passive)候选仅在最终上报与输出时纳入，以降低每步简码计算量（默认 0.90）
+reconcile_interval_ratio = 0.05  # 周期对账间隔比例，M = floor(total_steps × ratio)，M ≥ 1（默认 0.05）
+simple_assign_mode = "efficiency" # 桶内出简排序模式："frequency" 或 "efficiency"（默认 "efficiency"）
+simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保护汉字的全码；0=保护全部汉字，N>0=仅保护全字频前 N 名（默认 0）
 
 # -------------------------------------------------------------------------
 # 📝 简码规则配置
@@ -85,15 +102,84 @@ dist = 0.2               # 分布偏差权重
 
 [[simple_levels]]
 level = 1
-code_num = 1
+code_num = 0
 rules = ["Aa"]
+space_commit = true      # 是否需要空格上屏（默认 false）；为 true 时该级简码效率长度+1，且输出末尾追加 "_"
 
 [[simple_levels]]
 level = 2
 code_num = 1
-rules = ["AaBa"]
+rules = ["AaZz"]
+space_commit = false
 
 [[simple_levels]]
 level = 3
-code_num = 0
-rules = ["AaAbZz", "AaBaZz"]
+code_num = 1
+rules = ["AaBaZz"]
+space_commit = false
+
+# -------------------------------------------------------------------------
+# 🔒 固定简码映射（可选，默认整段注释）
+# 预先定义「汉字 = 简码」，简码可选以 _ 结尾表示空格上屏（输出保留下划线）。
+# - 不影响候选字按 simple_coverage_ratio 的选取，仅在选完后将这些字从候选集剔除；
+# - 每条固定简码按其码长归属对应级别，并占用该级该桶的 code_num 名额；
+# - 结尾下划线的有无须与该级 [[simple_levels]].space_commit 一致；
+# - 有效简码长度须严格小于该字全码长度。
+# 下例仅用于表达配置格式（默认全部注释）。
+# -------------------------------------------------------------------------
+[fixed_simple_codes]
+"不" = "u"
+"是" = "i"
+"我" = "o"
+"的" = "e"
+"了" = "a"
+
+# -------------------------------------------------------------------------
+# 📐 量纲缩放配置（可选，缺失则自动校准）
+# 填写各指标的"典型值"（与 targets 中的指标同量纲），程序内部自动取倒数转为缩放因子
+# 全码 5 个字段均设置时（简码未启用则无需设置简码字段），跳过 calibrate 阶段
+# -------------------------------------------------------------------------
+# [scale]
+# collision_count = 100.0    # 典型重码数（如初始状态约 100 个重码）
+# collision_rate = 0.05      # 典型重码率（如 5%）
+# equivalence = 1.5          # 典型当量
+# equiv_cv = 0.3             # 典型当量变异系数
+# distribution = 5.0         # 典型分布偏差
+# simple_freq = 0.15         # 典型简码频率覆盖损失（= 1 - 覆盖率，如覆盖 85% 则填 0.15）
+# simple_equiv = 1.3         # 典型简码当量
+# simple_dist = 3.0          # 典型简码分布偏差
+# simple_collision_count = 20.0  # 典型简码重码数
+# simple_collision_rate = 0.02   # 典型简码重码率
+
+# -------------------------------------------------------------------------
+# 🎯 优化目标配置
+# enabled = false 时退回绝对值最小化模式（默认行为）
+# enabled = true 时启用目标偏差导向优化
+# -------------------------------------------------------------------------
+[targets.full_code]
+enabled = false              # 是否启用全码目标偏差模式
+collision_count = 0.0        # 目标重码数（0 = 不设目标，退化为纯 low_weight 惩罚）
+collision_rate = 0.0         # 目标重码率
+equivalence = 0.0            # 目标当量
+equiv_cv = 0.0               # 目标当量变异系数
+distribution = 0.0           # 目标分布偏差
+low_weight = 0.01            # 低权重系数（已达目标时的持续优化动力）
+collision_count_max = 0.0    # 硬约束：重码数超过此值直接拒绝（0 = 不启用）
+collision_rate_max = 0.0     # 硬约束：重码率超过此值直接拒绝（0 = 不启用）
+equivalence_max = 0.0        # 硬约束：当量超过此值直接拒绝（0 = 不启用）
+equiv_cv_max = 0.0           # 硬约束：当量变异系数超过此值直接拒绝（0 = 不启用）
+distribution_max = 0.0       # 硬约束：分布偏差超过此值直接拒绝（0 = 不启用）
+
+[targets.simple_code]
+enabled = false              # 是否启用简码目标偏差模式
+collision_count = 0.0        # 目标简码重码数
+collision_rate = 0.0         # 目标简码重码率
+freq = 0.0                   # 目标频率覆盖率（如 0.85 = 85%）
+equiv = 0.0                  # 目标简码当量
+dist = 0.0                   # 目标简码分布偏差
+low_weight = 0.01            # 低权重系数
+collision_count_max = 0.0    # 硬约束：简码重码数超过此值直接拒绝（0 = 不启用）
+collision_rate_max = 0.0     # 硬约束：简码重码率超过此值直接拒绝（0 = 不启用）
+freq_max = 0.0               # 硬约束：覆盖率低于此值直接拒绝（0 = 不启用）
+equiv_max = 0.0              # 硬约束：简码当量超过此值直接拒绝（0 = 不启用）
+dist_max = 0.0               # 硬约束：简码分布偏差超过此值直接拒绝（0 = 不启用）
