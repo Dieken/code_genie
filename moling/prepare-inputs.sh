@@ -498,6 +498,8 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
         if ($ENV{OPTIMIZE_KEYS} =~ /$a/) {
             push @{ $consonants{$a} }, $F[0];
         } else {
+            # 补充处理自行提供的 roots.txt
+            $a = $ENV{"OPTIMIZE_KEY_$a"} if $ENV{"OPTIMIZE_KEY_$a"};
             print "$F[0].S\t", $a;
         }
     }

@@ -33,7 +33,7 @@ case "$SCHEMA" in
 
         : "${USE_MIXED_FREQ:=0}"        # 三码方案空间小，默认只优化简体 8105 通规字
 
-        : "${OPTIMIZE_KEYS=0dk}"        # 优化零声母和 B 区 d、k 用作声母的映射
+        : "${OPTIMIZE_KEYS=0dkei}"      # 优化零声母和 B 区 d、k 用作声母的映射，e 在卿云是零声任，i 在卿云是代表 yi
         : "${OPTIMIZE_KEY_z=v}"         # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
         export OPTIMIZE_KEY_z OPTIMIZE_KEYS
 
