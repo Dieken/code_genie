@@ -173,7 +173,7 @@ echo "(7) 生成 moling.pop.dict.yaml"
 perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.pop.dict.yaml" > "$YULING/schema/yuhao/moling.pop.dict.yaml.new"
 mv "$YULING/schema/yuhao/moling.pop.dict.yaml.new" "$YULING/schema/yuhao/moling.pop.dict.yaml"
 # 假设了「的」的全码四码在全码表开头
-perl -CSDA -Mutf8 -lanE 'exit(0) if length($F[1]) == 4; print if /[aeuio]$/' "$MOLING/mabiao.tsv" >> "$YULING/schema/yuhao/moling.pop.dict.yaml"
+perl -CSDA -Mutf8 -lanE 'exit(0) if length($F[1]) >= 4; print if /[aeuio]$/' "$MOLING/mabiao.tsv" >> "$YULING/schema/yuhao/moling.pop.dict.yaml"
 
 echo "(8) 生成 moling.roots.dict.yaml"
 perl -CSDA -lnE 'print; if (/^\.\.\./) { print ""; exit 0 }' "$YULING/schema/yuhao/moling.roots.dict.yaml" > "$YULING/schema/yuhao/moling.roots.dict.yaml.new"

@@ -33,7 +33,7 @@ perturb_trigger_temp_ratio = 0.01 # 扰动触发温度比例 (base_temp < comfor
 perturb_temp_multiplier = 2.0     # 扰动时温度倍率 (temp * multiplier)
 perturb_collision_pairs_limit = 10 # 扰动时优先采样的冲突对上限
 reheat_factor = 1.0             # 设为 1.0 可关闭重新加热
-max_parts = 5                    # 最大码长
+max_parts = 3                    # 最大码长
 checkpoint_interval_ratio = 0.05 # checkpoint 写出间隔（单位：占 total_steps 的比例）；间隔步数 = max(1, floor(total_steps × ratio))，默认 0.05（约每 5% 写一次，与汇报频率一致）
 
 # 冲突导向算子（默认关闭：conflict_probability = 0.0）
@@ -56,24 +56,24 @@ display_order = "qwertyuiopasdfghjklzxcvbnm"
 # -------------------------------------------------------------------------
 [weights.full_code]
 # 全码部分权重（总和应为 1.0）
-collision_count = 0.13    # 重码数权重
+collision_count = 0.01    # 重码数权重
 collision_rate = 0.47     # 重码率权重
-equivalence = 0.36        # 当量权重
+equivalence = 0.50        # 当量权重
 equiv_cv = 0.01           # 当量变异系数权重
-distribution = 0.03       # 分布偏差权重
+distribution = 0.01       # 分布偏差权重
 
 [weights.simple_code]
 # 简码优化开关与权重
-enabled = true           # 是否启用简码优化
-full_code_weight = 0.6   # 全码目标总权重
-simple_code_weight = 0.4 # 简码目标总权重
+enabled = false          # 是否启用简码优化
+full_code_weight = 0.4   # 全码目标总权重
+simple_code_weight = 0.6 # 简码目标总权重
 
 # 简码内部子权重（总和应为 1.0）
-collision_count = 0.1    # 重码数权重
-collision_rate = 0.3     # 重码率权重
-freq = 0.2               # 频率覆盖权重
-equiv = 0.35             # 当量权重
-dist = 0.05              # 分布偏差权重
+collision_count = 0.01   # 重码数权重
+collision_rate = 0.47    # 重码率权重
+freq = 0.01              # 频率覆盖权重
+equiv = 0.50             # 当量权重
+dist = 0.01              # 分布偏差权重
 
 # 简码评估性能优化：激活、权重渐进、候选字与对账配置
 simple_start_progress = 0.4      # 简码计算激活进度阈值（进度 = 当前步/总步数；建议落在舒适区前沿，默认 0.4）
@@ -110,12 +110,12 @@ space_commit = true      # 是否需要空格上屏（默认 false）；为 true
 level = 2
 code_num = 1
 rules = ["AaBa"]
-space_commit = false
+space_commit = true
 
 [[simple_levels]]
 level = 3
-code_num = 1
-rules = ["AaAbZb"]
+code_num = 0
+rules = ["AaBaZz"]
 space_commit = false
 
 # -------------------------------------------------------------------------
@@ -128,29 +128,25 @@ space_commit = false
 # 下例仅用于表达配置格式（默认全部注释）。
 # -------------------------------------------------------------------------
 [fixed_simple_codes]
-"不" = "k"
-"在" = "f"
-"是" = "j"
-"我" = "i"
-"的" = "d"
-"了" = "e"
+"的" = "e"
+"是" = "i"
 
 # -------------------------------------------------------------------------
 # 📐 量纲缩放配置（可选，缺失则自动校准）
 # 填写各指标的"典型值"（与 targets 中的指标同量纲），程序内部自动取倒数转为缩放因子
 # 全码 5 个字段均设置时（简码未启用则无需设置简码字段），跳过 calibrate 阶段
 # -------------------------------------------------------------------------
-[scale]
-collision_count = 140        # 典型重码数（如初始状态约 100 个重码）
-collision_rate = 0.0004      # 典型重码率（如 5%）
-equivalence = 0.15           # 典型当量
-equiv_cv = 1.0               # 典型当量变异系数
-distribution = 10            # 典型分布偏差
-simple_freq = 0.40           # 典型简码频率覆盖损失（= 1 - 覆盖率，如覆盖 85% 则填 0.15）
-simple_equiv = 0.15          # 典型简码当量
-simple_dist = 20             # 典型简码分布偏差
-simple_collision_count = 120 # 典型简码重码数
-simple_collision_rate = 0.0003 # 典型简码重码率
+# [scale]
+# collision_count = 100.0    # 典型重码数（如初始状态约 100 个重码）
+# collision_rate = 0.05      # 典型重码率（如 5%）
+# equivalence = 1.5          # 典型当量
+# equiv_cv = 0.3             # 典型当量变异系数
+# distribution = 5.0         # 典型分布偏差
+# simple_freq = 0.15         # 典型简码频率覆盖损失（= 1 - 覆盖率，如覆盖 85% 则填 0.15）
+# simple_equiv = 1.3         # 典型简码当量
+# simple_dist = 3.0          # 典型简码分布偏差
+# simple_collision_count = 20.0  # 典型简码重码数
+# simple_collision_rate = 0.02   # 典型简码重码率
 
 # -------------------------------------------------------------------------
 # 🎯 优化目标配置
@@ -158,12 +154,12 @@ simple_collision_rate = 0.0003 # 典型简码重码率
 # enabled = true 时启用目标偏差导向优化
 # -------------------------------------------------------------------------
 [targets.full_code]
-enabled = true               # 是否启用全码目标偏差模式
-collision_count = 90         # 目标重码数（0 = 不设目标，退化为纯 low_weight 惩罚）
-collision_rate = 0.0001      # 目标重码率
-equivalence = 0.13           # 目标当量
-equiv_cv = 1.30              # 目标当量变异系数
-distribution = 10.0          # 目标分布偏差
+enabled = false              # 是否启用全码目标偏差模式
+collision_count = 0.0        # 目标重码数（0 = 不设目标，退化为纯 low_weight 惩罚）
+collision_rate = 0.0         # 目标重码率
+equivalence = 0.0            # 目标当量
+equiv_cv = 0.0               # 目标当量变异系数
+distribution = 0.0           # 目标分布偏差
 low_weight = 0.01            # 低权重系数（已达目标时的持续优化动力）
 collision_count_max = 0.0    # 硬约束：重码数超过此值直接拒绝（0 = 不启用）
 collision_rate_max = 0.0     # 硬约束：重码率超过此值直接拒绝（0 = 不启用）
@@ -172,12 +168,12 @@ equiv_cv_max = 0.0           # 硬约束：当量变异系数超过此值直接�
 distribution_max = 0.0       # 硬约束：分布偏差超过此值直接拒绝（0 = 不启用）
 
 [targets.simple_code]
-enabled = true               # 是否启用简码目标偏差模式
-collision_count = 90         # 目标简码重码数
-collision_rate = 0.0001      # 目标简码重码率
-freq = 0.60                  # 目标频率覆盖率（如 0.85 = 85%）
-equiv = 0.12                 # 目标简码当量
-dist = 10.0                  # 目标简码分布偏差
+enabled = false              # 是否启用简码目标偏差模式
+collision_count = 0.0        # 目标简码重码数
+collision_rate = 0.0         # 目标简码重码率
+freq = 0.0                   # 目标频率覆盖率（如 0.85 = 85%）
+equiv = 0.0                  # 目标简码当量
+dist = 0.0                   # 目标简码分布偏差
 low_weight = 0.01            # 低权重系数
 collision_count_max = 0.0    # 硬约束：简码重码数超过此值直接拒绝（0 = 不启用）
 collision_rate_max = 0.0     # 硬约束：简码重码率超过此值直接拒绝（0 = 不启用）

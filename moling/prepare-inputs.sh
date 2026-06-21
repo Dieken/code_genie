@@ -501,6 +501,8 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
             print "$F[0].S\t", $a;
         }
     }
+  } else {
+    print "$F[0].S\t", "v" if $ENV{SCHEMA} eq "moqing";   # 魔卿的无声母字根使用 v 作为声码
   }
 
   # 韵码约束
@@ -527,7 +529,7 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
             print "$F[0].Y\t", substr($F[1], -1);   # 直接用设置好的韵码
         }
     } else {
-        print "$F[0].Y\t", substr($F[1], -1);
+        print "$F[0].Y\t", substr($F[1], -1) unless $ENV{SCHEMA} eq "moqing";   # 魔卿是双编字根方案
     }
   } else {                  # 使用首笔作为字根的补码
     die "No stroke found for $F[0]!\n" unless exists $strokes{$F[0]};
@@ -653,6 +655,14 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
         push @b, "$a[1].A", "$a[2].A", "$a[2].S";
     } else {
         push @b, "$a[1].A", "$a[2].A", "$a[-1].A";
+    }
+  } elsif ($ENV{ENCODE_RULE} eq "moqing") {    # 使用魔卿单字编码规则
+    if (@a == 1) {
+        push @b, "$a[0].A", "$a[0].S", "$a[0].S";
+    } elsif (@a == 2) {
+        push @b, "$a[0].A", "$a[1].A", "$a[1].S";
+    } else {
+        push @b, "$a[0].A", "$a[1].A", "$a[-1].A";
     }
   } else {                                      # 使用魔灵单字编码规则
     for (@a) { push @b, "$_.A" }
