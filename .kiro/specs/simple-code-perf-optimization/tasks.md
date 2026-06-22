@@ -501,6 +501,22 @@
     - prop1/prop2/prop13 在含 commit_keys 的上下文下保持全绿；`cargo build` + `cargo test` 全绿
     - _Requirements: 20.4, 20.6, 22.4, 36.4_
 
+- [x] 31. 上屏键异手过滤（需求 37，手感优化）
+  - [x] 31.1 配置与类型
+    - `src/config.rs` `SimpleLevelConfig` 与 `src/types.rs` `SimpleCodeLevel` 各新增 `commit_alt_hand_only: bool`（`#[serde(default)]` 缺省 false），经 `get_simple_code_config()` 透传
+    - _Requirements: 37.1, 37.6_
+  - [x] 31.2 commit_key_for_rank 异手过滤
+    - `src/context.rs` `commit_key_for_rank`：当该级 `commit_alt_hand_only` 为真时，在遍历偏好表构建可用序列时额外剔除「与核心末键同手的字母上屏键」（`key_hand(k)==核心末键手别 且 k!=KEY_SPACE`），保留异手字母与 `_`；`K'` 据此缩短，名次仍 `i mod K'`；`K'==0` 返回 None（该桶不出简、候选字上浮）
+    - 与固定占用过滤叠加；O(K) 小集合遍历、零堆分配；不影响固定简码（字面保留）
+    - _Requirements: 37.2, 37.3, 37.4, 37.5, 37.7, 37.8_
+  - [x] 31.3 同步配置文件
+    - `config.toml.example` 与 `moling/config*.toml` 的 `[[simple_levels]]` 加 `commit_alt_hand_only`（默认 false）及注释，注释保持各文件一致
+    - _Requirements: 37.1_
+  - [x] 31.4 测试
+    - 单测：左/右手核心末键下，`commit_alt_hand_only=true` 仅产出异手字母 + `_` 的上屏键；同手字母被排除；`_` 始终保留；`K'==0` 桶不出简、候选字上浮
+    - prop1（增量=全量）在含 `commit_alt_hand_only` 的上下文下保持全绿
+    - _Requirements: 37.2, 37.3, 37.5_
+
 ## Task Dependency Graph
 
 ```json

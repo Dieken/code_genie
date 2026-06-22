@@ -884,24 +884,34 @@ impl OptContext {
             return None;
         }
         let last = self.bucket_last_core_key(code);
-        let pref: &[u8] = match crate::types::key_hand(last) {
+        let last_hand = crate::types::key_hand(last);
+        let pref: &[u8] = match last_hand {
             crate::types::Hand::Left => &lvl.commit_pref_last_left,
             _ => &lvl.commit_pref_last_right,
         };
         let taken = self.simple_fixed_occ_mask(li, code);
-        // 可用上屏键数（偏好表中未被固定占用者）
-        let avail = pref
-            .iter()
-            .filter(|&&k| (k as usize) >= 31 || taken & (1u32 << k) == 0)
-            .count();
+        let sp = KEY_SPACE as u8;
+        // 某上屏键 k 在本桶是否「可用」：未被固定占用，且（异手过滤为假 或 k 为 `_` 或 k 与核心末键异手）。
+        // 异手过滤（需求 37）：commit_alt_hand_only 为真时剔除与核心末键同手的字母上屏键；`_` 始终保留。
+        let usable = |k: u8| -> bool {
+            let ki = k as usize;
+            if ki < 31 && (taken & (1u32 << k)) != 0 {
+                return false; // 被固定简码占用
+            }
+            if lvl.commit_alt_hand_only && k != sp && crate::types::key_hand(k) == last_hand {
+                return false; // 同手字母上屏键被异手过滤排除
+            }
+            true
+        };
+        // 可用上屏键数
+        let avail = pref.iter().filter(|&&k| usable(k)).count();
         if avail == 0 {
             return None;
         }
         let target = rank % avail;
         let mut seen = 0usize;
         for &k in pref {
-            let occupied = (k as usize) < 31 && (taken & (1u32 << k) != 0);
-            if !occupied {
+            if usable(k) {
                 if seen == target {
                     return Some(k);
                 }
@@ -1202,7 +1212,7 @@ mod affected_intersection_tests {
                 root_selector: 'A',
                 code_selector: 'a',
             }]],
-            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
         };
         OptContext::new(
             &splits,
@@ -1341,19 +1351,19 @@ mod base_saving_tests {
                 level: 1,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
         ];
 

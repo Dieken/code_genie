@@ -812,7 +812,7 @@ mod output_selection_mirror_tests {
             rule_candidates: vec![vec![SimpleCodeStep { root_selector: 'A', code_selector: 'a' }]],
             commit_keys: Vec::new(),
             commit_pref_last_left: Vec::new(),
-            commit_pref_last_right: Vec::new(),
+            commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
         }];
         let fixed_roots: HashMap<String, u8> = HashMap::new();
         let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];

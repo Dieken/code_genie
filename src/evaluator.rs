@@ -626,9 +626,18 @@ impl SimpleEvaluator {
                     0
                 } else {
                     // 固定简码占用名额（需求 21.7）：每桶优化可选名额 = code_num - 占用数（下限 0）。
-                    self.levels[li]
+                    let cn = self.levels[li]
                         .code_num
-                        .saturating_sub(ctx.simple_fixed_occ(li, code))
+                        .saturating_sub(ctx.simple_fixed_occ(li, code));
+                    // 异手过滤（需求 37.5）：过滤后无可用上屏键（K'=0）→ 该桶不出简。
+                    if cn > 0
+                        && ctx.simple_config.levels[li].has_commit()
+                        && ctx.commit_key_for_rank(li, code, 0).is_none()
+                    {
+                        0
+                    } else {
+                        cn
+                    }
                 };
                 // 仅对受影响桶内的候选列表执行局部排序（需求 6.2/6.3）
                 Self::sort_bucket(
@@ -1276,13 +1285,21 @@ impl SimpleEvaluator {
         code: usize,
     ) {
         // 简码占用保护（需求 33）：编码撞受保护全码的桶名额=0（谁都不出简）。
-        let code_num = if self.is_code_blocked(ctx, code, full_buckets) {
+        let mut code_num = if self.is_code_blocked(ctx, code, full_buckets) {
             0
         } else {
             self.levels[li]
                 .code_num
                 .saturating_sub(ctx.simple_fixed_occ(li, code))
         };
+        // 异手过滤（需求 37.5）：该级有上屏键但本桶过滤后无可用上屏键（K'=0，
+        // 异手字母全无且无 `_`）→ 该桶不出简，候选字上浮。avail 与名次无关，查名次 0 即可。
+        if code_num > 0
+            && ctx.simple_config.levels[li].has_commit()
+            && ctx.commit_key_for_rank(li, code, 0).is_none()
+        {
+            code_num = 0;
+        }
         // 局部选择前 code_num（C 优化）：用部分选择 `select_nth_unstable_by` 取代整桶全排序，
         // 复杂度 O(成员数) 而非 O(n log n)，且选中集合不变——分划后 members[0..code_num] 恰为
         // 按 `cmp_in_bucket` 排序键最优的 code_num 个（严格全序 ⟹ 该集合唯一确定）。
@@ -3277,7 +3294,7 @@ mod first_candidate_tests {
                         root_selector: 'A',
                         code_selector: 'a',
                     }]],
-                    commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                    commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
                 }],
             }
         } else {
@@ -3493,7 +3510,7 @@ mod full_collision_independence_tests {
                         root_selector: 'A',
                         code_selector: 'a',
                     }]],
-                    commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                    commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
                 }],
             }
         } else {
@@ -3652,19 +3669,19 @@ mod dealloc_free_tests {
                 level: 1,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
         ];
 
@@ -3889,19 +3906,19 @@ mod bucket_selection_tests {
                 level: 1,
                 code_num,
                 rule_candidates: vec![vec![step('A')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
         ];
 
@@ -4212,19 +4229,19 @@ mod incremental_full_consistency_tests {
                 level: 1,
                 code_num,
                 rule_candidates: vec![vec![step('A')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
         ];
 
@@ -4871,7 +4888,7 @@ mod incremental_full_consistency_tests {
             level: 1,
             code_num: 1,
             rule_candidates: vec![vec![step('A')]],
-            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
         }];
         let fixed_roots: HashMap<String, u8> = HashMap::new();
         let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
@@ -4991,19 +5008,19 @@ mod rollback_roundtrip_tests {
                 level: 1,
                 code_num,
                 rule_candidates: vec![vec![step('A')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
         ];
 
@@ -5376,19 +5393,19 @@ mod pre_activation_zero_contribution_tests {
                 level: 1,
                 code_num,
                 rule_candidates: vec![vec![step('A')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
         ];
 
@@ -5579,19 +5596,19 @@ mod hot_path_no_full_rebuild_tests {
                 level: 1,
                 code_num,
                 rule_candidates: vec![vec![step('A')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
             },
         ];
 
@@ -6633,9 +6650,9 @@ mod simple_protect_tests {
             code_selector: 'a',
         };
         let levels = vec![
-            SimpleCodeLevel { level: 1, code_num: 1, rule_candidates: vec![vec![step('A')]], commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new() },
-            SimpleCodeLevel { level: 2, code_num: 1, rule_candidates: vec![vec![step('A'), step('B')]], commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new() },
-            SimpleCodeLevel { level: 3, code_num: 1, rule_candidates: vec![vec![step('A'), step('B'), step('C')]], commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new() },
+            SimpleCodeLevel { level: 1, code_num: 1, rule_candidates: vec![vec![step('A')]], commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false },
+            SimpleCodeLevel { level: 2, code_num: 1, rule_candidates: vec![vec![step('A'), step('B')]], commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false },
+            SimpleCodeLevel { level: 3, code_num: 1, rule_candidates: vec![vec![step('A'), step('B'), step('C')]], commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false },
         ];
         let fixed_roots: HashMap<String, u8> = HashMap::new();
         let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
@@ -6800,7 +6817,7 @@ mod active_passive_tests {
             level: 1,
             code_num: 1000, // 桶内全员出简
             rule_candidates: vec![vec![step('A')]],
-            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
         }];
         let fixed_roots: HashMap<String, u8> = HashMap::new();
         let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
@@ -6939,6 +6956,86 @@ mod commit_keys_tests {
             SimpleEvaluator::new(ctx, asg, &full_buckets, &is_first, false),
             is_first,
         )
+    }
+
+    /// 与 `make_ctx_commit_single` 同构，但开启该级 `commit_alt_hand_only`（需求 37）。
+    fn make_ctx_commit_alt_hand(
+        freqs: &[u64],
+        n_roots: usize,
+        commit_keys: &str,
+        code_num: usize,
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(freqs.len());
+        for (i, &freq) in freqs.iter().enumerate() {
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("c{i}_{j}");
+                groups.push(RootGroup { roots: vec![root.clone()], allowed_keys: vec![0, 1] });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+        let ck: Vec<u8> = commit_keys.chars().map(|c| char_to_key_index(c).unwrap() as u8).collect();
+        let mut level = SimpleCodeLevel::with_commit_keys(
+            1,
+            code_num,
+            vec![vec![SimpleCodeStep { root_selector: 'A', code_selector: 'a' }]],
+            ck,
+        );
+        level.commit_alt_hand_only = true;
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[1.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        weights.simple_assign_mode = SimpleAssignMode::Frequency;
+        OptContext::new(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels: vec![level] },
+            weights,
+            TargetsConfig::default(),
+        )
+    }
+
+    /// 异手过滤（需求 37）：核心末键 'a'（左手），commit_keys="dk_"（d 左、k 右、_）。
+    /// 开启后退火出简只用异手字母 k 与 _，排除同手字母 d。
+    #[test]
+    fn alt_hand_only_excludes_same_hand_commit() {
+        let ctx = make_ctx_commit_alt_hand(&[100, 90, 80, 70], 2, "dk_", 4);
+        let asg = vec![0u8; ctx.num_groups]; // 首根 → key 0 = 'a'（左手）
+        let (se, is_first) = build_se(&ctx, &asg);
+        let ordered = se.selected_ordered(&ctx, &is_first);
+        let codes: Vec<String> = ordered.iter().map(|&(li, ci)| se.rendered_code(li, ci)).collect();
+        assert_eq!(codes.len(), 4, "code_num=4 应出简 4 字（轮转重码于异手键）");
+        for code in &codes {
+            let last = code.chars().last().unwrap();
+            assert!(last == 'k' || last == '_', "异手过滤后上屏键只应为 k 或 _，实得 {:?}", code);
+            assert_ne!(last, 'd', "同手字母 d 不应作为上屏键: {:?}", code);
+        }
+        // 名次 0,1,2,3 → 可用序列 [k,_] 轮转：k,_,k,_
+        assert_eq!(codes[0], "ak");
+        assert_eq!(codes[1], "a_");
+        assert_eq!(codes[2], "ak");
+        assert_eq!(codes[3], "a_");
+    }
+
+    /// 异手过滤后无可用上屏键（K'=0）：commit_keys="df"（均左手，无 _），核心末键左手 →
+    /// 该桶不出简（需求 37.5）。
+    #[test]
+    fn alt_hand_only_empty_avail_no_selection() {
+        let ctx = make_ctx_commit_alt_hand(&[100, 90], 2, "df", 4);
+        let asg = vec![0u8; ctx.num_groups]; // 核心末键 'a' 左手；commit 全左手字母、无 _
+        let (se, is_first) = build_se(&ctx, &asg);
+        let ordered = se.selected_ordered(&ctx, &is_first);
+        assert!(ordered.is_empty(), "K'=0 时该桶不应出简，实得 {} 个", ordered.len());
     }
 
     /// 容量扩展（需求 20.5 case A）：commit_keys 非空且 code_num ≤ K 时桶名额扩到 K。

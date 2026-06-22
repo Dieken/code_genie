@@ -1855,7 +1855,7 @@ mod activation_reheat_tests {
                 root_selector: 'A',
                 code_selector: 'a',
             }]],
-            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
         };
         OptContext::new(
             &splits,
@@ -2162,7 +2162,7 @@ mod log_output_tests {
                 root_selector: 'A',
                 code_selector: 'a',
             }]],
-            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
+            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(), commit_alt_hand_only: false,
         };
         OptContext::new(
             &splits,

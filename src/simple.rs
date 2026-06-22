@@ -101,6 +101,7 @@ pub fn parse_simple_code_config(path: &str) -> SimpleCodeConfig {
             commit_keys: Vec::new(),
             commit_pref_last_left: Vec::new(),
             commit_pref_last_right: Vec::new(),
+            commit_alt_hand_only: false,
         });
     }
 

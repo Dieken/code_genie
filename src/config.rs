@@ -250,6 +250,9 @@ pub struct SimpleLevelConfig {
     /// `Some(true)` 映射为 `commit_keys="_"`、`Some(false)` 映射为 `commit_keys=""`，并打废弃告警。
     #[serde(default)]
     pub space_commit: Option<bool>,
+    /// 上屏键异手过滤（需求 37）：为真时退火出简仅用与核心末键异手的字母上屏键与 `_`。缺省 false。
+    #[serde(default)]
+    pub commit_alt_hand_only: bool,
 }
 
 /// 目标配置容器（对应 [targets] 段）
@@ -349,6 +352,7 @@ impl Config {
                     commit_keys,
                     commit_pref_last_left,
                     commit_pref_last_right,
+                    commit_alt_hand_only: l.commit_alt_hand_only,
                 })
             })
             .collect();
@@ -730,6 +734,7 @@ impl Default for Config {
                     rules: vec!["Aa".to_string()],
                     commit_keys: None,
                     space_commit: None,
+                    commit_alt_hand_only: false,
                 },
                 SimpleLevelConfig {
                     level: 2,
@@ -737,6 +742,7 @@ impl Default for Config {
                     rules: vec!["AaBa".to_string()],
                     commit_keys: None,
                     space_commit: None,
+                    commit_alt_hand_only: false,
                 },
                 SimpleLevelConfig {
                     level: 3,
@@ -744,6 +750,7 @@ impl Default for Config {
                     rules: vec!["AaBaCa".to_string()],
                     commit_keys: None,
                     space_commit: None,
+                    commit_alt_hand_only: false,
                 },
             ],
             scale: None,
@@ -768,6 +775,7 @@ mod tests {
             rules: vec!["Aa".to_string()],
             commit_keys: commit_keys.map(|s| s.to_string()),
             space_commit,
+            commit_alt_hand_only: false,
         }
     }
 

@@ -277,6 +277,9 @@ pub struct SimpleCodeLevel {
     pub commit_pref_last_left: Vec<u8>,
     /// 偏好表（需求 36）：核心末键属**右手**时的上屏键序列。
     pub commit_pref_last_right: Vec<u8>,
+    /// 上屏键异手过滤（需求 37）：为真时退火出简仅用「与核心末键异手的字母上屏键」与 `_`，
+    /// 排除同手字母上屏键（手感优化）。缺省 false（不过滤）。
+    pub commit_alt_hand_only: bool,
 }
 
 impl SimpleCodeLevel {
@@ -307,6 +310,7 @@ impl SimpleCodeLevel {
             commit_keys,
             commit_pref_last_left,
             commit_pref_last_right,
+            commit_alt_hand_only: false,
         }
     }
 
