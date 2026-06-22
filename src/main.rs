@@ -1272,7 +1272,7 @@ fn finalize_and_save(
     println!("   「全码」用指分布偏差(L2): {:.4}  (分: {:.4})", m.dist_deviation, best_scores.distribution);
     if cfg.weights.simple_code.enabled {
         println!("---------------------------------");
-        println!("   「简码」总分: {:.4}", simple_sub.total);
+        println!("   「简码」总分: {:.4}  (范围: output 输出全集)", simple_sub.total);
         println!("   「简码」重码数: {}  (分: {:.4})", sm.collision_count, simple_sub.collision_count);
         println!("   「简码」重码率: {:.6}%  (分: {:.4})", sm.collision_rate * 100.0, simple_sub.collision_rate);
         println!("   「简码」覆盖率: {:.4}%  (分: {:.4})", sm.weighted_freq_coverage * 100.0, simple_sub.freq);

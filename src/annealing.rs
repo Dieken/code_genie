@@ -1515,17 +1515,16 @@ pub fn simulated_annealing_resumable(
         );
     }
 
-    // === 结束强制全量校验：使最终上报指标为精确值（需求 15.6）===
-    // 仅简码已激活时进行（与周期对账一致，需求 29）；简码关闭/从未激活时跳过，
-    // 保持与基线一致、不引入额外重建。最终上报指标统一由下方对 best_assignment 重建的
-    // best_eval 给出，与此处无关。
+    // === 结束强制全量校验（需求 15.6）===
     if simple_activated {
         evaluator.reconcile(ctx, &assignment);
     }
-    // 以全量重建结果一致地重算最佳解的分量与指标（需求 11/15.6）。
-    // 用 new_output_scope：最终上报纳入 passive 候选（输出全集），使报告指标与 output 文件一致（点 b）。
+    // 重算最佳解基线（active 范围，与退火主循环 / 最终精炼同口径），使精炼的
+    // `final_score < best_score`、`cd_score < best_score` 比较在同一范围下正确。
+    // 输出全集（output 范围）的上报指标在精炼**之后**统一重算一次（见函数末尾），
+    // 使日志总结、summary.txt 与 output 文件头三者一致（需求 34.4）。
     {
-        let mut best_eval = Evaluator::new_output_scope(ctx, &best_assignment);
+        let mut best_eval = Evaluator::new(ctx, &best_assignment);
         best_eval.simple_active = simple_activated;
         best_eval.current_simple_weight = if simple_enabled { w_target } else { 0.0 };
         best_eval.score_dirty = true;
@@ -1565,7 +1564,7 @@ pub fn simulated_annealing_resumable(
             // 三分量（需求 28.2）：与精炼内部评估器同口径（weight_full·full + w_target·simple）。
             let fc = weight_full * eval.full_score_component(ctx);
             let sc = w_target * eval.simple_score_component(ctx);
-            println!("   [T0] 最终爬山改进 → 得分: {:.4} (全码:{:.4} 简码:{:.4})", best_score, fc, sc);
+            println!("   [T0] 最终爬山改进(active范围) → 得分: {:.4} (全码:{:.4} 简码:{:.4})", best_score, fc, sc);
         }
     }
 
@@ -1585,22 +1584,46 @@ pub fn simulated_annealing_resumable(
                 let fc = weight_full * eval.full_score_component(ctx);
                 let sc = w_target * eval.simple_score_component(ctx);
                 println!(
-                    "   [T0] 坐标下降精炼: {:.4} → {:.4} (全码:{:.4} 简码:{:.4})",
+                    "   [T0] 坐标下降精炼(active范围): {:.4} → {:.4} (全码:{:.4} 简码:{:.4})",
                     score_before_cd, best_score, fc, sc
                 );
             }
         }
     }
 
-    if thread_id == 0 {
-        // 三分量（需求 28.3）。
-        let mut eval = Evaluator::new(ctx, &best_assignment);
-        let fc = weight_full * eval.full_score_component(ctx);
-        let sc = w_target * eval.simple_score_component(ctx);
-        println!(
-            "   [T0] 最终得分: {:.4} (全码:{:.4} 简码:{:.4}) 重码: {}",
-            best_score, fc, sc, best_metrics.collision_count
+    // 最终上报指标统一以「输出全集（output 范围）」重算 best_assignment（在精炼之后）：
+    // 纳入 passive 候选，使日志总结、summary.txt 与 output 文件头三者一致（需求 34.4）。
+    // 注意：上方精炼按 active 范围优化（与主循环同口径）；此处仅为最终上报切到 output 范围，
+    // 不参与任何优化决策。full 码指标与简码出简选择范围无关，重算结果与 active 一致。
+    {
+        let mut best_eval = Evaluator::new_output_scope(ctx, &best_assignment);
+        best_eval.simple_active = simple_activated;
+        best_eval.current_simple_weight = if simple_enabled { w_target } else { 0.0 };
+        best_eval.score_dirty = true;
+        best_eval.full_score_dirty = true;
+        best_full_score = best_eval.full_score_component(ctx);
+        best_simple_score = best_eval.simple_score_component(ctx);
+        best_score = Evaluator::best_total(
+            weight_full,
+            best_full_score,
+            best_eval.current_simple_weight,
+            best_simple_score,
         );
+        best_metrics = best_eval.get_metrics(ctx);
+        best_simple_metrics = best_eval.get_simple_metrics(ctx);
+
+        if thread_id == 0 {
+            let fc = weight_full * best_full_score;
+            let sc = best_eval.current_simple_weight * best_simple_score;
+            println!(
+                "   [T0] 最终得分(output范围): {:.4} (全码:{:.4} 简码:{:.4}) 重码:{} 简码覆盖:{:.2}%",
+                best_score,
+                fc,
+                sc,
+                best_metrics.collision_count,
+                best_simple_metrics.weighted_freq_coverage * 100.0
+            );
+        }
     }
 
     SaResult {

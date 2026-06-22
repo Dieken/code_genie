@@ -202,6 +202,7 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
 
     let mut out = String::new();
     out.push_str("# 简码分配结果\n");
+    out.push_str("# 指标范围：output（输出全集，含 passive 候选），与日志最终得分一致\n");
     out.push_str(&format!(
         "# 简码覆盖频率: {:.4}%\n",
         sm.weighted_freq_coverage * 100.0
@@ -586,6 +587,9 @@ pub fn save_summary(
     summary.push_str(&format!("# 总耗时: {:?}\n", elapsed));
     summary.push_str(&format!("# 最优线程: {}\n", best_thread));
     summary.push_str(&format!("# 简码优化: {}\n", cfg.weights.simple_code.enabled));
+    if cfg.weights.simple_code.enabled {
+        summary.push_str("# 简码指标范围：output（输出全集，含 passive 候选），与 output-*.txt 一致\n");
+    }
     summary.push_str("#\n");
 
     if cfg.weights.simple_code.enabled {
