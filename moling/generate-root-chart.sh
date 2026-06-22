@@ -183,12 +183,17 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
 
   END {
       if ($ENV{ENCODE_RULE} eq "xiaoming") {
-          print "的\td";
-          print "是\tj";
           print "不\tk";
-          print "了\te";
           print "在\tf";
+          print "是\tj";
           print "我\ti";
+          print "的\td";
+          print "了\te";
+      } elsif ($ENV{ENCODE_RULE} eq "moqing") {
+          print "不\te";
+          print "是\tk";
+          print "我\ti";
+          print "的\td";
       } else {
           print "不\tu";
           print "是\ti";
@@ -233,6 +238,17 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
               } else {
                   $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[2]}, 0, 1) . substr($roots{$b[-1]}, 0, 1);
               }
+          } elsif ($ENV{ENCODE_RULE} eq "moqing") {   # 使用魔卿单字编码规则
+              for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
+
+              $s = substr($roots{$b[0]}, 0, 1);
+              if (@b == 1) {
+                  $s .= substr($roots{$b[0]}, 1, 1) x 2;
+              } elsif (@b == 2) {
+                  $s .= $roots{$b[1]};
+              } else {
+                  $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[-1]}, 0, 1);
+              }
           } else {                                      # 使用魔灵单字编码规则
               for (@b) {
                   die "Unknown root: $_ in $_\n" unless exists $roots{$_};
@@ -265,6 +281,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
 
       %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
       $short_chars{"在"} = 1 if $ENV{ENCODE_RULE} eq "xiaoming";
+      delete $short_chars{"了"} if $ENV{ENCODE_RULE} eq "moqing";
 
       %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
 
@@ -298,6 +315,24 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
                         } else {                                    # 只出到三简
                             next;
                         }
+                    }
+                } elsif ($ENV{ENCODE_RULE} eq "moqing") {
+                    if (substr($v->{code}, $i - 2, 1) =~ /[yuiophjklnm]/) {
+                        $s = substr($v->{code}, 0, $i - 1) . "d";
+                        $s = substr($v->{code}, 0, $i - 1) . "e" if exists $short_codes{$s};
+                        if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
+                            $s = substr($v->{code}, 0, $i - 1) . "k" if exists $short_codes{$s};
+                            $s = substr($v->{code}, 0, $i - 1) . "i" if exists $short_codes{$s};
+                        }
+                        next if exists $short_codes{$s};
+                    } else {
+                        $s = substr($v->{code}, 0, $i - 1) . "k";
+                        $s = substr($v->{code}, 0, $i - 1) . "i" if exists $short_codes{$s};
+                        if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
+                            $s = substr($v->{code}, 0, $i - 1) . "d" if exists $short_codes{$s};
+                            $s = substr($v->{code}, 0, $i - 1) . "e" if exists $short_codes{$s};
+                        }
+                        next if exists $short_codes{$s};
                     }
                 } else {
                     $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
