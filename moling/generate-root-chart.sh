@@ -190,10 +190,11 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
           print "的\td";
           print "了\te";
       } elsif ($ENV{ENCODE_RULE} eq "moqing") {
-          print "不\te";
-          print "是\tk";
-          print "我\ti";
-          print "的\td";
+          print "不\ta";
+          print "是\ti";
+          print "我\to";
+          print "的\te";
+          print "一\tfi";
       } else {
           print "不\tu";
           print "是\ti";
@@ -281,6 +282,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
 
       %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
       $short_chars{"在"} = 1 if $ENV{ENCODE_RULE} eq "xiaoming";
+      $short_chars{"一"} = 1 if $ENV{ENCODE_RULE} eq "moqing";
       delete $short_chars{"了"} if $ENV{ENCODE_RULE} eq "moqing";
 
       %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
@@ -318,19 +320,19 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
                     }
                 } elsif ($ENV{ENCODE_RULE} eq "moqing") {
                     if (substr($v->{code}, $i - 2, 1) =~ /[yuiophjklnm]/) {
-                        $s = substr($v->{code}, 0, $i - 1) . "d";
-                        $s = substr($v->{code}, 0, $i - 1) . "e" if exists $short_codes{$s};
+                        $s = substr($v->{code}, 0, $i - 1) . "e";
+                        $s = substr($v->{code}, 0, $i - 1) . "a" if exists $short_codes{$s};
                         if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
-                            $s = substr($v->{code}, 0, $i - 1) . "k" if exists $short_codes{$s};
                             $s = substr($v->{code}, 0, $i - 1) . "i" if exists $short_codes{$s};
+                            $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
                         }
                         next if exists $short_codes{$s};
                     } else {
-                        $s = substr($v->{code}, 0, $i - 1) . "k";
-                        $s = substr($v->{code}, 0, $i - 1) . "i" if exists $short_codes{$s};
+                        $s = substr($v->{code}, 0, $i - 1) . "i";
+                        $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
                         if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
-                            $s = substr($v->{code}, 0, $i - 1) . "d" if exists $short_codes{$s};
                             $s = substr($v->{code}, 0, $i - 1) . "e" if exists $short_codes{$s};
+                            $s = substr($v->{code}, 0, $i - 1) . "a" if exists $short_codes{$s};
                         }
                         next if exists $short_codes{$s};
                     }

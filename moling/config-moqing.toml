@@ -102,18 +102,18 @@ simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保
 
 [[simple_levels]]
 level = 1
-code_num = 1
+code_num = 4
 rules = ["Aa"]
-commit_keys = "_"        # 上屏键序列（默认 ""）。字母=主键盘键、_=空格；"" 表示自动上屏。
+commit_keys = "eaio"     # 上屏键序列（默认 ""）。字母=主键盘键、_=空格；"" 表示自动上屏。
                          # 例 "dk_"：上屏键可为 d/k/空格，按左右手交替偏好 + 轮转分配；
                          # _ 只能放在序列开头(偏爱空格)或末尾(偏爱主键)。
                          # "" 等价旧 space_commit=false；"_" 等价旧 space_commit=true。
 
 [[simple_levels]]
 level = 2
-code_num = 1
+code_num = 4
 rules = ["AaBa"]
-commit_keys = "_"
+commit_keys = "eaio"
 
 [[simple_levels]]
 level = 3
@@ -132,8 +132,11 @@ commit_keys = ""
 # 下例仅用于表达配置格式（默认全部注释）。
 # -------------------------------------------------------------------------
 [fixed_simple_codes]
-"的" = "e"
+"不" = "a"
 "是" = "i"
+"我" = "o"
+"的" = "e"
+"一" = "fi"
 
 # -------------------------------------------------------------------------
 # 📐 量纲缩放配置（可选，缺失则自动校准）

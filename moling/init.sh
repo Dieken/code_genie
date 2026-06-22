@@ -33,14 +33,14 @@ case "$SCHEMA" in
 
         : "${USE_MIXED_FREQ:=0}"        # 三码方案空间小，默认只优化简体 8105 通规字
 
-        : "${OPTIMIZE_KEYS=0dkei}"      # 优化零声母和 B 区 d、k 用作声母的映射，e 在卿云是零声任，i 在卿云是代表 yi
+        : "${OPTIMIZE_KEYS=0ei}"        # 优化零声母和 B 区用作声母的映射，e 在卿云是零声母，i 在卿云代表 yi
         : "${OPTIMIZE_KEY_z=v}"         # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
         export OPTIMIZE_KEY_z OPTIMIZE_KEYS
 
-        : "${TOP_ROOT_KEYS:=asfghjl}"                   # 高频字根大码约束
-        : "${HOT_ROOT_KEYS:=wruo asfghjl vnm}"          # 中频字根大码约束
-        : "${ALL_ROOT_KEYS:=qwrtyuop asfghjl xcvbnm}"   # 低频字根大码约束
-        : "${B_AREA_KEYS:=dkei}"                        # B 区小码 or 补码约束，实际在此脚本并没有用到，只用于后期简码分配
+        : "${TOP_ROOT_KEYS:=sdfghjkl}"                  # 高频字根大码约束
+        : "${HOT_ROOT_KEYS:=wru sdfghjkl vnm}"          # 中频字根大码约束
+        : "${ALL_ROOT_KEYS:=qwrtyup sdfghjkl xcvbnm}"   # 低频字根大码约束
+        : "${B_AREA_KEYS:=eaio}"                        # B 区小码 or 补码约束，实际在此脚本并没有用到，只用于后期简码分配
 
         MAX_CODE_LEN=3                                  # 最大码长为 3
 
