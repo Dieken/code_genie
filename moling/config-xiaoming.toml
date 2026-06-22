@@ -102,6 +102,10 @@ simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保
 
 [[simple_levels]]
 level = 1
+# code_num：每个"有效简码"最多可分配给几个全码字。有效简码 = 核心码（commit_keys 为空时）或
+#   核心码 + 一个上屏键（commit_keys 非空时，每个上屏键各算一个独立有效简码）。
+#   例：commit_keys="dk"、code_num=2 时 Ad 最多 2 字、Ak 最多 2 字（各自独立、互不超额）。
+#   0 = 该级退火不分配简码（但归属该级的固定简码仍生效并照常输出）。
 code_num = 1
 rules = ["Aa"]
 commit_keys = "_"        # 上屏键序列（默认 ""）。字母=主键盘键、_=空格；"" 表示自动上屏。

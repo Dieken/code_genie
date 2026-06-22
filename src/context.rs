@@ -4,6 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use rustc_hash::FxHashMap;
+
 use crate::types::{
     build_root_full_codes, char_to_key_index, key_to_char, CharInfo, CharSimpleInfo,
     compute_level_instructions, extract_logical_roots_full, pow_base, try_resolve_rule,
@@ -11,6 +13,10 @@ use crate::types::{
     SimpleCodeConfig, WeightConfig, KEY_SPACE, EQUIV_TABLE_SIZE, GROUP_MARKER,
 };
 use crate::config::TargetsConfig;
+
+/// 无上屏键级别的固定简码占用哨兵键（非法键索引，键空间为 0..EQUIV_TABLE_SIZE=0..31）。
+/// 用于在 `simple_fixed_occupancy` 中记录核心简码自身的占用计数（需求 21.7）。
+const OCC_CORE_KEY: u8 = 255;
 
 /// 等价表类型别名
 pub type EquivTable = [[f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
@@ -103,12 +109,13 @@ pub struct OptContext {
     // ====================================================================
     /// 固定简码字位图，按 ci 索引：为真表示该字使用固定简码、不参与退火的简码分配。
     pub simple_fixed_assigned: Vec<bool>,
-    /// 固定简码桶占用：simple_fixed_occupancy[li][code] = 该级该核心桶被固定简码占用的
-    /// **上屏键 bitmask**（位 = 键索引 0..30；需求 36.4）。占用名额数 = 置位数（popcount）。
-    /// 用于把每桶优化分配名额降为 `code_num - 占用数`、并让退火字跳过被占用的上屏键（需求 21.7/36.4）。
-    /// 可能为空 `Vec`（无固定简码时），访问统一经 `simple_fixed_occ` / `simple_fixed_occ_mask` 回退。
-    /// `commit_keys` 为空的级别其占用至多 1 位（位 0，纯核心占用语义，与旧计数等价）。
-    pub simple_fixed_occupancy: Vec<Vec<u32>>,
+    /// 固定简码桶占用（需求 21.7，方案 A）：稀疏占用**计数**表。
+    /// `simple_fixed_occupancy[li]` 为 `核心桶编码 → 该桶各被占用「上屏键」的占用计数列表 (key, count)`。
+    /// - 有上屏键级别：按实际上屏键索引（每个上屏键 = 一个有效简码）。
+    /// - 无上屏键级别：用哨兵键 `OCC_CORE_KEY`（255，非法键索引）记核心简码自身的占用计数。
+    /// 采用计数（取代旧 bitmask）以支持「同一有效简码上 ≥2 个固定字」。可能为空 `Vec`（无固定简码时），
+    /// 访问统一经 `simple_fixed_occ_total` / `simple_fixed_occ_key` 回退 0。
+    pub simple_fixed_occupancy: Vec<FxHashMap<u32, Vec<(u8, u32)>>>,
     /// 固定简码对简码覆盖频率的常量贡献（需求 21.8/21.9）。
     pub fixed_covered_freq: u64,
     /// 固定简码对加权当量分子的常量贡献。
@@ -306,7 +313,7 @@ impl OptContext {
 
         // 固定简码（需求 21）静态字段累加器
         let mut simple_fixed_assigned: Vec<bool> = vec![false; n_chars];
-        let mut simple_fixed_occupancy: Vec<Vec<u32>> = Vec::new();
+        let mut simple_fixed_occupancy: Vec<FxHashMap<u32, Vec<(u8, u32)>>> = Vec::new();
         let mut fixed_covered_freq: u64 = 0;
         let mut fixed_equiv_weighted: f64 = 0.0;
         let mut fixed_equiv_freq_sum: u64 = 0;
@@ -416,11 +423,11 @@ impl OptContext {
             // 固定简码处理（需求 21 / 22.3）
             // ============================================================
             if !fixed_simple_codes.is_empty() {
-                // 仅在确有固定简码时才按各级 capacity 分配占用表（无固定简码时保持空 Vec，
-                // simple_fixed_occ 访问器对空/越界统一回退 0）——避免高级别 code_base^L 容量的
-                // 无谓分配。
+                // 仅在确有固定简码时才为各级分配空映射（无固定简码时保持空 Vec，
+                // simple_fixed_occ_* 访问器对空/缺失统一回退 0）——稀疏存储，省去高级别
+                // code_base^L 容量的密集占用表分配。
                 simple_fixed_occupancy = (0..n_levels)
-                    .map(|li| vec![0u32; simple_level_capacity[li]])
+                    .map(|_| FxHashMap::default())
                     .collect();
 
                 // 汉字 → ci 映射（取首个匹配；同字多条仅首条有效）
@@ -532,7 +539,8 @@ impl OptContext {
                         None => {}
                     }
 
-                    // 占用登记（需求 21.7/36.4）：仅在归属级别时登记。
+                    // 占用登记（需求 21.7/36.4，方案 A）：仅在归属级别时登记。按「上屏键（或核心
+                    // 哨兵）」累加占用计数，支持同一有效简码上 ≥2 个固定字。
                     simple_fixed_assigned[ci] = true;
                     if let Some(li) = li_opt {
                         let mut bucket_code = 0usize;
@@ -540,14 +548,18 @@ impl OptContext {
                             bucket_code = bucket_code * code_base + (k as usize + 1);
                         }
                         debug_assert!(bucket_code < simple_level_capacity[li]);
-                        if simple_config.levels[li].has_commit() {
-                            // 核心+上屏：置位「该上屏键」（bitmask 占用，需求 36.4）。
-                            if let Some(ck) = commit_key {
-                                simple_fixed_occupancy[li][bucket_code] |= 1u32 << ck;
-                            }
+                        // 有上屏键：键 = 该上屏键；无上屏键：哨兵键 OCC_CORE_KEY（核心简码自身）。
+                        let occ_key = if simple_config.levels[li].has_commit() {
+                            commit_key.unwrap_or(OCC_CORE_KEY)
                         } else {
-                            // 纯核心（无上屏键）：计数占用（重码语义，与旧实现一致）。
-                            simple_fixed_occupancy[li][bucket_code] += 1;
+                            OCC_CORE_KEY
+                        };
+                        let entries = simple_fixed_occupancy[li]
+                            .entry(bucket_code as u32)
+                            .or_default();
+                        match entries.iter_mut().find(|(k, _)| *k == occ_key) {
+                            Some(e) => e.1 += 1,
+                            None => entries.push((occ_key, 1)),
                         }
                     }
 
@@ -830,33 +842,37 @@ impl OptContext {
             .unwrap_or(false)
     }
 
-    /// 固定简码桶占用 bitmask（需求 36.4）：返回级别 `li` 桶编码 `code` 被固定简码占用的
-    /// 上屏键位掩码（位 = 键索引）。空表/越界回退 0（无占用）。
+    /// 固定简码桶占用计数列表（方案 A）：返回级别 `li` 桶编码 `code` 的 `(上屏键, 占用计数)` 列表。
+    /// 空表/缺失回退空切片（无占用）。
     #[inline]
-    pub fn simple_fixed_occ_mask(&self, level_idx: usize, code: usize) -> u32 {
+    fn simple_fixed_occ_entries(&self, level_idx: usize, code: usize) -> &[(u8, u32)] {
         self.simple_fixed_occupancy
             .get(level_idx)
-            .and_then(|row| row.get(code))
-            .copied()
-            .unwrap_or(0)
+            .and_then(|m| m.get(&(code as u32)))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
-    /// 固定简码桶占用数（需求 21.7）：返回级别 `li` 桶编码 `code` 被固定简码占用的名额数。
-    /// - 该级有上屏键：占用存为「上屏键 bitmask」，名额数 = 置位数（popcount）。
-    /// - 该级无上屏键：占用存为「重码计数」（u32 原值），名额数 = 该计数。
+    /// 固定简码桶**总**占用数（需求 21.7）：该核心桶被固定简码占用的名额总数（含各上屏键）。
+    /// 无上屏键级别即核心简码自身的占用计数。
     #[inline]
-    pub fn simple_fixed_occ(&self, level_idx: usize, code: usize) -> usize {
-        let raw = self.simple_fixed_occ_mask(level_idx, code);
-        if self
-            .simple_config
-            .levels
-            .get(level_idx)
-            .map_or(false, |l| l.has_commit())
-        {
-            raw.count_ones() as usize
-        } else {
-            raw as usize
-        }
+    pub fn simple_fixed_occ_total(&self, level_idx: usize, code: usize) -> usize {
+        self.simple_fixed_occ_entries(level_idx, code)
+            .iter()
+            .map(|&(_, c)| c as usize)
+            .sum()
+    }
+
+    /// 固定简码「某上屏键」占用数（需求 21.7/36.4，方案 A）：返回级别 `li` 桶编码 `code` 上
+    /// 上屏键 `key` 被固定简码占用的次数（即对应有效简码上的固定字数）。无上屏键级别传哨兵
+    /// `OCC_CORE_KEY` 查核心占用数。缺失回退 0。
+    #[inline]
+    pub fn simple_fixed_occ_key(&self, level_idx: usize, code: usize, key: u8) -> u32 {
+        self.simple_fixed_occ_entries(level_idx, code)
+            .iter()
+            .find(|&&(k, _)| k == key)
+            .map(|&(_, c)| c)
+            .unwrap_or(0)
     }
 
     /// 还原核心简码桶 `code` 的核心末键（需求 36.3）：编码为 `code = Σ (k+1)·base^…`，
@@ -870,13 +886,52 @@ impl OptContext {
         }
     }
 
-    /// 为某核心简码桶按名次取退火出简字的上屏键（需求 36.3/36.4）。
+    /// 某核心简码桶在退火下可出简的名额（需求 21.7，方案 A）。
+    ///
+    /// 语义：每个**有效简码**至多 `code_num` 个全码字。
+    /// - 无上屏键级别（K=0）：单一有效简码 = 核心简码，名额 = `max(0, code_num − 核心占用)`。
+    /// - 有上屏键级别：每个上屏键 = 一个独立有效简码，名额 = `Σ_{有效上屏键 k} max(0, code_num − occ_k)`；
+    ///   被需求 37 异手过滤剔除的同手字母上屏键不构成有效简码、不计入。
+    /// 纯函数、零堆分配（有上屏键时沿预计算偏好表 O(K) 累加，与既有 K′ 检查同阶）。
+    #[inline]
+    pub fn simple_annealing_slots(&self, li: usize, code: usize) -> usize {
+        let lvl = match self.simple_config.levels.get(li) {
+            Some(l) => l,
+            None => return 0,
+        };
+        let code_num = lvl.code_num;
+        if !lvl.has_commit() {
+            return code_num.saturating_sub(self.simple_fixed_occ_total(li, code));
+        }
+        let last = self.bucket_last_core_key(code);
+        let last_hand = crate::types::key_hand(last);
+        let pref: &[u8] = match last_hand {
+            crate::types::Hand::Left => &lvl.commit_pref_last_left,
+            _ => &lvl.commit_pref_last_right,
+        };
+        let sp = KEY_SPACE as u8;
+        let mut total = 0usize;
+        for &k in pref {
+            // 异手过滤（需求 37）：同手字母上屏键不构成有效简码；`_` 与异手字母保留。
+            if lvl.commit_alt_hand_only && k != sp && crate::types::key_hand(k) == last_hand {
+                continue;
+            }
+            let occ = self.simple_fixed_occ_key(li, code, k) as usize;
+            total += code_num.saturating_sub(occ);
+        }
+        total
+    }
+
+    /// 为某核心简码桶按名次取退火出简字的上屏键（需求 36.3/36.4，方案 A）。
     ///
     /// - `li`/`code`：级别与核心桶编码（据 `code` 还原核心末键、选左/右手偏好表）。
-    /// - `rank`：该字在桶内（已排序，0 起）的名次。
-    /// - 据该级偏好表去除「本桶固定简码已占用的上屏键」后得可用序列，取第 `rank mod K'` 个。
-    /// - 该级无上屏键（K=0）或可用序列为空时返回 `None`（不追加上屏键）。
-    /// 纯函数、零堆分配（在常量小集上遍历）。
+    /// - `rank`：该字在桶内（已排序，0 起）的名次（保证 `rank < simple_annealing_slots`）。
+    /// - 每个上屏键 `k` 至多被退火占用 `cap_k = max(0, code_num − occ_k)` 次；按偏好表顺序「轮次轮转」
+    ///   分配：第 0 轮给所有 `cap_k>0` 的键各一次、第 1 轮给 `cap_k>1` 的键……名次 `rank` 落到对应键。
+    /// - 异手过滤（需求 37）：同手字母上屏键不参与；`_` 始终保留。
+    /// - 该级无上屏键（K=0）或无任何可用容量时返回 `None`（不追加上屏键）。
+    /// `code_num=1` 且无占用时退化为「偏好表第 `rank mod K'` 个」（与历史轮转一致）。
+    /// 纯函数、零堆分配（在常量小集上遍历，O(code_num·K)）。
     #[inline]
     pub fn commit_key_for_rank(&self, li: usize, code: usize, rank: usize) -> Option<u8> {
         let lvl = self.simple_config.levels.get(li)?;
@@ -889,33 +944,26 @@ impl OptContext {
             crate::types::Hand::Left => &lvl.commit_pref_last_left,
             _ => &lvl.commit_pref_last_right,
         };
-        let taken = self.simple_fixed_occ_mask(li, code);
         let sp = KEY_SPACE as u8;
-        // 某上屏键 k 在本桶是否「可用」：未被固定占用，且（异手过滤为假 或 k 为 `_` 或 k 与核心末键异手）。
-        // 异手过滤（需求 37）：commit_alt_hand_only 为真时剔除与核心末键同手的字母上屏键；`_` 始终保留。
-        let usable = |k: u8| -> bool {
-            let ki = k as usize;
-            if ki < 31 && (taken & (1u32 << k)) != 0 {
-                return false; // 被固定简码占用
-            }
-            if lvl.commit_alt_hand_only && k != sp && crate::types::key_hand(k) == last_hand {
-                return false; // 同手字母上屏键被异手过滤排除
-            }
-            true
+        let code_num = lvl.code_num;
+        // 某上屏键 k 是否参与退火分配（异手过滤后）。
+        let alt_filtered = |k: u8| -> bool {
+            lvl.commit_alt_hand_only && k != sp && crate::types::key_hand(k) == last_hand
         };
-        // 可用上屏键数
-        let avail = pref.iter().filter(|&&k| usable(k)).count();
-        if avail == 0 {
-            return None;
-        }
-        let target = rank % avail;
-        let mut seen = 0usize;
-        for &k in pref {
-            if usable(k) {
-                if seen == target {
-                    return Some(k);
+        // 轮次轮转：cap_k ≤ code_num，故至多 code_num 轮即覆盖全部名额。
+        let mut idx = rank;
+        for round in 0..code_num {
+            for &k in pref {
+                if alt_filtered(k) {
+                    continue;
                 }
-                seen += 1;
+                let cap = code_num.saturating_sub(self.simple_fixed_occ_key(li, code, k) as usize);
+                if cap > round {
+                    if idx == 0 {
+                        return Some(k);
+                    }
+                    idx -= 1;
+                }
             }
         }
         None

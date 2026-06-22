@@ -240,7 +240,7 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!(
-            "\n# === {}级简码 (每位{}字, 规则:{}) ===\n",
+            "\n# === {}级简码 (每简码至多{}字, 规则:{}) ===\n",
             level_cfg.level, level_cfg.code_num, rules_str
         ));
         out.push_str("# 汉字\t简码\t字频\n");
@@ -847,7 +847,7 @@ mod output_selection_mirror_tests {
             *opt.entry((*li, code)).or_default() += 1;
         }
         for ((li, code), &cnt) in &opt {
-            let occ = ctx.simple_fixed_occ(*li, *code);
+            let occ = ctx.simple_fixed_occ_total(*li, *code);
             let cn = ctx.simple_config.levels[*li].code_num;
             assert!(cnt + occ <= cn,
                 "级别 {} 桶 {}: 优化 {} + 固定 {} 超过 code_num {}", li, code, cnt, occ, cn);

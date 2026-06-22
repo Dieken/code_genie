@@ -289,12 +289,6 @@ impl SimpleCodeLevel {
         !self.commit_keys.is_empty()
     }
 
-    /// K = 不同上屏键数（即偏好表长度）。
-    #[inline]
-    pub fn commit_k(&self) -> usize {
-        self.commit_keys.len()
-    }
-
     /// 测试/兼容辅助：由上屏键序列构造级别并预计算偏好表。
     pub fn with_commit_keys(
         level: usize,

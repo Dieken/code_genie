@@ -292,18 +292,11 @@ impl SimpleEvaluator {
                     .unwrap_or(1)
                     .max(1);
                 SimpleLevelTracker {
-                    // 容量扩展（需求 20.5 / case A）：commit_keys 非空且 code_num ≤ K 时，
-                    // 桶可选名额扩大到 K（每个不同上屏键一个槽，各得独立码）；否则保持 code_num
-                    // （commit_keys 为空：旧重码语义；code_num > K：case B 轮转重码）。
-                    code_num: {
-                        let lvl = &ctx.simple_config.levels[li];
-                        let k = lvl.commit_k();
-                        if lvl.has_commit() && lvl.code_num <= k {
-                            k
-                        } else {
-                            lvl.code_num
-                        }
-                    },
+                    // 配置的「每有效简码字数上限」（需求 21.7，方案 A）。不再「扩到 K」：
+                    // 每桶退火可出简名额由 `ctx.simple_annealing_slots(li, code)` 按
+                    // 「每有效简码至多 code_num 字」在选取时计算（无上屏键 = code_num−占用；
+                    // 有上屏键 = Σ_{有效上屏键} max(0, code_num−占用)）。
+                    code_num: ctx.simple_config.levels[li].code_num,
                     capacity: cap,
                     buckets: BucketStore::new(cap),
                     current_simple_code: vec![-1i64; n_chars],
@@ -617,7 +610,7 @@ impl SimpleEvaluator {
                 }
             }
 
-            // 阶段 2：桶内按分配模式排序键局部排序后选取前 code_num 个出简
+            // 阶段 2：桶内按分配模式排序键局部排序后选取前 N 个出简（N = 该桶退火可出简名额）
             for ti in 0..touched.len() {
                 let code = touched[ti];
                 // 简码占用保护（需求 33）：编码撞受保护全码的桶不出简（名额=0）；
@@ -625,19 +618,10 @@ impl SimpleEvaluator {
                 let code_num = if self.is_code_blocked(ctx, code, full_buckets) {
                     0
                 } else {
-                    // 固定简码占用名额（需求 21.7）：每桶优化可选名额 = code_num - 占用数（下限 0）。
-                    let cn = self.levels[li]
-                        .code_num
-                        .saturating_sub(ctx.simple_fixed_occ(li, code));
-                    // 异手过滤（需求 37.5）：过滤后无可用上屏键（K'=0）→ 该桶不出简。
-                    if cn > 0
-                        && ctx.simple_config.levels[li].has_commit()
-                        && ctx.commit_key_for_rank(li, code, 0).is_none()
-                    {
-                        0
-                    } else {
-                        cn
-                    }
+                    // 退火可出简名额（需求 21.7，方案 A）：每有效简码至多 code_num 字，桶名额
+                    // = Σ_{有效上屏键} max(0, code_num−占用)（无上屏键级别即 code_num−占用）。
+                    // 该口径已含异手过滤（K'=0 → 0）与每上屏键占用扣减。
+                    ctx.simple_annealing_slots(li, code)
                 };
                 // 仅对受影响桶内的候选列表执行局部排序（需求 6.2/6.3）
                 Self::sort_bucket(
@@ -1285,21 +1269,14 @@ impl SimpleEvaluator {
         code: usize,
     ) {
         // 简码占用保护（需求 33）：编码撞受保护全码的桶名额=0（谁都不出简）。
-        let mut code_num = if self.is_code_blocked(ctx, code, full_buckets) {
+        // 否则取退火可出简名额（需求 21.7，方案 A）：每有效简码至多 code_num 字，桶名额
+        // = Σ_{有效上屏键} max(0, code_num−占用)；该口径已含异手过滤（需求 37.5：无可用
+        // 上屏键 → 0）与每上屏键占用扣减。
+        let code_num = if self.is_code_blocked(ctx, code, full_buckets) {
             0
         } else {
-            self.levels[li]
-                .code_num
-                .saturating_sub(ctx.simple_fixed_occ(li, code))
+            ctx.simple_annealing_slots(li, code)
         };
-        // 异手过滤（需求 37.5）：该级有上屏键但本桶过滤后无可用上屏键（K'=0，
-        // 异手字母全无且无 `_`）→ 该桶不出简，候选字上浮。avail 与名次无关，查名次 0 即可。
-        if code_num > 0
-            && ctx.simple_config.levels[li].has_commit()
-            && ctx.commit_key_for_rank(li, code, 0).is_none()
-        {
-            code_num = 0;
-        }
         // 局部选择前 code_num（C 优化）：用部分选择 `select_nth_unstable_by` 取代整桶全排序，
         // 复杂度 O(成员数) 而非 O(n log n)，且选中集合不变——分划后 members[0..code_num] 恰为
         // 按 `cmp_in_bucket` 排序键最优的 code_num 个（严格全序 ⟹ 该集合唯一确定）。
@@ -6269,23 +6246,24 @@ mod fixed_simple_code_tests {
         }
     }
 
-    /// 断言（确认点 2 新语义）：每级每桶的优化出简数 ≤ max(0, code_num - 固定占用)。
-    /// 固定占用本身不受 code_num 限制（固定简码权威预分配，可达到/超过 code_num，此时退火出 0）。
+    /// 断言（需求 21.7，方案 A）：每级每桶的优化出简数 ≤ 该桶退火可出简名额
+    /// `simple_annealing_slots = Σ_{有效上屏键} max(0, code_num − 占用)`（无上屏键级别即
+    /// `max(0, code_num − 占用)`）。固定占用本身不受 code_num 限制（权威预分配，可达到/超过
+    /// code_num，此时该有效简码退火出 0）。
     fn check_occupancy_bound(ctx: &OptContext, ev: &Evaluator) -> Result<(), TestCaseError> {
         let se = ev.simple_eval.as_ref().expect("simple_eval");
         for li in 0..se.levels.len() {
-            let cn = se.levels[li].code_num;
             let lvl = &se.levels[li];
             for (code, b) in lvl.buckets.iter_nonempty() {
                 let code = code as usize;
-                let occ = ctx.simple_fixed_occ(li, code);
+                let slots = ctx.simple_annealing_slots(li, code);
                 let sel_count = b
                     .members
                     .iter()
                     .filter(|&&ci| lvl.selected[ci as usize])
                     .count();
-                prop_assert!(sel_count <= cn.saturating_sub(occ),
-                    "级别 {} 桶 {} 优化出简数 {} 超过可选名额 max(0, {} - {})", li, code, sel_count, cn, occ);
+                prop_assert!(sel_count <= slots,
+                    "级别 {} 桶 {} 优化出简数 {} 超过可出简名额 {}", li, code, sel_count, slots);
             }
         }
         Ok(())
@@ -7038,10 +7016,11 @@ mod commit_keys_tests {
         assert!(ordered.is_empty(), "K'=0 时该桶不应出简，实得 {} 个", ordered.len());
     }
 
-    /// 容量扩展（需求 20.5 case A）：commit_keys 非空且 code_num ≤ K 时桶名额扩到 K。
+    /// 每有效简码 code_num=1（需求 21.7，方案 A）：commit_keys="dk_"（K=3）→ 3 个有效简码
+    /// `Ad`/`Ak`/`A_` 各至多 1 字 → 单桶出简 3 字。
     #[test]
     fn capacity_expands_to_k() {
-        // code_num=1，commit_keys="dk_"（K=3）→ 单桶应出简 3 个字（扩容）。
+        // code_num=1，commit_keys="dk_"（K=3）→ 单桶应出简 3 个字（每上屏键 1 字）。
         let ctx = make_ctx_commit_single(&[100, 90, 80, 70], 2, "dk_", 1, SimpleAssignMode::Frequency);
         let asg = vec![0u8; ctx.num_groups]; // 所有首根 → key 0 → 同一桶
         let (se, _) = build_se(&ctx, &asg);
@@ -7079,7 +7058,8 @@ mod commit_keys_tests {
         assert_eq!(code, "a", "空 commit_keys 不应追加上屏键");
     }
 
-    /// case B 轮转（需求 20 case B）：code_num=4 > K=2（"dk"），名次轮转复用上屏键。
+    /// 名次轮转（需求 36.4）：code_num=4、K=2（"dk"），4 个候选字 < 容量(4×2=8)，全部出简，
+    /// 名次按各上屏键剩余容量轮转复用上屏键。
     #[test]
     fn case_b_round_robin() {
         let ctx = make_ctx_commit_single(&[100, 90, 80, 70], 2, "dk", 4, SimpleAssignMode::Frequency);
@@ -7087,12 +7067,125 @@ mod commit_keys_tests {
         let (se, is_first) = build_se(&ctx, &asg);
         let ordered = se.selected_ordered(&ctx, &is_first);
         let codes: Vec<String> = ordered.iter().map(|&(li, ci)| se.rendered_code(li, ci)).collect();
-        assert_eq!(codes.len(), 4, "code_num=4 应出简 4 字（容量=code_num）");
+        assert_eq!(codes.len(), 4, "4 个候选字均出简（容量 8 充足）");
         // 'a' 左手 → pref_last_left "dk" = [k, d]；名次 0,1,2,3 → k,d,k,d（轮转）。
         assert_eq!(codes[0], "ak");
         assert_eq!(codes[1], "ad");
         assert_eq!(codes[2], "ak");
         assert_eq!(codes[3], "ad");
+    }
+
+    /// 与 `make_ctx_commit_single` 同构，但经 `new_with_fixed` 注入固定简码（支持上屏键归级）。
+    fn make_ctx_commit_fixed(
+        freqs: &[u64],
+        n_roots: usize,
+        commit_keys: &str,
+        code_num: usize,
+        fixed: &[(char, &str)],
+    ) -> OptContext {
+        let mut groups: Vec<RootGroup> = Vec::new();
+        let mut splits: Vec<(char, Vec<String>, u64)> = Vec::with_capacity(freqs.len());
+        for (i, &freq) in freqs.iter().enumerate() {
+            let mut roots: Vec<String> = Vec::with_capacity(n_roots);
+            for j in 0..n_roots {
+                let root = format!("c{i}_{j}");
+                groups.push(RootGroup { roots: vec![root.clone()], allowed_keys: vec![0, 1] });
+                roots.push(root);
+            }
+            let ch = char::from_u32(0x4e00 + i as u32).unwrap();
+            splits.push((ch, roots, freq));
+        }
+        let ck: Vec<u8> = commit_keys.chars().map(|c| char_to_key_index(c).unwrap() as u8).collect();
+        let levels = vec![SimpleCodeLevel::with_commit_keys(
+            1,
+            code_num,
+            vec![vec![SimpleCodeStep { root_selector: 'A', code_selector: 'a' }]],
+            ck,
+        )];
+        let fixed_roots: HashMap<String, u8> = HashMap::new();
+        let equiv_table = [[1.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
+        let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
+        let mut weights = WeightConfig::default();
+        weights.enable_simple_code = true;
+        weights.simple_coverage_ratio = 1.0;
+        weights.simple_assign_mode = SimpleAssignMode::Frequency;
+        let fixed_vec: Vec<(char, String)> =
+            fixed.iter().map(|(c, s)| (*c, s.to_string())).collect();
+        OptContext::new_with_fixed(
+            &splits,
+            &fixed_roots,
+            &groups,
+            equiv_table,
+            key_dist,
+            ScaleConfig::default(),
+            SimpleCodeConfig { levels },
+            weights,
+            TargetsConfig::default(),
+            &fixed_vec,
+        )
+    }
+
+    /// 每有效简码至多 code_num 字（需求 21.7，方案 A，恢复原义）：commit_keys="dk"、code_num=2，
+    /// 同一核心桶含 2 个有效简码 `Ad`/`Ak`，各至多 2 字 → 该桶退火至多 4 字，且 `Ad`、`Ak` 各
+    /// 恰好出现 2 次（不会某个 > 2）。
+    #[test]
+    fn per_effective_code_cap_code_num_two() {
+        // 6 个候选字均落入核心桶 'a'（首根 key 0）。容量 = code_num(2) × K(2) = 4。
+        let ctx = make_ctx_commit_single(&[100, 95, 90, 85, 80, 75], 2, "dk", 2, SimpleAssignMode::Frequency);
+        let asg = vec![0u8; ctx.num_groups];
+        let (se, is_first) = build_se(&ctx, &asg);
+        let ordered = se.selected_ordered(&ctx, &is_first);
+        let codes: Vec<String> = ordered.iter().map(|&(li, ci)| se.rendered_code(li, ci)).collect();
+        assert_eq!(codes.len(), 4, "code_num=2 × K=2 → 该桶应出简 4 字");
+        let n_ad = codes.iter().filter(|c| c.as_str() == "ad").count();
+        let n_ak = codes.iter().filter(|c| c.as_str() == "ak").count();
+        assert_eq!(n_ak, 2, "有效简码 Ak 应恰对应 2 个全码字");
+        assert_eq!(n_ad, 2, "有效简码 Ad 应恰对应 2 个全码字");
+    }
+
+    /// 固定简码按「有效简码」逐键扣减（方案 A）：commit_keys="dk"、code_num=2，把 `Ad` 用 1 个
+    /// 固定简码占用 → `Ad` 退火名额降为 1、`Ak` 仍为 2，桶退火总名额 = 3。
+    #[test]
+    fn fixed_occupancy_deducts_per_effective_code() {
+        // 固定简码：char 0x4e00 → "ad"（核心 a + 上屏 d），占用有效简码 Ad 一个名额。
+        let fixed = [('\u{4e00}', "ad")];
+        let ctx = make_ctx_commit_fixed(&[100, 95, 90, 85, 80], 2, "dk", 2, &fixed);
+        // 验证占用按键登记。
+        let code_a = ctx.calc_simple_code(0, 0, &vec![0u8; ctx.num_groups]).expect("core code");
+        let d = char_to_key_index('d').unwrap() as u8;
+        let k = char_to_key_index('k').unwrap() as u8;
+        assert_eq!(ctx.simple_fixed_occ_key(0, code_a, d), 1, "Ad 应被固定占用 1 次");
+        assert_eq!(ctx.simple_fixed_occ_key(0, code_a, k), 0, "Ak 不应被占用");
+        assert_eq!(ctx.simple_annealing_slots(0, code_a), 3, "Ad(2-1)+Ak(2-0)=3");
+
+        let asg = vec![0u8; ctx.num_groups];
+        let (se, is_first) = build_se(&ctx, &asg);
+        let ordered = se.selected_ordered(&ctx, &is_first);
+        let codes: Vec<String> = ordered.iter().map(|&(li, ci)| se.rendered_code(li, ci)).collect();
+        assert_eq!(codes.len(), 3, "桶退火名额应为 3（Ad 占 1 后剩 Ad×1 + Ak×2）");
+        let n_ad = codes.iter().filter(|c| c.as_str() == "ad").count();
+        let n_ak = codes.iter().filter(|c| c.as_str() == "ak").count();
+        assert_eq!(n_ad, 1, "Ad 固定占 1 后退火仅剩 1");
+        assert_eq!(n_ak, 2, "Ak 退火满 2");
+    }
+
+    /// 支持「同一有效简码上 ≥2 个固定字」（方案 A）：两个固定简码都用 `Ak` → `Ak` 占用计数 2，
+    /// 退火名额降为 0；`Ad` 仍为 2。
+    #[test]
+    fn fixed_occupancy_supports_two_on_same_effective_code() {
+        let fixed = [('\u{4e00}', "ak"), ('\u{4e01}', "ak")];
+        let ctx = make_ctx_commit_fixed(&[100, 95, 90, 85, 80], 2, "dk", 2, &fixed);
+        let code_a = ctx.calc_simple_code(2, 0, &vec![0u8; ctx.num_groups]).expect("core code");
+        let k = char_to_key_index('k').unwrap() as u8;
+        assert_eq!(ctx.simple_fixed_occ_key(0, code_a, k), 2, "Ak 应被 2 个固定简码占用");
+        // Ak: max(0,2-2)=0；Ad: 2 → 名额 2。
+        assert_eq!(ctx.simple_annealing_slots(0, code_a), 2, "Ak 满占→0，仅余 Ad×2");
+        let asg = vec![0u8; ctx.num_groups];
+        let (se, is_first) = build_se(&ctx, &asg);
+        let ordered = se.selected_ordered(&ctx, &is_first);
+        let codes: Vec<String> = ordered.iter().map(|&(li, ci)| se.rendered_code(li, ci)).collect();
+        assert_eq!(codes.len(), 2, "Ak 满占后桶退火名额 = Ad 的 2");
+        assert!(codes.iter().all(|c| c.as_str() == "ad"), "退火只应出 Ad: {:?}", codes);
     }
 
     /// 增量 == 全量重建（含 commit_keys）：移动后 ev 的简码指标应与对同一分配全量重建一致。

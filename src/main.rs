@@ -863,7 +863,7 @@ fn run_optimize(
                 .collect::<Vec<_>>()
                 .join(" | ");
             println!(
-                "  - {}级简码: 每位{}字, 规则: {}",
+                "  - {}级简码: 每简码至多{}字, 规则: {}",
                 level.level, level.code_num, rules_str
             );
         }

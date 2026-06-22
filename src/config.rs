@@ -336,15 +336,6 @@ impl Config {
                 let commit_keys = resolve_commit_keys(l);
                 let (commit_pref_last_left, commit_pref_last_right) =
                     build_commit_pref_tables(&commit_keys);
-                // 容量扩展提示（需求 20.5 case A）：commit_keys 非空且 code_num ≤ K 时，
-                // 该级桶名额将扩大到 K（每个上屏键一个独立码槽）。
-                let k = commit_keys.len();
-                if !commit_keys.is_empty() && l.code_num <= k && l.code_num != k {
-                    println!(
-                        "ℹ️ 级别 {} 配置 code_num={} ≤ 上屏键数 K={}，桶名额自动扩大到 {}（每个上屏键一个独立码）",
-                        l.level, l.code_num, k, k
-                    );
-                }
                 Some(SimpleCodeLevel {
                     level: l.level,
                     code_num: l.code_num,

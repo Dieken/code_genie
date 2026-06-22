@@ -154,8 +154,8 @@ struct SimpleBucket {
 }
 
 struct SimpleLevelTracker {
-    code_num: usize,
-    capacity: usize,                       // = ctx.simple_level_capacity[li]
+    code_num: usize,                       // 该级配置的「每有效简码字数上限」（即 SimpleCodeLevel.code_num，非每桶名额）
+    capacity: usize,                       // = ctx.simple_level_capacity[li]（桶向量容量 = code_base^L）
     buckets: Vec<SimpleBucket>,            // 按简码编码直接索引（替代 HashMap, 需求 3.2）
     current_simple_code: Vec<i64>,         // current_simple_code[ci]: 该字当前简码编码, -1 表示无（需求 1.2）
     selected: Vec<bool>,                   // 该级出简标记（需求 1.2/1.4）
@@ -181,7 +181,7 @@ struct SimpleLevelTracker {
 pub enum SimpleAssignMode { Frequency, Efficiency }
 ```
 
-排序键计算（用于桶内选出前 `code_num` 个出简候选）：
+排序键计算（用于桶内选出前 `N` 个出简候选，`N` = 该桶退火可出简名额 = `Σ_{有效上屏键} max(0, code_num − occ)`，见需求 21.7）：
 
 - **Frequency 模式**（需求 4.3）：`key(ci) = freq(ci)`。该模式与旧实现的「按字频降序 take(code_num)」语义完全一致（旧 `build_level` 按 `sorted_chars` 字频降序插入并 `take`，并列按 `ci` 升序），因此满足需求 17.5 的「与旧实现一致」。
 - **Efficiency 模式**（需求 4.4，默认）：`key(ci) = freq(ci) × (base_saving[ci][li] + sel_len(ci))`，其中 `base_saving = full_len - simple_len`（预计算常量，需求 4.5），`sel_len ∈ {0, 1}` 由 `is_first_candidate` 决定（需求 4.6/5.4）。
@@ -252,7 +252,7 @@ fn apply_move_incremental(ctx, A, full_code_to_chars):
         for (level, code) in dirty_buckets where level == li:
             snapshot.record_bucket(li, code)
             局部排序 buckets[code].members（cmp_in_bucket, 排除已被前序级别出简的字）
-            new_selected = 前 code_num 个未被排除者
+            new_selected = 前 N 个未被排除者（N = 该桶退火可出简名额，见需求 21.7；含异手过滤与每上屏键占用扣减）
             对比 old_selected 与 new_selected:
                 对"取消选中"的字: 级别聚合扣除其 covered/equiv/dist 贡献;
                                   all_assigned_flags 可能清除; 该字在 li+1 级变为可选 → 加入 pending
@@ -427,10 +427,10 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 - **配置与类型**：`SimpleLevelConfig`（`src/config.rs`，TOML `[[simple_levels]]`）新增字符串字段 `commit_keys: String`，`#[serde(default)]` 缺省 `""`；内部 `SimpleCodeLevel`（`src/types.rs`）持有解析后的 `commit_keys: Vec<u8>`（字母→键索引、`_`→`KEY_SPACE`）及两张预计算偏好表 `commit_pref_last_left: Vec<u8>` / `commit_pref_last_right: Vec<u8>`。**废弃兼容**：保留可选 `space_commit: Option<bool>`；仅当 `commit_keys` 缺省时，`Some(true)→"_"`、`Some(false)→""` 并打废弃告警；两者同时给出则以 `commit_keys` 为准并告警。
 - **K 与有效码长**：`K = |左手字母| + |右手字母| + (含 _ ? 1 : 0)`。`commit_keys` 非空时该级每个出简字有效码长 = 核心码长 + 1（与具体上屏键无关）；空时 = 核心码长。故 `simple_base_saving[ci][li] = full_len - (核心码长 + (commit_keys 空 ? 0 : 1))`，仍是与名次/分配无关的预计算常量。资格 `simple_eligible` 只看核心码长（需求 22，不含上屏键）。
 - **偏好表预计算（需求 36，性能关键）**：偏好表只取决于「核心末键手别」，故每级仅两张、退火前一次性构建，长度 K，极小。构成：先「对侧手字母子序列」再「同侧手字母子序列」（各自保 `commit_keys` 原序），`_` 按其在 `commit_keys` 的首/尾位置加在表首/表尾。`_` 只允许在 `commit_keys` 首或尾（否则配置报错）。手别由静态表 `key_hand(key)` 按 QWERTY 物理布局给出（左：`qwert asdfg zxcvb`，右：`yuiop hjkl; nm,./`，`_` 中性）。
-- **桶内上屏键分配**：桶核心末键经 `last_key = code % code_base - 1` O(1) 还原 → 选对应偏好表；该桶若有固定简码占用上屏键，则把可用偏好表取为「去除已占用键」的序列（在栈上小数组过滤，`commit_keys` 假定小，零堆分配）；桶内名次 i 的退火出简字用 `可用偏好表[i mod K']`（轮转，需求 36.4 / 需求 20 的 case B）。
-- **异手过滤（需求 37）**：`SimpleCodeLevel` 增 `commit_alt_hand_only: bool`（缺省 false）。为真时，构建「可用偏好表」的过滤再加一条：在去除固定占用键的基础上，**额外剔除与核心末键同手的字母上屏键**（`key_hand(k) == 核心末键手别 且 k != KEY_SPACE`），保留异手字母与 `_`（`_` 中性、始终保留）。过滤后 `K'` 缩短，名次仍按 `i mod K'` 轮转；`K' == 0`（无异手字母且无 `_`）则该桶不出简（候选字上浮）。过滤在 `commit_key_for_rank` 内对预计算偏好表顺序遍历时 O(K) 完成，不新增预计算、不堆分配。固定简码不受此过滤影响（字面预分配，同手亦保留）。核心末键手别已可由 `code` O(1) 还原，无需额外状态。
+- **桶内出简名额与上屏键分配（需求 21.7/36.4，方案 A）**：每个**有效简码**至多 `code_num` 个全码字——有效简码 = 核心简码（`commit_keys` 空）或「核心简码 + 某个上屏键」（`commit_keys` 非空，每个上屏键一个独立有效简码）。故核心桶的退火可出简名额 `N = Σ_{有效上屏键 k} max(0, code_num − occ_k)`（`commit_keys` 空时即 `max(0, code_num − occ)`），由 `ctx.simple_annealing_slots(li, code)` 计算（无上屏键 O(1)；有上屏键沿偏好表 O(K) 累加，与既有 K′=0 检查同阶）。桶核心末键经 `last_key = code % code_base - 1` O(1) 还原选偏好表；名次 i 的退火出简字按「轮次轮转」取上屏键：每个上屏键 `k` 至多被退火占用 `cap_k = max(0, code_num − occ_k)` 次，第 0 轮按偏好表序给所有 `cap_k>0` 的键各一次、第 1 轮给 `cap_k>1` 的键……由 `commit_key_for_rank(li, code, i)` 在偏好表上 O(code_num·K) 完成、零堆分配。`code_num=1` 且无占用时退化为 `i mod K′`（与历史轮转一致）。
+- **异手过滤（需求 37）**：`SimpleCodeLevel` 增 `commit_alt_hand_only: bool`（缺省 false）。为真时，`simple_annealing_slots` 与 `commit_key_for_rank` 在沿偏好表累加/分配时**额外跳过与核心末键同手的字母上屏键**（`key_hand(k) == 核心末键手别 且 k != KEY_SPACE`），保留异手字母与 `_`（`_` 中性、始终保留）——即这些被过滤的上屏键不构成有效简码、不计入名额。过滤后若无任何有效上屏键（异手字母全无且无 `_`）则该桶名额为 0、不出简（候选字上浮）。过滤在偏好表顺序遍历时 O(K) 完成，不新增预计算、不堆分配。固定简码不受此过滤影响（字面预分配，同手亦保留并输出）。核心末键手别由 `code` O(1) 还原。
 - **当量/分布/输出按实际上屏键**：`calc_simple_equiv` 与 `fill_keys_with_commit` 增参 `commit_key: Option<u8>`：`Some(c)` 时末位核心键到 `c` 计入转移当量、`c` 计入 `key_usage`/`key_presses`，输出在核心串后追加 `key_to_char(c)`（空格为 `_`）。`reselect_bucket` 在按名次 `idx` 遍历成员时传入该名次对应的上屏键。**回滚无需新增字段**：每字的 `sel_equiv`/`sel_keys`/`sel_keys_len` 已被 `ContribUndo` 快照，名次变化导致的上屏键变化由既有快照机制还原。
-- **行为等价（回归保证）**：`commit_keys==""` ↔ 旧 `space_commit=false`（无上屏键）；`commit_keys=="_"` ↔ 旧 `space_commit=true`（K=1、两手偏好表均 `[KEY_SPACE]`、轮转使每名次都取空格，含 code_num>1 时多字空格重码靠选重区分）。
+- **行为等价（回归保证）**：`commit_keys==""` ↔ 旧 `space_commit=false`（无上屏键，核心桶名额 = `max(0, code_num − occ)`）；`commit_keys=="_"` ↔ 旧 `space_commit=true`（K=1、两手偏好表均 `[KEY_SPACE]`、名次都取空格，`code_num>1` 时同一有效简码 `…_` 上多字重码靠选重区分）。`commit_keys` 非空且 `code_num=1`、无固定占用时，核心桶名额 = K（每个上屏键各 1 字），与历史「桶名额扩到 K」结果逐字段一致——本次修订仅在 `code_num≥2` 或存在固定占用时改变行为（恢复「每有效简码 `code_num` 字」原义）。
 - **不变量**：上屏键不进入 `calc_simple_code` 桶编码与 `simple_level_capacity`（桶仍按核心简码键位编码索引）。
 
 #### 固定简码（需求 21）
@@ -440,11 +440,11 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 - **`FixedSimpleCode` 结构变更**：`li: usize` → `li: Option<usize>`。生产代码仅 `output.rs` 两处输出点读 `fc.li`（改 `== Some(li)` 并加无归属收尾段）；`evaluator.rs` 设 `all_assigned_flags` 处只用 `fc.ci`，对 `None` 天然正确。
 - **`OptContext` 预计算新增字段**（仅启用简码时填充，退火前一次性确定，全程不变）：
   - `simple_fixed_assigned: Vec<bool>`：按 `ci` 索引，标记该字是否为固定简码字。
-  - `simple_fixed_occupancy: Vec<Vec<u32>>`：`simple_fixed_occupancy[li][code]` = 该级该核心桶被固定简码占用的**上屏键 bitmask**（位 = 键索引 0..30；K≤31 故 u32 足够），取代旧的占用计数。仅在确有固定简码时按容量分配，否则空 `Vec`；访问器对空/越界回退 0（无占用）。占用名额数 = bitmask 置位数。`commit_keys` 为空的级别其占用退化为「至多 1 位的计数语义」（与旧计数等价）。
+  - `simple_fixed_occupancy: Vec<FxHashMap<u32, Vec<(u8, u32)>>>`：稀疏占用计数表，`simple_fixed_occupancy[li]` 映射 `核心桶编码 → 该桶各被占用「上屏键」的占用计数` `(key, count)` 列表。有上屏键级别按实际上屏键索引；无上屏键级别用哨兵键 `255`（非法键索引）记核心简码自身的占用计数。采用**计数**（取代旧 bitmask）以支持「同一有效简码上 ≥2 个固定字」（方案 A）。仅在确有固定简码时按级分配空映射，否则外层空 `Vec`；访问器（`simple_fixed_occ_total` / `simple_fixed_occ_key`）对空/缺失回退 0。改稀疏后还省去高级别 `code_base^L` 密集占用表的分配。
   - 固定简码常量贡献：`fixed_covered_freq` / `fixed_equiv_weighted` / `fixed_equiv_freq_sum` / `fixed_key_usage[..]` / `fixed_key_presses`（含其末键上屏键，需求 21.8/21.9）。
 - **候选字解耦**（需求 21.3/21.4）：候选集按 `simple_coverage_ratio`/`simple_active_coverage` 在全集选取后，剔除 `simple_fixed_assigned` 为真的字（无论是否归级）。
 - **出简语义**（需求 21.8）：固定简码字 `all_assigned_flags[ci]=true` 永不翻转；其覆盖率/当量/分布贡献由常量偏置体现。
-- **桶选取与占用**（需求 21.7/36.4）：退火桶可选名额 = `code_num.saturating_sub(占用位数)`；退火字上屏键取「偏好表去除已占用键」后的可用序列，按名次轮转。占用为常量，热路径与回滚不受影响。
+- **桶选取与占用**（需求 21.7/36.4，方案 A）：退火桶可出简名额 = `Σ_{有效上屏键 k} max(0, code_num − occ_k)`（无上屏键级别即 `max(0, code_num − occ)`），由 `simple_annealing_slots` 计算；退火字上屏键按「各上屏键剩余容量 `code_num − occ_k`」轮次轮转分配（`commit_key_for_rank`）。占用为常量，热路径与回滚不受影响。
 - **`code_num=0` 级别保留**（需求 21.13）：`get_simple_code_config` 保留「有固定简码按规则归属到其上」的 `code_num=0` 级别，丢弃无归属的 `code_num=0` 级别。
 - **输出**（需求 21.10）：`src/output.rs` 各级输出归属本级的固定简码，并在所有级别之后单列一段输出 `li==None` 的固定简码，保证两个 output 文件均不遗漏。配置确认日志逐条打印固定简码归属级别（或「无归属」告警）。
 
@@ -466,7 +466,7 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
   `save_simple_code_output` 复用其已构建的 `se`、`save_combined_code_output` 经该辅助构建。
 - 两个输出函数按返回的顺序输出优化出简（经 `simple_code_str` 拼接核心键位串并按该字实际上屏键
   追加字符），再输出归属各级的固定简码（保留其字面上屏键），最后单列一段输出无归属固定简码。因选择来自评估器 `selected`，efficiency
-  排序键、`sel_len`、固定占用扣减（`code_num - 占用位数`）、上屏键偏好与跨级排除全部自动一致。
+  排序键、`sel_len`、固定占用扣减（每有效简码 `code_num − occ`、桶名额 `Σ max(0, code_num − occ)`）、上屏键偏好与跨级排除全部自动一致。
 
 #### warmup 与坐标下降按调用上下文区分简码（需求 24）
 
@@ -502,7 +502,7 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 
 
 - 上屏键序列仅改变 `simple_base_saving`（预计算常量）、`calc_simple_equiv` 的上屏键转移项、分布的上屏键计数与输出字符串；上屏键的具体取值由桶内名次 + 预计算偏好表 O(1) 决定。热路径 `apply_move_incremental` 的桶增量、快照回滚、`reconcile` 结构不变（当量/分布的上屏键项随出简翻转一并增减、纳入既有级别聚合增量；名次变化导致的上屏键变化由既有 `ContribUndo` 快照还原）。
-- 固定简码引入的均为退火前静态量（候选集剔除、桶占用 bitmask、常量偏置、固定字 `all_assigned` 恒真、长度资格、归级/无归级）；增量选择只在「优化候选字」上进行，固定字不参与移动，故 Property 1/2/13 的增量=全量、回滚 round-trip、对账=全量在「含固定简码、上屏键序列与长度约束」的上下文下同样成立（全量与增量都读取同一套静态预计算）。
+- 固定简码引入的均为退火前静态量（候选集剔除、桶占用计数表、常量偏置、固定字 `all_assigned` 恒真、长度资格、归级/无归级）；增量选择只在「优化候选字」上进行，固定字不参与移动，故 Property 1/2/13 的增量=全量、回滚 round-trip、对账=全量在「含固定简码、上屏键序列与长度约束」的上下文下同样成立（全量与增量都读取同一套静态预计算）。
 
 
 ## Correctness Properties
@@ -611,13 +611,13 @@ simple_assign_mode 非法字符串 → 采用默认 "efficiency"
 
 ### Property 17: 上屏键的输出表示与左右手偏好
 
-*对任意* 简码级别 `li` 与该级被出简的字（含固定简码），其输出到 output 文件的简码字符串：当 `commit_keys` 非空时恰为「核心键位串 + 单个上屏键字符（字母或 `_`）」，当 `commit_keys` 为空时恰为「核心键位串、无上屏键」。*对任意* 核心简码桶，退火出简字按名次取得的上屏键应等于「据该桶核心末键手别选定的偏好表、去除本桶固定占用键后、按 `i mod K'` 轮转」的结果；偏好表满足「对侧手字母在前、同侧手在后、各自保序，`_` 固定在首/尾」。
+*对任意* 简码级别 `li` 与该级被出简的字（含固定简码），其输出到 output 文件的简码字符串：当 `commit_keys` 非空时恰为「核心键位串 + 单个上屏键字符（字母或 `_`）」，当 `commit_keys` 为空时恰为「核心键位串、无上屏键」。*对任意* 核心简码桶，退火出简字按名次取得的上屏键应等于「据该桶核心末键手别选定的偏好表、按各上屏键剩余容量 `max(0, code_num − occ)` 轮次轮转」的结果（`code_num=1` 且无占用时退化为按 `i mod K'`）；偏好表满足「对侧手字母在前、同侧手在后、各自保序，`_` 固定在首/尾」。
 
 **Validates: Requirements 20.8, 20.9, 21.10, 36.1, 36.2, 36.3, 36.4**
 
 ### Property 18: 固定简码与候选字集合解耦且占用名额
 
-*对任意* 字频分布、覆盖率阈值与固定简码映射，候选字集合的「按覆盖率选取」结果应与无固定简码时完全一致；剔除步骤后，候选字集合恰为「该覆盖率前缀」去掉固定简码字（无论是否归级）；且对任意级别 `li` 与桶编码 `code`，该桶经退火分配的出简数不超过 `max(0, code_num - popcount(simple_fixed_occupancy[li][code]))`，退火字使用的上屏键不与本桶固定占用键重复；固定占用本身不受 `code_num` 限制。无归属固定简码（`li==None`）不占任何桶。
+*对任意* 字频分布、覆盖率阈值与固定简码映射，候选字集合的「按覆盖率选取」结果应与无固定简码时完全一致；剔除步骤后，候选字集合恰为「该覆盖率前缀」去掉固定简码字（无论是否归级）；且对任意级别 `li` 与桶编码 `code`，该桶经退火分配的出简数不超过 `simple_annealing_slots(li, code) = Σ_{有效上屏键 k} max(0, code_num − occ_k)`（无上屏键级别即 `max(0, code_num − occ)`），且每个有效简码（上屏键）被退火占用的次数 ≤ `max(0, code_num − occ_k)`；固定占用本身不受 `code_num` 限制（同一有效简码可有 ≥1 个固定字）。无归属固定简码（`li==None`）不占任何桶。
 
 **Validates: Requirements 21.3, 21.4, 21.6, 21.7, 36.4**
 

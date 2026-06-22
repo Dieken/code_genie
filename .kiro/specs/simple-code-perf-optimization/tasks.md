@@ -475,11 +475,13 @@
   - [x] 30.4 桶内按名次+手别+占用分配上屏键
     - `reselect_bucket`：由桶编码 O(1) 还原核心末键 `code % code_base - 1` → 选偏好表；无固定占用直接用，有占用在栈上小数组过滤；名次 idx 的退火出简字用 `可用偏好表[idx % K']`；传 commit_key 给 select_char/refresh_char
     - 桶容量：commit_keys 非空且 code_num ≤ K 时扩到 K（日志提示）；code_num > K 时容量 code_num、轮转
+    - （注：本「扩到 K / 整键 i mod K'」做法已被任务 32 修订为方案 A——每有效简码至多 code_num 字、上屏键按剩余容量轮次轮转）
     - _Requirements: 20.5, 36.3, 36.4, 36.6_
 
   - [x] 30.5 固定简码归级（纯核心/核心+上屏）、无归级不丢弃、占用 bitmask
     - `src/context.rs`：`FixedSimpleCode.li: Option<usize>`；归级两解释（纯核心 / 核心+上屏），多命中取最小级别并告警；无归级 → li=None、告警、不丢弃（仍 assigned、计常量贡献、输出）
     - `simple_fixed_occupancy[li][code]` 改 `Vec<u32>` bitmask（占用上屏键位）；仅归到「核心+上屏」级别时置位；纯核心/无归级不占 commit slot
+    - （注：占用表已被任务 32 改为稀疏每键计数 `Vec<FxHashMap<u32, Vec<(u8,u32)>>>`，以支持同一有效简码 ≥2 固定字）
     - 配置确认日志逐条打印固定简码归属级别（或无归属告警）
     - _Requirements: 21.2, 21.5, 21.6, 21.7, 21.11, 21.13, 22.3_
 
@@ -508,6 +510,7 @@
   - [x] 31.2 commit_key_for_rank 异手过滤
     - `src/context.rs` `commit_key_for_rank`：当该级 `commit_alt_hand_only` 为真时，在遍历偏好表构建可用序列时额外剔除「与核心末键同手的字母上屏键」（`key_hand(k)==核心末键手别 且 k!=KEY_SPACE`），保留异手字母与 `_`；`K'` 据此缩短，名次仍 `i mod K'`；`K'==0` 返回 None（该桶不出简、候选字上浮）
     - 与固定占用过滤叠加；O(K) 小集合遍历、零堆分配；不影响固定简码（字面保留）
+    - （注：与固定占用的叠加已被任务 32 修订——占用不再「整键去除」，而是按每上屏键剩余容量 code_num−occ 计；异手过滤仍剔除同手字母）
     - _Requirements: 37.2, 37.3, 37.4, 37.5, 37.7, 37.8_
   - [x] 31.3 同步配置文件
     - `config.toml.example` 与 `moling/config*.toml` 的 `[[simple_levels]]` 加 `commit_alt_hand_only`（默认 false）及注释，注释保持各文件一致
@@ -516,6 +519,24 @@
     - 单测：左/右手核心末键下，`commit_alt_hand_only=true` 仅产出异手字母 + `_` 的上屏键；同手字母被排除；`_` 始终保留；`K'==0` 桶不出简、候选字上浮
     - prop1（增量=全量）在含 `commit_alt_hand_only` 的上下文下保持全绿
     - _Requirements: 37.2, 37.3, 37.5_
+
+- [x] 32. `code_num` 语义修订：每「有效简码」至多 code_num 字（方案 A，恢复原义）
+  - [x] 32.1 占用表改稀疏计数（支持同一有效简码 ≥2 固定字）
+    - `src/context.rs`：`simple_fixed_occupancy: Vec<Vec<u32>>`（bitmask/计数）→ `Vec<FxHashMap<u32, Vec<(u8,u32)>>>`（code→各上屏键占用计数；无上屏键级别用哨兵键 `255` 记核心占用计数）
+    - 构建循环：归级时按 `(上屏键 | 哨兵)` 累加计数（取代 `|= 1<<ck` 与 `+= 1`）；仅在确有固定简码时按级分配空映射
+    - 新增访问器 `simple_fixed_occ_total(li,code)`（求和）/`simple_fixed_occ_key(li,code,key)`（按键查计数）；移除旧 `simple_fixed_occ`/`simple_fixed_occ_mask`
+    - _Requirements: 21.7_
+  - [x] 32.2 名额计算与上屏键分配改「每有效简码」口径
+    - `src/context.rs` 新增 `simple_annealing_slots(li,code)`：无上屏键 `max(0, code_num−occ)`；有上屏键沿偏好表（含异手过滤）累加 `Σ max(0, code_num−occ_k)`，O(K)
+    - `commit_key_for_rank` 改「各上屏键剩余容量 `code_num−occ_k` 轮次轮转」（取代「整键去除 + i mod K'」），`code_num=1` 无占用时退化为 `i mod K'`
+    - `src/evaluator.rs`：`SimpleLevelTracker.code_num` 不再「扩到 K」（= 配置 `code_num`）；`reselect_bucket`/`rebuild_selection` 选取数改 `ctx.simple_annealing_slots(li,code)`（含 is_code_blocked 与 K'=0 归零）
+    - `src/config.rs`：移除「桶名额扩大到 K」提示日志（语义已改）
+    - _Requirements: 21.7, 23.3, 35.1, 35.2, 36.4_
+  - [x] 32.3 文档串与回归测试
+    - `src/main.rs`/`src/output.rs` 简码级别打印「每位X字」→「每简码至多X字」
+    - 更新 prop18 `check_occupancy_bound` 与 output 占用断言到「每有效简码 ≤ code_num」；新增 commit_keys + code_num≥2 + 每键占用的单测（Ad/Ak 各独立 ≤ code_num）
+    - `cargo build` + `cargo test` 全绿；无固定简码、无 commit_keys 的路径行为/性能零变化（回归对照）
+    - _Requirements: 21.7, 23.1, 23.3_
 
 ## Task Dependency Graph
 
