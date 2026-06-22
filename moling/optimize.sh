@@ -116,7 +116,9 @@ if [ -d "$BAK" ]; then
 else
     files="$CONFIG"
     [ -f "init-$SCHEMA.sh" ] && files+=" init-$SCHEMA.sh"
-    for f in chars full-freq roots roots-cluster; do
+    for f in chars full-freq roots roots-fly roots-cluster \
+        input-division input-fixed input-roots \
+        key_distribution pair_equivalence; do
         [ -f "$f-$SCHEMA.txt" ] && files+=" $f-$SCHEMA.txt" || files+=" $f.txt"
     done
 
@@ -127,13 +129,7 @@ else
        charAbsoluteFrequency*.json \
        freq.txt \
        init.sh \
-       input-division.txt \
-       input-fixed.txt \
-       input-roots.txt \
-       key_distribution.txt \
-       pair_equivalence.txt \
        prepare-inputs.sh \
-       roots-fly.txt \
        roots-freq.txt \
        roots-pinyin.txt \
        $files \
