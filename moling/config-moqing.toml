@@ -102,17 +102,17 @@ simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保
 
 [[simple_levels]]
 level = 1
-code_num = 4
+code_num = 1
 rules = ["Aa"]
 commit_keys = "eaio"     # 上屏键序列（默认 ""）。字母=主键盘键、_=空格；"" 表示自动上屏。
                          # 例 "dk_"：上屏键可为 d/k/空格，按左右手交替偏好 + 轮转分配；
                          # _ 只能放在序列开头(偏爱空格)或末尾(偏爱主键)。
                          # "" 等价旧 space_commit=false；"_" 等价旧 space_commit=true。
-commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
+commit_alt_hand_only = true   # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
 
 [[simple_levels]]
 level = 2
-code_num = 4
+code_num = 0
 rules = ["AaBa"]
 commit_keys = "eaio"
 commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
