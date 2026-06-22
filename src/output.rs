@@ -105,32 +105,16 @@ pub fn write_keymap_output(
 /// `(level_idx, ci)` 出简列表，使各 output 文件与被优化方案逐字一致。简码未启用或无级别时
 /// 返回空列表。`is_first_candidate` 与 `Evaluator::new` / `save_simple_code_output` 同口径
 /// （每个非空全码桶取「最大频率、最小 ci」为首选字，供 efficiency 排序键的 sel_len 取值）。
-fn evaluator_simple_selection(ctx: &OptContext, assignment: &[u8]) -> Vec<(usize, usize)> {
+fn evaluator_simple_selection(ctx: &OptContext, assignment: &[u8]) -> Vec<(usize, usize, String)> {
     if !ctx.enable_simple_code || ctx.simple_config.levels.is_empty() {
         return Vec::new();
     }
     let (full_buckets, is_first) = crate::evaluator::build_full_buckets(ctx, assignment);
     let se = SimpleEvaluator::new(ctx, assignment, &full_buckets, &is_first, true);
     se.selected_ordered(ctx, &is_first)
-}
-
-/// 某出简字的简码键位串（需求 20.5/20.6）：键位转字符；该级 `space_commit` 为真时追加结尾下划线。
-fn simple_code_str(
-    ctx: &OptContext,
-    ci: usize,
-    li: usize,
-    assignment: &[u8],
-    space_commit: bool,
-) -> String {
-    ctx.get_simple_keys(ci, li, assignment)
-        .map(|keys| {
-            let mut s: String = keys.iter().map(|&k| key_to_char(k)).collect();
-            if space_commit {
-                s.push('_');
-            }
-            s
-        })
-        .unwrap_or_else(|| String::from("?"))
+        .into_iter()
+        .map(|(li, ci)| (li, ci, se.rendered_code(li, ci)))
+        .collect()
 }
 
 /// 保存简码+全码编码文件
@@ -159,25 +143,31 @@ pub fn save_combined_code_output(ctx: &OptContext, assignment: &[u8], dir: &str)
     });
 
     // 简码部分（需求 23）：镜像评估器出简选择，按分配顺序（级别升序、桶内排序键）输出，
-    // 与被优化方案逐字一致（含 efficiency 模式 / sel_len / 固定占用扣减 / 跨级排除）。
+    // 与被优化方案逐字一致（含 efficiency 模式 / sel_len / 上屏键偏好 / 固定占用扣减 / 跨级排除）。
     let ordered = evaluator_simple_selection(ctx, assignment);
     let n_levels = ctx.simple_config.levels.len();
-    let mut per_level: Vec<Vec<usize>> = vec![Vec::new(); n_levels];
-    for (li, ci) in ordered {
-        per_level[li].push(ci);
+    let mut per_level: Vec<Vec<(usize, String)>> = vec![Vec::new(); n_levels];
+    for (li, ci, code_str) in ordered {
+        per_level[li].push((ci, code_str));
     }
-    for (li, level_cfg) in ctx.simple_config.levels.iter().enumerate() {
-        for &ci in &per_level[li] {
-            let ch = ctx.raw_splits[ci].0;
-            let code_str = simple_code_str(ctx, ci, li, assignment, level_cfg.space_commit);
+    for li in 0..n_levels {
+        for (ci, code_str) in &per_level[li] {
+            let ch = ctx.raw_splits[*ci].0;
             out.push_str(&format!("{}\t{}\n", ch, code_str));
         }
-        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留结尾下划线。
+        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留其字面上屏键。
         for fc in &ctx.simple_fixed_codes {
-            if fc.li == li {
+            if fc.li == Some(li) {
                 let ch = ctx.raw_splits[fc.ci].0;
                 out.push_str(&format!("{}\t{}\n", ch, fc.code_str));
             }
+        }
+    }
+    // 无归属级别的固定简码（需求 21.6/21.10）：单列一段，不遗漏。
+    for fc in &ctx.simple_fixed_codes {
+        if fc.li.is_none() {
+            let ch = ctx.raw_splits[fc.ci].0;
+            out.push_str(&format!("{}\t{}\n", ch, fc.code_str));
         }
     }
 
@@ -254,18 +244,18 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
         ));
         out.push_str("# 汉字\t简码\t字频\n");
 
-        // 优化出简：镜像评估器 selected（含 efficiency 排序 / sel_len / 占用扣减 / 跨级排除）。
+        // 优化出简：镜像评估器 selected（含 efficiency 排序 / sel_len / 上屏键偏好 / 占用扣减 / 跨级排除）。
         for &ci in &per_level[li] {
             let ch = ctx.raw_splits[ci].0;
             let freq = ctx.char_infos[ci].frequency;
-            let code_str = simple_code_str(ctx, ci, li, assignment, level_cfg.space_commit);
+            let code_str = se.rendered_code(li, ci);
             out.push_str(&format!("{}\t{}\t{}\n", ch, code_str, freq));
         }
 
-        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留结尾下划线。
+        // 固定简码（需求 21.10）：输出归属本级的固定简码字，保留其字面上屏键。
         let mut fixed_count = 0usize;
         for fc in &ctx.simple_fixed_codes {
-            if fc.li == li {
+            if fc.li == Some(li) {
                 let ch = ctx.raw_splits[fc.ci].0;
                 let freq = ctx.char_infos[fc.ci].frequency;
                 out.push_str(&format!("{}\t{}\t{}\n", ch, fc.code_str, freq));
@@ -278,6 +268,22 @@ pub fn save_simple_code_output(ctx: &OptContext, assignment: &[u8], dir: &str) {
             per_level[li].len() + fixed_count,
             fixed_count
         ));
+    }
+
+    // 无归属级别的固定简码（需求 21.6/21.10）：单列一段输出，不遗漏。
+    let no_level: Vec<&crate::types::FixedSimpleCode> = ctx
+        .simple_fixed_codes
+        .iter()
+        .filter(|fc| fc.li.is_none())
+        .collect();
+    if !no_level.is_empty() {
+        out.push_str("\n# === 无归属级别的固定简码（仍输出、不参与退火） ===\n");
+        out.push_str("# 汉字\t简码\t字频\n");
+        for fc in no_level {
+            let ch = ctx.raw_splits[fc.ci].0;
+            let freq = ctx.char_infos[fc.ci].frequency;
+            out.push_str(&format!("{}\t{}\t{}\n", ch, fc.code_str, freq));
+        }
     }
 
     crate::fsutil::write_with_backup(format!("{}/output-simple-codes.txt", dir), out).unwrap();
@@ -678,12 +684,12 @@ mod space_commit_output_tests {
             root_selector: sel,
             code_selector: 'a',
         };
-        let levels = vec![SimpleCodeLevel {
-            level: 1,
-            code_num: 1,
-            rule_candidates: vec![vec![step('A')]],
+        let levels = vec![crate::types::SimpleCodeLevel::with_space_commit(
+            1,
+            1,
+            vec![vec![step('A')]],
             space_commit,
-        }];
+        )];
         let fixed_roots: HashMap<String, u8> = HashMap::new();
         let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
         let key_dist = [KeyDistConfig::default(); EQUIV_TABLE_SIZE];
@@ -800,7 +806,9 @@ mod output_selection_mirror_tests {
             level: 1,
             code_num,
             rule_candidates: vec![vec![SimpleCodeStep { root_selector: 'A', code_selector: 'a' }]],
-            space_commit: false,
+            commit_keys: Vec::new(),
+            commit_pref_last_left: Vec::new(),
+            commit_pref_last_right: Vec::new(),
         }];
         let fixed_roots: HashMap<String, u8> = HashMap::new();
         let equiv_table = [[0.0f64; EQUIV_TABLE_SIZE]; EQUIV_TABLE_SIZE];
@@ -828,7 +836,7 @@ mod output_selection_mirror_tests {
     fn assert_occupancy(ctx: &OptContext, asg: &[u8]) {
         let sel = evaluator_simple_selection(ctx, asg);
         let mut opt: HashMap<(usize, usize), usize> = HashMap::new();
-        for (li, ci) in &sel {
+        for (li, ci, _code_str) in &sel {
             // 固定字不应出现在优化选择中
             assert!(!ctx.simple_fixed_assigned[*ci], "固定字不应在优化出简中: ci={}", ci);
             let code = ctx.calc_simple_code(*ci, *li, asg).expect("出简字必有简码");

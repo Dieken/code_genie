@@ -104,27 +104,31 @@ simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保
 level = 1
 code_num = 1
 rules = ["Aa"]
-space_commit = true      # 是否需要空格上屏（默认 false）；为 true 时该级简码效率长度+1，且输出末尾追加 "_"
+commit_keys = "_"        # 上屏键序列（默认 ""）。字母=主键盘键、_=空格；"" 表示自动上屏。
+                         # 例 "dk_"：上屏键可为 d/k/空格，按左右手交替偏好 + 轮转分配；
+                         # _ 只能放在序列开头(偏爱空格)或末尾(偏爱主键)。
+                         # "" 等价旧 space_commit=false；"_" 等价旧 space_commit=true。
 
 [[simple_levels]]
 level = 2
 code_num = 1
 rules = ["AaBa"]
-space_commit = false
+commit_keys = ""
 
 [[simple_levels]]
 level = 3
 code_num = 1
 rules = ["AaAbZb"]
-space_commit = false
+commit_keys = ""
 
 # -------------------------------------------------------------------------
 # 🔒 固定简码映射（可选，默认整段注释）
-# 预先定义「汉字 = 简码」，简码可选以 _ 结尾表示空格上屏（输出保留下划线）。
+# 预先定义「汉字 = 简码」，简码为完整字面键位串（末键可为任意上屏键，含 _ 表示空格）。
 # - 不影响候选字按 simple_coverage_ratio 的选取，仅在选完后将这些字从候选集剔除；
-# - 每条固定简码按其码长归属对应级别，并占用该级该桶的 code_num 名额；
-# - 结尾下划线的有无须与该级 [[simple_levels]].space_commit 一致；
-# - 有效简码长度须严格小于该字全码长度。
+# - 归级规则：长度 T 的简码，匹配「核心码长==T 且该级 commit_keys 为空（纯核心）」
+#   或「核心码长==T-1 且末键∈该级 commit_keys（核心+上屏，占该上屏键的 commit slot）」；
+# - 无法归属任何级别时仅告警、不丢弃（仍输出、仍排除候选，但不占 commit slot）；
+# - 有效核心码长须严格小于该字全码长度。
 # 下例仅用于表达配置格式（默认全部注释）。
 # -------------------------------------------------------------------------
 [fixed_simple_codes]

@@ -103,10 +103,12 @@ pub struct OptContext {
     // ====================================================================
     /// 固定简码字位图，按 ci 索引：为真表示该字使用固定简码、不参与退火的简码分配。
     pub simple_fixed_assigned: Vec<bool>,
-    /// 固定简码桶占用：simple_fixed_occupancy[li][code] = 该级该桶被固定简码占用的名额数。
-    /// 用于把每桶优化分配名额降为 `code_num - 占用数`（需求 21.7）。可能为空 `Vec`
-    /// （无固定简码时），访问统一经 `simple_fixed_occ` 做边界回退。
-    pub simple_fixed_occupancy: Vec<Vec<usize>>,
+    /// 固定简码桶占用：simple_fixed_occupancy[li][code] = 该级该核心桶被固定简码占用的
+    /// **上屏键 bitmask**（位 = 键索引 0..30；需求 36.4）。占用名额数 = 置位数（popcount）。
+    /// 用于把每桶优化分配名额降为 `code_num - 占用数`、并让退火字跳过被占用的上屏键（需求 21.7/36.4）。
+    /// 可能为空 `Vec`（无固定简码时），访问统一经 `simple_fixed_occ` / `simple_fixed_occ_mask` 回退。
+    /// `commit_keys` 为空的级别其占用至多 1 位（位 0，纯核心占用语义，与旧计数等价）。
+    pub simple_fixed_occupancy: Vec<Vec<u32>>,
     /// 固定简码对简码覆盖频率的常量贡献（需求 21.8/21.9）。
     pub fixed_covered_freq: u64,
     /// 固定简码对加权当量分子的常量贡献。
@@ -304,7 +306,7 @@ impl OptContext {
 
         // 固定简码（需求 21）静态字段累加器
         let mut simple_fixed_assigned: Vec<bool> = vec![false; n_chars];
-        let mut simple_fixed_occupancy: Vec<Vec<usize>> = Vec::new();
+        let mut simple_fixed_occupancy: Vec<Vec<u32>> = Vec::new();
         let mut fixed_covered_freq: u64 = 0;
         let mut fixed_equiv_weighted: f64 = 0.0;
         let mut fixed_equiv_freq_sum: u64 = 0;
@@ -369,11 +371,9 @@ impl OptContext {
             }
 
             // base_saving 预计算：simple_base_saving[ci][li] = full_len - effective_simple_len
-            // 其中 effective_simple_len = 指令步数 + (该级 space_commit ? 1 : 0)（需求 20.3/20.4）。
-            // 同时预计算出简长度资格 simple_eligible[ci][li]（需求 22）：
-            // 资格判定只看「核心码长」（指令步数，不含尾随空格），即 step_count < full_len。
-            // 这样 space_commit=true 的级别不会因空格使有效长度追平全码而被误拒。
-            // base_saving 与当量/分布仍以 effective_simple_len（含空格）计算，反映真实击键成本。
+            // 其中 effective_simple_len = 核心码长 + (该级有上屏键 ? 1 : 0)（需求 20.4/20.5）。
+            // 上屏键长度恒为 1（与具体上屏键无关），故 base_saving 仍是与名次/分配无关的常量。
+            // 资格判定只看「核心码长」（指令步数，不含上屏键），即 step_count < full_len（需求 22）。
             simple_base_saving = vec![vec![0i64; n_levels]; n_chars];
             simple_eligible = vec![vec![false; n_levels]; n_chars];
             for ci in 0..n_chars {
@@ -384,10 +384,10 @@ impl OptContext {
                         .get(li)
                         .and_then(|o| o.as_ref())
                         .map_or(0, |v| v.len()) as i64;
-                    let space = if simple_config.levels[li].space_commit { 1 } else { 0 };
-                    let effective_simple_len = step_count + space;
+                    let commit = if simple_config.levels[li].has_commit() { 1 } else { 0 };
+                    let effective_simple_len = step_count + commit;
                     simple_base_saving[ci][li] = full_len - effective_simple_len;
-                    // 资格判定：核心码长（step_count）严格短于全码，与是否空格上屏无关。
+                    // 资格判定：核心码长（step_count）严格短于全码，与是否有上屏键无关。
                     simple_eligible[ci][li] = step_count > 0 && step_count < full_len;
                 }
             }
@@ -420,7 +420,7 @@ impl OptContext {
                 // simple_fixed_occ 访问器对空/越界统一回退 0）——避免高级别 code_base^L 容量的
                 // 无谓分配。
                 simple_fixed_occupancy = (0..n_levels)
-                    .map(|li| vec![0usize; simple_level_capacity[li]])
+                    .map(|li| vec![0u32; simple_level_capacity[li]])
                     .collect();
 
                 // 汉字 → ci 映射（取首个匹配；同字多条仅首条有效）
@@ -448,141 +448,147 @@ impl OptContext {
                         continue;
                     }
 
-                    // 结尾下划线判定与核心码串提取（仅剥离单个尾随 `_`）
-                    let has_underscore = raw_code.ends_with('_');
-                    let core: &str = if has_underscore {
-                        &raw_code[..raw_code.len() - '_'.len_utf8()]
-                    } else {
-                        &raw_code[..]
-                    };
-
-                    // 核心码串 → 键位序列（与 output 的 key_to_char 反向、与 calc_simple_code 一致）
-                    let mut keys: Vec<u8> = Vec::with_capacity(core.chars().count());
+                    // 解析完整字面码（含末位上屏键）为键位序列（与 calc_simple_code / key_to_char 一致）。
+                    let mut all_keys: Vec<u8> = Vec::with_capacity(raw_code.chars().count());
                     let mut bad_key = false;
-                    for c in core.chars() {
+                    for c in raw_code.chars() {
                         match char_to_key_index(c) {
-                            Some(k) if k < EQUIV_TABLE_SIZE => keys.push(k as u8),
+                            Some(k) if k < EQUIV_TABLE_SIZE => all_keys.push(k as u8),
                             _ => {
                                 bad_key = true;
                                 break;
                             }
                         }
                     }
-                    if bad_key || keys.is_empty() {
+                    if bad_key || all_keys.is_empty() {
                         eprintln!(
                             "⚠️ 警告：固定简码 \"{}\" = \"{}\" 含非法/空简码键位，已拒绝",
                             ch, raw_code
                         );
                         continue;
                     }
-                    let core_len = keys.len();
+                    let t = all_keys.len();
 
-                    // 级别归属（需求 21.5）：核心码长等于该级简码键位数（max_len）的级别。
+                    // 级别归属（需求 21.5）：两种解释，取级别号最小者；都不命中则无归属（不丢弃）。
+                    // - 纯核心：该级 commit_keys 空 且 T == 该级核心键位数。
+                    // - 核心+上屏：该级 commit_keys 非空 且 T-1 == 核心键位数 且 末键 ∈ commit_keys。
                     let mut li_opt: Option<usize> = None;
+                    let mut commit_key: Option<u8> = None;
+                    let mut core_len = t;
                     for li in 0..n_levels {
-                        if max_len[li] == core_len {
-                            // 优先选 space_commit 与结尾下划线一致的级别（应对同长多级别）
-                            if simple_config.levels[li].space_commit == has_underscore {
+                        let lvl = &simple_config.levels[li];
+                        if lvl.commit_keys.is_empty() {
+                            if t == max_len[li] {
                                 li_opt = Some(li);
+                                commit_key = None;
+                                core_len = t;
                                 break;
-                            } else if li_opt.is_none() {
+                            }
+                        } else {
+                            let last = all_keys[t - 1];
+                            if t - 1 == max_len[li] && lvl.commit_keys.contains(&last) {
                                 li_opt = Some(li);
+                                commit_key = Some(last);
+                                core_len = t - 1;
+                                break;
                             }
                         }
                     }
-                    let li = match li_opt {
-                        Some(li) => li,
-                        None => {
-                            eprintln!(
-                                "⚠️ 警告：固定简码 \"{}\" = \"{}\" 的码长 {} 无匹配简码级别，已拒绝",
-                                ch, raw_code, core_len
-                            );
-                            continue;
-                        }
-                    };
-
-                    // 一致性校验（需求 21.6 / 确认点 4）：以固定简码自身的结尾下划线为准
-                    // （固定简码即最终输出状态，不依据级别 space_commit 重建下划线）。
-                    // - space_commit=false 但固定简码以 `_` 结尾 → 配置错误，解析期报错（panic）。
-                    // - space_commit=true 但固定简码无 `_` 结尾 → 仅警告，按固定简码原样接受。
-                    let level_space_commit = simple_config.levels[li].space_commit;
-                    if has_underscore && !level_space_commit {
-                        panic!(
-                            "固定简码 \"{}\" = \"{}\" 以下划线结尾（需空格上屏），但级别 {} 的 space_commit=false：配置错误",
-                            ch, raw_code, simple_config.levels[li].level
-                        );
-                    }
-                    if !has_underscore && level_space_commit {
+                    if li_opt.is_none() {
+                        // 无归属（需求 21.6）：仅告警，不丢弃；整串视为核心、无上屏键。
                         eprintln!(
-                            "⚠️ 警告：级别 {} 的 space_commit=true，但固定简码 \"{}\" = \"{}\" 无结尾下划线；按固定简码原样处理（不额外添加下划线）",
-                            simple_config.levels[li].level, ch, raw_code
+                            "⚠️ 警告：固定简码 \"{}\" = \"{}\"（长度 {}）无法归属任何简码级别；仍输出并从候选集排除、计入常量贡献，但不占用任何级别名额",
+                            ch, raw_code, t
                         );
+                        commit_key = None;
+                        core_len = t;
                     }
-                    // 此后一律以固定简码自身的下划线 `space` 为准（确认点 4）。
-                    let space = has_underscore;
 
-                    // 长度约束（需求 22.3）：有效长度（含空格上屏）须严格小于该字全码长度。
+                    // 核心键位（用于桶编码/当量/分布）。
+                    let core_keys: Vec<u8> = all_keys[..core_len].to_vec();
+
+                    // 长度约束（需求 22.3）：核心码长须严格小于该字全码长度，否则拒绝该条。
                     let full_len = char_infos[ci].parts.len();
-                    let effective_len = core_len + if space { 1 } else { 0 };
-                    if effective_len >= full_len {
+                    if core_len == 0 || core_len >= full_len {
                         eprintln!(
-                            "⚠️ 警告：固定简码 \"{}\" = \"{}\" 的有效长度 {} 不小于全码长度 {}，已拒绝",
-                            ch, raw_code, effective_len, full_len
+                            "⚠️ 警告：固定简码 \"{}\" = \"{}\" 的核心码长 {} 不小于全码长度 {}（或为空），已拒绝",
+                            ch, raw_code, core_len, full_len
                         );
                         continue;
                     }
 
-                    // 桶编码（与 calc_simple_code 一致：code = code*code_base + (k+1)）
-                    let mut bucket_code = 0usize;
-                    for &k in &keys {
-                        bucket_code = bucket_code * code_base + (k as usize + 1);
+                    // 归属日志（需求 21.11）。
+                    match li_opt {
+                        Some(li) => println!(
+                            "  固定简码 \"{}\" = \"{}\" → 归属级别 {}{}",
+                            ch,
+                            raw_code,
+                            simple_config.levels[li].level,
+                            match commit_key {
+                                Some(ck) => format!("（上屏键 '{}'）", key_to_char(ck)),
+                                None => String::new(),
+                            }
+                        ),
+                        None => {}
                     }
-                    debug_assert!(bucket_code < simple_level_capacity[li]);
 
-                    // 占用登记（需求 21.7 / 确认点 2）：固定简码一律登记，不因占用达到/超过 code_num
-                    // 而拒绝。退火端按 max(0, code_num - 占用) 出简（saturating_sub）：占满（含 code_num=0
-                    // 级别）则该桶退火出 0。固定简码即权威预分配，多条碰撞同桶时全部生效（由用户配置负责）。
+                    // 占用登记（需求 21.7/36.4）：仅在归属级别时登记。
                     simple_fixed_assigned[ci] = true;
-                    simple_fixed_occupancy[li][bucket_code] += 1;
+                    if let Some(li) = li_opt {
+                        let mut bucket_code = 0usize;
+                        for &k in &core_keys {
+                            bucket_code = bucket_code * code_base + (k as usize + 1);
+                        }
+                        debug_assert!(bucket_code < simple_level_capacity[li]);
+                        if simple_config.levels[li].has_commit() {
+                            // 核心+上屏：置位「该上屏键」（bitmask 占用，需求 36.4）。
+                            if let Some(ck) = commit_key {
+                                simple_fixed_occupancy[li][bucket_code] |= 1u32 << ck;
+                            }
+                        } else {
+                            // 纯核心（无上屏键）：计数占用（重码语义，与旧实现一致）。
+                            simple_fixed_occupancy[li][bucket_code] += 1;
+                        }
+                    }
 
+                    // 常量贡献（需求 21.8/21.9）：核心键位转移当量 + 可选末位上屏键转移；divisor 取核心码长。
                     let freq = char_infos[ci].frequency;
                     let freq_f = freq as f64;
                     fixed_covered_freq += freq;
                     fixed_equiv_freq_sum += freq;
 
-                    // 当量：字面键位转移当量；divisor 取核心码长（与 calc_simple_equiv 口径一致）。
                     let mut total_equiv = 0.0f64;
-                    let mut prev = keys[0] as usize;
+                    let mut prev = core_keys[0] as usize;
                     for i in 1..core_len {
-                        let cur = keys[i] as usize;
+                        let cur = core_keys[i] as usize;
                         total_equiv += equiv_table[prev][cur];
                         prev = cur;
                     }
-                    if space {
-                        total_equiv += equiv_table[prev][KEY_SPACE];
+                    if let Some(ck) = commit_key {
+                        total_equiv += equiv_table[prev][ck as usize];
                     }
                     let eq = total_equiv / core_len as f64;
                     fixed_equiv_weighted += eq * freq_f;
 
-                    // 分布偏差：每个核心键位计 freq_f；空格上屏时尾随 KEY_SPACE 亦计一次。
-                    for &k in &keys {
+                    // 分布：核心键位各 +freq；上屏键（若有）+freq。
+                    let mut effective_len = core_len;
+                    for &k in &core_keys {
                         fixed_key_usage[k as usize] += freq_f;
                     }
-                    if space {
-                        fixed_key_usage[KEY_SPACE] += freq_f;
+                    if let Some(ck) = commit_key {
+                        fixed_key_usage[ck as usize] += freq_f;
+                        effective_len += 1;
                     }
                     fixed_key_presses += freq_f * effective_len as f64;
 
-                    // 输出字符串（以固定简码自身的下划线为准；不依据级别 space_commit 额外添加）。
-                    let mut code_str: String = keys.iter().map(|&k| key_to_char(k)).collect();
-                    if space {
-                        code_str.push('_');
-                    }
+                    // 输出串：保留用户字面（含末位上屏键字符）。
+                    let code_str = raw_code.clone();
+
                     simple_fixed_codes_vec.push(FixedSimpleCode {
                         ci,
-                        li,
-                        keys,
-                        space_commit: space,
+                        li: li_opt,
+                        keys: core_keys,
+                        commit_key,
                         code_str,
                     });
                 }
@@ -764,9 +770,18 @@ impl OptContext {
         true
     }
 
-    /// 计算简码等价值
+    /// 计算简码等价值（需求 20.7）。
+    ///
+    /// `commit_key`：该字实际分得的上屏键（`Some(k)` 计入末位核心键→k 的转移当量；`None` 不计）。
+    /// divisor 取核心指令步数 n（保持「每键平均」语义），与全量/增量路径一致。
     #[inline]
-    pub fn calc_simple_equiv(&self, ci: usize, level_idx: usize, assignment: &[u8]) -> f64 {
+    pub fn calc_simple_equiv(
+        &self,
+        ci: usize,
+        level_idx: usize,
+        assignment: &[u8],
+        commit_key: Option<u8>,
+    ) -> f64 {
         let si = &self.char_simple_infos[ci];
         let instr = match si.level_instructions.get(level_idx) {
             Some(Some(ref v)) => v,
@@ -795,17 +810,10 @@ impl OptContext {
             total += self.equiv_table[prev_key][cur_key];
             prev_key = cur_key;
         }
-        // 空格上屏（需求 20.7/20.8）：仅当该级 space_commit 为真时，才计入末位键到空格的
-        // 转移当量。divisor 仍取指令步数 n（此处 n >= 1，无除零风险），保持「每键平均」语义
-        // 一致；space_commit 为假时不含尾随空格项。该值仅依赖 (ci, li, assignment, space_commit)
-        // 为确定性纯函数，故全量与增量路径天然一致。
-        if self
-            .simple_config
-            .levels
-            .get(level_idx)
-            .map_or(false, |lvl| lvl.space_commit)
-        {
-            total += self.equiv_table[prev_key][KEY_SPACE];
+        // 上屏键（需求 20.7）：该字实际分得上屏键 `commit_key` 时，计入末位核心键到该键的转移当量。
+        // divisor 仍取核心步数 n（此处 n >= 1，无除零风险）。`None`（无上屏键）时不含该项。
+        if let Some(ck) = commit_key {
+            total += self.equiv_table[prev_key][ck as usize];
         }
         total / n as f64
     }
@@ -822,16 +830,85 @@ impl OptContext {
             .unwrap_or(false)
     }
 
-    /// 固定简码桶占用数（需求 21.7）：返回级别 `li` 桶编码 `code` 被固定简码占用的名额。
-    /// 占用表可能为空（无固定简码时），此时回退为 0。供出简选择把每桶可选名额降为
-    /// `code_num - 占用数`。
+    /// 固定简码桶占用 bitmask（需求 36.4）：返回级别 `li` 桶编码 `code` 被固定简码占用的
+    /// 上屏键位掩码（位 = 键索引）。空表/越界回退 0（无占用）。
     #[inline]
-    pub fn simple_fixed_occ(&self, level_idx: usize, code: usize) -> usize {
+    pub fn simple_fixed_occ_mask(&self, level_idx: usize, code: usize) -> u32 {
         self.simple_fixed_occupancy
             .get(level_idx)
             .and_then(|row| row.get(code))
             .copied()
             .unwrap_or(0)
+    }
+
+    /// 固定简码桶占用数（需求 21.7）：返回级别 `li` 桶编码 `code` 被固定简码占用的名额数。
+    /// - 该级有上屏键：占用存为「上屏键 bitmask」，名额数 = 置位数（popcount）。
+    /// - 该级无上屏键：占用存为「重码计数」（u32 原值），名额数 = 该计数。
+    #[inline]
+    pub fn simple_fixed_occ(&self, level_idx: usize, code: usize) -> usize {
+        let raw = self.simple_fixed_occ_mask(level_idx, code);
+        if self
+            .simple_config
+            .levels
+            .get(level_idx)
+            .map_or(false, |l| l.has_commit())
+        {
+            raw.count_ones() as usize
+        } else {
+            raw as usize
+        }
+    }
+
+    /// 还原核心简码桶 `code` 的核心末键（需求 36.3）：编码为 `code = Σ (k+1)·base^…`，
+    /// 故末位 = `code % code_base - 1`。`code` 为 0（空桶/无效）时返回 0。
+    #[inline]
+    pub fn bucket_last_core_key(&self, code: usize) -> u8 {
+        if code == 0 {
+            0
+        } else {
+            ((code % self.code_base).wrapping_sub(1)) as u8
+        }
+    }
+
+    /// 为某核心简码桶按名次取退火出简字的上屏键（需求 36.3/36.4）。
+    ///
+    /// - `li`/`code`：级别与核心桶编码（据 `code` 还原核心末键、选左/右手偏好表）。
+    /// - `rank`：该字在桶内（已排序，0 起）的名次。
+    /// - 据该级偏好表去除「本桶固定简码已占用的上屏键」后得可用序列，取第 `rank mod K'` 个。
+    /// - 该级无上屏键（K=0）或可用序列为空时返回 `None`（不追加上屏键）。
+    /// 纯函数、零堆分配（在常量小集上遍历）。
+    #[inline]
+    pub fn commit_key_for_rank(&self, li: usize, code: usize, rank: usize) -> Option<u8> {
+        let lvl = self.simple_config.levels.get(li)?;
+        if !lvl.has_commit() {
+            return None;
+        }
+        let last = self.bucket_last_core_key(code);
+        let pref: &[u8] = match crate::types::key_hand(last) {
+            crate::types::Hand::Left => &lvl.commit_pref_last_left,
+            _ => &lvl.commit_pref_last_right,
+        };
+        let taken = self.simple_fixed_occ_mask(li, code);
+        // 可用上屏键数（偏好表中未被固定占用者）
+        let avail = pref
+            .iter()
+            .filter(|&&k| (k as usize) >= 31 || taken & (1u32 << k) == 0)
+            .count();
+        if avail == 0 {
+            return None;
+        }
+        let target = rank % avail;
+        let mut seen = 0usize;
+        for &k in pref {
+            let occupied = (k as usize) < 31 && (taken & (1u32 << k) != 0);
+            if !occupied {
+                if seen == target {
+                    return Some(k);
+                }
+                seen += 1;
+            }
+        }
+        None
     }
 
     /// 计算简码编码，并施加出简长度资格过滤（需求 22）：不合格时返回 `None`。
@@ -1125,7 +1202,7 @@ mod affected_intersection_tests {
                 root_selector: 'A',
                 code_selector: 'a',
             }]],
-            space_commit: false,
+            commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
         };
         OptContext::new(
             &splits,
@@ -1264,19 +1341,19 @@ mod base_saving_tests {
                 level: 1,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A')]],
-                space_commit: false,
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
             },
             SimpleCodeLevel {
                 level: 2,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A'), step('B')]],
-                space_commit: false,
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
             },
             SimpleCodeLevel {
                 level: 3,
                 code_num: 1,
                 rule_candidates: vec![vec![step('A'), step('B'), step('C')]],
-                space_commit: false,
+                commit_keys: Vec::new(), commit_pref_last_left: Vec::new(), commit_pref_last_right: Vec::new(),
             },
         ];
 

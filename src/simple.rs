@@ -98,7 +98,9 @@ pub fn parse_simple_code_config(path: &str) -> SimpleCodeConfig {
             level,
             code_num,
             rule_candidates,
-            space_commit: false,
+            commit_keys: Vec::new(),
+            commit_pref_last_left: Vec::new(),
+            commit_pref_last_right: Vec::new(),
         });
     }
 

@@ -6,7 +6,10 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
 
-use crate::types::{SimpleAssignMode, SimpleCodeConfig, SimpleCodeLevel, SimpleCodeStep, WeightConfig};
+use crate::types::{
+    build_commit_pref_tables, char_to_key_index, SimpleAssignMode, SimpleCodeConfig,
+    SimpleCodeLevel, SimpleCodeStep, WeightConfig, KEY_SPACE,
+};
 
 // =========================================================================
 // 📋 配置结构体定义
@@ -239,9 +242,14 @@ pub struct SimpleLevelConfig {
     pub level: usize,
     pub code_num: usize,
     pub rules: Vec<String>,
-    /// 是否需要空格上屏（需求 20）；缺省为 false
+    /// 上屏键序列（需求 20）：字符串，按优先级列出上屏键（字母为主键盘键、`_` 为空格）。
+    /// 缺省为空串（自动上屏）。`_` 只允许在首或尾。
     #[serde(default)]
-    pub space_commit: bool,
+    pub commit_keys: Option<String>,
+    /// 【已废弃】是否空格上屏（需求 20.10 兼容）：仅当未配置 `commit_keys` 时生效，
+    /// `Some(true)` 映射为 `commit_keys="_"`、`Some(false)` 映射为 `commit_keys=""`，并打废弃告警。
+    #[serde(default)]
+    pub space_commit: Option<bool>,
 }
 
 /// 目标配置容器（对应 [targets] 段）
@@ -303,52 +311,59 @@ impl Config {
     /// 获取简码配置（转换为内部格式）。
     ///
     /// 级别保留规则（需求 21 / 确认点 1）：`code_num > 0` 的级别一律保留；`code_num == 0` 的级别
-    /// 仅在「存在按核心码长归属到该级的固定简码」时才保留——使该级的固定简码仍生效（输出并排除
+    /// 仅在「存在按规则归属到该级的固定简码」时才保留——使该级的固定简码仍生效（输出并排除
     /// 退火分配），同时不给「无固定简码的 code_num=0 级别」（如默认配置）凭空增加桶分配开销。
+    ///
+    /// 上屏键（需求 20/36）：每级解析 `commit_keys`（含废弃 `space_commit` 兼容），校验 `_` 仅在首/尾，
+    /// 预计算两张左右手偏好表。
     pub fn get_simple_code_config(&self) -> SimpleCodeConfig {
-        // 固定简码的核心码长集合（去结尾 `_`），用于判断 code_num=0 级别是否需保留。
-        let fixed_core_lens: std::collections::HashSet<usize> = self
-            .get_fixed_simple_codes()
-            .iter()
-            .map(|(_, code)| code.trim_end_matches('_').chars().count())
-            .filter(|&l| l > 0)
-            .collect();
-
-        let levels: Vec<SimpleCodeLevel> = self
+        // 先构建所有候选级别（含解析后的 commit_keys 与预计算偏好表）。
+        let mut built: Vec<SimpleCodeLevel> = self
             .simple_levels
             .iter()
-            .map(|l| {
+            .filter_map(|l| {
                 let rule_candidates: Vec<Vec<SimpleCodeStep>> = l
                     .rules
                     .iter()
                     .filter_map(|rule| parse_rule_string(rule))
                     .collect();
-
-                SimpleCodeLevel {
+                if rule_candidates.is_empty() {
+                    return None;
+                }
+                let commit_keys = resolve_commit_keys(l);
+                let (commit_pref_last_left, commit_pref_last_right) =
+                    build_commit_pref_tables(&commit_keys);
+                // 容量扩展提示（需求 20.5 case A）：commit_keys 非空且 code_num ≤ K 时，
+                // 该级桶名额将扩大到 K（每个上屏键一个独立码槽）。
+                let k = commit_keys.len();
+                if !commit_keys.is_empty() && l.code_num <= k && l.code_num != k {
+                    println!(
+                        "ℹ️ 级别 {} 配置 code_num={} ≤ 上屏键数 K={}，桶名额自动扩大到 {}（每个上屏键一个独立码）",
+                        l.level, l.code_num, k, k
+                    );
+                }
+                Some(SimpleCodeLevel {
                     level: l.level,
                     code_num: l.code_num,
                     rule_candidates,
-                    space_commit: l.space_commit,
-                }
-            })
-            .filter(|l| !l.rule_candidates.is_empty())
-            .filter(|l| {
-                if l.code_num > 0 {
-                    return true;
-                }
-                // code_num == 0：仅当有固定简码按码长归属到该级时保留（该级简码键位数 =
-                // 各候选规则步数的最大值，与 context 的 max_len 口径一致）。
-                let level_len = l
-                    .rule_candidates
-                    .iter()
-                    .map(|r| r.len())
-                    .max()
-                    .unwrap_or(0);
-                fixed_core_lens.contains(&level_len)
+                    commit_keys,
+                    commit_pref_last_left,
+                    commit_pref_last_right,
+                })
             })
             .collect();
 
-        SimpleCodeConfig { levels }
+        // code_num==0 级别保留判定（需求 21.13）：仅当确有固定简码按规则归属到该级时保留。
+        let fixed = self.get_fixed_simple_codes();
+        built.retain(|l| {
+            if l.code_num > 0 {
+                return true;
+            }
+            let core_len = l.rule_candidates.iter().map(|r| r.len()).max().unwrap_or(0);
+            fixed.iter().any(|(_, code)| fixed_belongs_to_level(code, core_len, &l.commit_keys))
+        });
+
+        SimpleCodeConfig { levels: built }
     }
 
     /// 解析固定简码映射为 `Vec<(char, String)>`（需求 21.1）。
@@ -559,6 +574,90 @@ fn parse_rule_string(rule: &str) -> Option<Vec<SimpleCodeStep>> {
     Some(steps)
 }
 
+/// 解析某级的上屏键序列（需求 20/36），含废弃 `space_commit` 兼容（需求 20.10）。
+///
+/// 返回上屏键键位索引序列（字母→索引、`_`→`KEY_SPACE`）。校验：
+/// - 非法字符（无法映射键位）→ 报错（panic）。
+/// - `_` 只允许出现在首或尾，否则报错（panic，需求 20.3）。
+fn resolve_commit_keys(l: &SimpleLevelConfig) -> Vec<u8> {
+    let raw: String = match (&l.commit_keys, l.space_commit) {
+        (Some(ck), sc) => {
+            if sc.is_some() {
+                eprintln!(
+                    "⚠️ 级别 {} 同时配置了 commit_keys 与已废弃的 space_commit；以 commit_keys 为准，忽略 space_commit",
+                    l.level
+                );
+            }
+            ck.clone()
+        }
+        (None, Some(true)) => {
+            eprintln!(
+                "⚠️ 级别 {} 使用了已废弃配置 space_commit=true，请改用 commit_keys=\"_\"；本次按 \"_\" 处理",
+                l.level
+            );
+            "_".to_string()
+        }
+        (None, Some(false)) => {
+            eprintln!(
+                "⚠️ 级别 {} 使用了已废弃配置 space_commit=false，请改用 commit_keys=\"\"；本次按 \"\" 处理",
+                l.level
+            );
+            String::new()
+        }
+        (None, None) => String::new(),
+    };
+
+    let chars: Vec<char> = raw.chars().collect();
+    let mut keys: Vec<u8> = Vec::with_capacity(chars.len());
+    for (i, &c) in chars.iter().enumerate() {
+        match char_to_key_index(c) {
+            Some(k) => {
+                if k == KEY_SPACE && i != 0 && i != chars.len() - 1 {
+                    panic!(
+                        "级别 {} 的 commit_keys=\"{}\" 中下划线 `_` 只能出现在开头或末尾",
+                        l.level, raw
+                    );
+                }
+                keys.push(k as u8);
+            }
+            None => panic!(
+                "级别 {} 的 commit_keys=\"{}\" 含非法上屏键字符 '{}'",
+                l.level, raw, c
+            ),
+        }
+    }
+    // 去重保护：同一上屏键重复出现无意义，保留首次出现顺序。
+    let mut seen = [false; 31];
+    keys.retain(|&k| {
+        let idx = k as usize;
+        if idx < 31 && seen[idx] {
+            false
+        } else {
+            if idx < 31 {
+                seen[idx] = true;
+            }
+            true
+        }
+    });
+    keys
+}
+
+/// 判断一条固定简码（字面串 `code`）是否归属于「核心码长 `core_len`、上屏键集 `commit_keys`」的级别
+/// （需求 21.5）。两种解释任一成立即归属：
+/// - 纯核心：`commit_keys` 空 且 总长 == `core_len`。
+/// - 核心+上屏：`commit_keys` 非空 且 总长 == `core_len + 1` 且 末键 ∈ `commit_keys`。
+fn fixed_belongs_to_level(code: &str, core_len: usize, commit_keys: &[u8]) -> bool {
+    let chars: Vec<char> = code.chars().collect();
+    let t = chars.len();
+    if commit_keys.is_empty() {
+        t == core_len
+    } else {
+        t >= 1
+            && t - 1 == core_len
+            && char_to_key_index(chars[t - 1]).map_or(false, |k| commit_keys.contains(&(k as u8)))
+    }
+}
+
 // =========================================================================
 // 🔧 默认配置（后备）
 // =========================================================================
@@ -629,19 +728,22 @@ impl Default for Config {
                     level: 1,
                     code_num: 0,
                     rules: vec!["Aa".to_string()],
-                    space_commit: false,
+                    commit_keys: None,
+                    space_commit: None,
                 },
                 SimpleLevelConfig {
                     level: 2,
                     code_num: 1,
                     rules: vec!["AaBa".to_string()],
-                    space_commit: false,
+                    commit_keys: None,
+                    space_commit: None,
                 },
                 SimpleLevelConfig {
                     level: 3,
                     code_num: 1,
                     rules: vec!["AaBaCa".to_string()],
-                    space_commit: false,
+                    commit_keys: None,
+                    space_commit: None,
                 },
             ],
             scale: None,
@@ -654,6 +756,67 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // 上屏键 commit_keys 解析 / 废弃兼容 / 归级 测试（需求 20/21/36）
+    // -----------------------------------------------------------------------
+
+    fn lvl(commit_keys: Option<&str>, space_commit: Option<bool>) -> SimpleLevelConfig {
+        SimpleLevelConfig {
+            level: 1,
+            code_num: 1,
+            rules: vec!["Aa".to_string()],
+            commit_keys: commit_keys.map(|s| s.to_string()),
+            space_commit,
+        }
+    }
+
+    #[test]
+    fn commit_keys_parse_basic() {
+        let k = |c: char| char_to_key_index(c).unwrap() as u8;
+        assert_eq!(resolve_commit_keys(&lvl(Some("dk_"), None)), vec![k('d'), k('k'), KEY_SPACE as u8]);
+        assert_eq!(resolve_commit_keys(&lvl(Some(""), None)), Vec::<u8>::new());
+        assert_eq!(resolve_commit_keys(&lvl(Some("_"), None)), vec![KEY_SPACE as u8]);
+    }
+
+    #[test]
+    fn commit_keys_dedup() {
+        let k = |c: char| char_to_key_index(c).unwrap() as u8;
+        // 重复键去重，保留首次顺序。
+        assert_eq!(resolve_commit_keys(&lvl(Some("ddk"), None)), vec![k('d'), k('k')]);
+    }
+
+    #[test]
+    fn commit_keys_deprecated_space_commit_shim() {
+        // 仅 space_commit、无 commit_keys：true→"_"、false→""。
+        assert_eq!(resolve_commit_keys(&lvl(None, Some(true))), vec![KEY_SPACE as u8]);
+        assert_eq!(resolve_commit_keys(&lvl(None, Some(false))), Vec::<u8>::new());
+        // 缺省两者：空。
+        assert_eq!(resolve_commit_keys(&lvl(None, None)), Vec::<u8>::new());
+        // 两者并存：以 commit_keys 为准（忽略 space_commit）。
+        assert_eq!(resolve_commit_keys(&lvl(Some(""), Some(true))), Vec::<u8>::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "只能出现在开头或末尾")]
+    fn commit_keys_underscore_in_middle_panics() {
+        let _ = resolve_commit_keys(&lvl(Some("d_k"), None));
+    }
+
+    #[test]
+    fn fixed_belongs_to_level_interpretations() {
+        let k = |c: char| char_to_key_index(c).unwrap() as u8;
+        // 纯核心：commit 空、长度==核心长。
+        assert!(fixed_belongs_to_level("ab", 2, &[]));
+        assert!(!fixed_belongs_to_level("ab", 1, &[]));
+        // 核心+上屏：commit 非空、T-1==核心长、末键∈commit。
+        let ck = vec![k('d'), KEY_SPACE as u8];
+        assert!(fixed_belongs_to_level("abd", 2, &ck)); // 核心 ab(2) + d
+        assert!(fixed_belongs_to_level("ab_", 2, &ck)); // 核心 ab(2) + 空格
+        assert!(!fixed_belongs_to_level("abk", 2, &ck)); // 末键 k 不在 commit
+        // 一码固定简码在带 commit 的一键级别（核心长 1）无法核心+上屏（需核心长 0），也非纯核心。
+        assert!(!fixed_belongs_to_level("a", 1, &ck));
+    }
 
     // -----------------------------------------------------------------------
     // ScaleConfigToml 解析测试

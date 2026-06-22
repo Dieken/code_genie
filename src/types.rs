@@ -269,9 +269,61 @@ pub struct SimpleCodeLevel {
     pub code_num: usize,
     /// 候选规则列表
     pub rule_candidates: Vec<Vec<SimpleCodeStep>>,
-    /// 是否需要空格上屏（需求 20）：为真时该级简码尾随一个空格键 `KEY_SPACE`，
-    /// 使有效击键序列末尾计入空格（影响效率排序键长度、加权当量、分布偏差与输出表示）。
-    pub space_commit: bool,
+    /// 上屏键序列（需求 20，取代旧 `space_commit` 布尔）：解析后的上屏键键位索引，
+    /// 按优先级排序（字母→键索引、`_`→`KEY_SPACE`）。为空表示自动上屏（无额外上屏键）。
+    pub commit_keys: Vec<u8>,
+    /// 偏好表（需求 36）：核心末键属**左手**时，桶内名次 i 的出简字所用上屏键序列。
+    /// 退火前预计算，长度 = `commit_keys` 去重后的不同键数 K。`commit_keys` 为空则为空表。
+    pub commit_pref_last_left: Vec<u8>,
+    /// 偏好表（需求 36）：核心末键属**右手**时的上屏键序列。
+    pub commit_pref_last_right: Vec<u8>,
+}
+
+impl SimpleCodeLevel {
+    /// 该级是否配置了上屏键（非空即追加一个上屏键、有效码长 +1）。
+    #[inline]
+    pub fn has_commit(&self) -> bool {
+        !self.commit_keys.is_empty()
+    }
+
+    /// K = 不同上屏键数（即偏好表长度）。
+    #[inline]
+    pub fn commit_k(&self) -> usize {
+        self.commit_keys.len()
+    }
+
+    /// 测试/兼容辅助：由上屏键序列构造级别并预计算偏好表。
+    pub fn with_commit_keys(
+        level: usize,
+        code_num: usize,
+        rule_candidates: Vec<Vec<SimpleCodeStep>>,
+        commit_keys: Vec<u8>,
+    ) -> Self {
+        let (commit_pref_last_left, commit_pref_last_right) = build_commit_pref_tables(&commit_keys);
+        SimpleCodeLevel {
+            level,
+            code_num,
+            rule_candidates,
+            commit_keys,
+            commit_pref_last_left,
+            commit_pref_last_right,
+        }
+    }
+
+    /// 测试/兼容辅助：由旧 `space_commit` 布尔构造级别（true→`["_"]`、false→空）。
+    pub fn with_space_commit(
+        level: usize,
+        code_num: usize,
+        rule_candidates: Vec<Vec<SimpleCodeStep>>,
+        space_commit: bool,
+    ) -> Self {
+        let commit_keys = if space_commit {
+            vec![KEY_SPACE as u8]
+        } else {
+            Vec::new()
+        };
+        Self::with_commit_keys(level, code_num, rule_candidates, commit_keys)
+    }
 }
 
 /// 简码配置
@@ -281,22 +333,93 @@ pub struct SimpleCodeConfig {
     pub levels: Vec<SimpleCodeLevel>,
 }
 
-/// 固定简码（需求 21）：一条经校验、级别归属确定的「汉字 → 字面简码」映射。
+/// 固定简码（需求 21）：一条经校验的「汉字 → 字面简码」映射。
 ///
 /// 固定简码的汉字不参与退火的简码分配，其对简码各项指标的贡献为不随分配变化的常量
-/// （因简码为字面键位串）。`code_str` 保留结尾下划线（如需空格上屏），供输出直接使用。
+/// （因简码为字面键位串）。`code_str` 为完整输出串（含末位上屏键字符），供输出直接使用。
 #[derive(Clone, Debug)]
 pub struct FixedSimpleCode {
     /// 汉字索引（char_infos / raw_splits 下标）
     pub ci: usize,
-    /// 所属简码级别索引
-    pub li: usize,
-    /// 核心简码键位（不含空格上屏的尾随空格）
+    /// 所属简码级别索引；`None` 表示无法归属任何级别（仍输出、仍排除候选，但不占 commit slot）。
+    pub li: Option<usize>,
+    /// 核心简码键位（不含末位上屏键）
     pub keys: Vec<u8>,
-    /// 是否空格上屏（与所属级别 `space_commit` 一致）
-    pub space_commit: bool,
-    /// 输出用的简码字符串（含空格上屏时的尾随下划线 `_`）
+    /// 末位上屏键（`Some(k)`：字母键或 `KEY_SPACE`；`None`：无上屏键 / 自动上屏）。
+    pub commit_key: Option<u8>,
+    /// 输出用的简码字符串（含末位上屏键字符，空格为 `_`）
     pub code_str: String,
+}
+
+/// 键盘主区按键的左右手归属（需求 36）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hand {
+    Left,
+    Right,
+    /// 中性键（空格 `_`），不属任何手。
+    Neutral,
+}
+
+/// 按标准 QWERTY 物理布局返回键位的左右手归属（需求 36）。
+///
+/// 键位索引为字母表序（a=0..z=25），故需按字母的 QWERTY 物理位置判定：
+/// - 左手：`q w e r t / a s d f g / z x c v b`
+/// - 右手：`y u i o p / h j k l ; / n m , . /`
+/// - 中性：空格 `_`（`KEY_SPACE`）。
+#[inline]
+pub fn key_hand(key: u8) -> Hand {
+    match key {
+        26 => Hand::Neutral, // KEY_SPACE
+        27 | 28 | 29 | 30 => Hand::Right, // ; , . /
+        0..=25 => match (key + b'a') as char {
+            'q' | 'w' | 'e' | 'r' | 't' | 'a' | 's' | 'd' | 'f' | 'g' | 'z' | 'x' | 'c' | 'v'
+            | 'b' => Hand::Left,
+            _ => Hand::Right, // y u i o p h j k l n m
+        },
+        _ => Hand::Neutral,
+    }
+}
+
+/// 构建某级的两张上屏键偏好表（需求 36.2）。
+///
+/// 入参 `commit_keys` 为解析后的上屏键序列（含 `KEY_SPACE` 表示空格，且 `_` 已校验只在首/尾）。
+/// 返回 `(pref_last_left, pref_last_right)`：
+/// - `pref_last_left`：核心末键属左手时使用——对侧（右手）字母在前、同侧（左手）字母在后；
+/// - `pref_last_right`：核心末键属右手时使用——对侧（左手）字母在前、同侧（右手）字母在后；
+/// 字母组内保持原相对顺序；`_`（若有）按其在 `commit_keys` 的首/尾位置加到表首或表尾。
+/// 两表长度均为 K = `commit_keys.len()`。退火前一次性预计算，热路径零分配。
+pub fn build_commit_pref_tables(commit_keys: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let sp = KEY_SPACE as u8;
+    let has_us = commit_keys.iter().any(|&k| k == sp);
+    let us_at_start = has_us && commit_keys.first() == Some(&sp);
+    let mut left: Vec<u8> = Vec::new();
+    let mut right: Vec<u8> = Vec::new();
+    for &k in commit_keys {
+        if k == sp {
+            continue;
+        }
+        match key_hand(k) {
+            Hand::Left => left.push(k),
+            // 右手字母与 `; , . /` 等右区键；中性（理论上不会是字母上屏键）归右。
+            _ => right.push(k),
+        }
+    }
+    let assemble = |opp: &[u8], same: &[u8]| -> Vec<u8> {
+        let mut v = Vec::with_capacity(opp.len() + same.len() + 1);
+        if us_at_start {
+            v.push(sp);
+        }
+        v.extend_from_slice(opp);
+        v.extend_from_slice(same);
+        if has_us && !us_at_start {
+            v.push(sp);
+        }
+        v
+    };
+    // 核心末键左手 → 对侧=右手在前；核心末键右手 → 对侧=左手在前。
+    let pref_last_left = assemble(&right, &left);
+    let pref_last_right = assemble(&left, &right);
+    (pref_last_left, pref_last_right)
 }
 
 /// 逻辑根 - 同一基础字的不同拆分变体
@@ -539,4 +662,74 @@ pub fn compute_level_instructions(
             None
         })
         .collect()
+}
+
+// =========================================================================
+// 🧪 上屏键左右手偏好与手别划分测试（需求 36）
+// =========================================================================
+#[cfg(test)]
+mod commit_pref_tests {
+    use super::*;
+
+    fn k(c: char) -> u8 {
+        char_to_key_index(c).unwrap() as u8
+    }
+
+    #[test]
+    fn key_hand_qwerty_layout() {
+        for c in "qwertasdfgzxcvb".chars() {
+            assert_eq!(key_hand(k(c)), Hand::Left, "'{}' 应为左手", c);
+        }
+        for c in "yuiophjklnm".chars() {
+            assert_eq!(key_hand(k(c)), Hand::Right, "'{}' 应为右手", c);
+        }
+        // ; , . / 为右区
+        for c in ";,./".chars() {
+            assert_eq!(key_hand(k(c)), Hand::Right, "'{}' 应为右手", c);
+        }
+        // 空格为中性
+        assert_eq!(key_hand(KEY_SPACE as u8), Hand::Neutral);
+    }
+
+    #[test]
+    fn pref_tables_dk_underscore_tail() {
+        // "dk_"：d 左、k 右、_ 末。
+        let ck = vec![k('d'), k('k'), KEY_SPACE as u8];
+        let (last_left, last_right) = build_commit_pref_tables(&ck);
+        // 核心末键左手 → 对侧(右)在前：[k, d, _]
+        assert_eq!(last_left, vec![k('k'), k('d'), KEY_SPACE as u8]);
+        // 核心末键右手 → 对侧(左)在前：[d, k, _]
+        assert_eq!(last_right, vec![k('d'), k('k'), KEY_SPACE as u8]);
+    }
+
+    #[test]
+    fn pref_tables_underscore_head() {
+        // "_dk"：_ 首、d 左、k 右。
+        let ck = vec![KEY_SPACE as u8, k('d'), k('k')];
+        let (last_left, last_right) = build_commit_pref_tables(&ck);
+        assert_eq!(last_left, vec![KEY_SPACE as u8, k('k'), k('d')]);
+        assert_eq!(last_right, vec![KEY_SPACE as u8, k('d'), k('k')]);
+    }
+
+    #[test]
+    fn pref_tables_space_only_and_empty() {
+        // "_" → 两手均 [空格]，等价旧 space_commit=true。
+        let (l, r) = build_commit_pref_tables(&[KEY_SPACE as u8]);
+        assert_eq!(l, vec![KEY_SPACE as u8]);
+        assert_eq!(r, vec![KEY_SPACE as u8]);
+        // "" → 空表，等价旧 space_commit=false。
+        let (l0, r0) = build_commit_pref_tables(&[]);
+        assert!(l0.is_empty() && r0.is_empty());
+    }
+
+    #[test]
+    fn pref_tables_preserve_intra_hand_order() {
+        // "fjdk"：f 左、j 右、d 左、k 右 → 左=[f,d]、右=[j,k]（保序）。
+        let ck = vec![k('f'), k('j'), k('d'), k('k')];
+        let (last_left, last_right) = build_commit_pref_tables(&ck);
+        // 末键左手 → 右在前：[j,k,f,d]
+        assert_eq!(last_left, vec![k('j'), k('k'), k('f'), k('d')]);
+        // 末键右手 → 左在前：[f,d,j,k]
+        assert_eq!(last_right, vec![k('f'), k('d'), k('j'), k('k')]);
+    }
 }

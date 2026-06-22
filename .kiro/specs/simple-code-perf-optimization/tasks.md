@@ -457,6 +457,50 @@
     - 新增 `active_passive_tests`（active 不出简 passive、output 出简 passive）、context 的子集/钳制单测；prop1/prop13 保持全绿（测试默认 active=全集）
     - _Requirements: 34.6, 34.7, 35.3_
 
+- [x] 30. 上屏键序列（取代 space_commit 布尔，需求 20/36 + 需求 21/22/23/33 修订）
+  - [x] 30.1 配置与类型：commit_keys 解析、废弃兼容、`_` 位置校验、偏好表预计算
+    - `src/config.rs` `SimpleLevelConfig`：新增 `commit_keys: String`（serde default `""`），保留 `space_commit: Option<bool>` 作废弃兼容；`get_simple_code_config` 解析 commit_keys→`Vec<u8>`（字母→键索引、`_`→KEY_SPACE），仅 commit_keys 缺省时由 space_commit 映射（true→"_"、false→""）并打废弃告警，二者并存以 commit_keys 为准并告警
+    - 校验 `_` 只能在首/尾，否则报错；`src/types.rs` `SimpleCodeLevel` 持 `commit_keys: Vec<u8>` 与两张预计算偏好表 `commit_pref_last_left`/`commit_pref_last_right`
+    - 新增静态 `key_hand(key)->Hand`（QWERTY 物理布局；`_`/越界为中性）；偏好表构建：对侧手字母在前、同侧手在后（保序），`_` 按首/尾位置加入
+    - _Requirements: 20.1, 20.2, 20.3, 20.10, 36.1, 36.2, 36.5_
+
+  - [x] 30.2 长度/资格/base_saving 改用 commit_keys
+    - `src/context.rs`：`effective_simple_len = 核心码长 + (commit_keys 空 ? 0 : 1)`；`simple_base_saving` 据此；`simple_eligible` 仍只看核心码长
+    - _Requirements: 20.4, 20.5, 22.1, 22.4_
+
+  - [x] 30.3 当量/键位带上屏键参数
+    - `src/context.rs` `calc_simple_equiv(ci, li, asg, commit_key: Option<u8>)`：Some 时计末位核心键→commit_key 转移；`src/evaluator.rs` `fill_keys_with_commit(..., commit_key: Option<u8>)`：Some 时 push commit_key
+    - _Requirements: 20.6, 20.7_
+
+  - [x] 30.4 桶内按名次+手别+占用分配上屏键
+    - `reselect_bucket`：由桶编码 O(1) 还原核心末键 `code % code_base - 1` → 选偏好表；无固定占用直接用，有占用在栈上小数组过滤；名次 idx 的退火出简字用 `可用偏好表[idx % K']`；传 commit_key 给 select_char/refresh_char
+    - 桶容量：commit_keys 非空且 code_num ≤ K 时扩到 K（日志提示）；code_num > K 时容量 code_num、轮转
+    - _Requirements: 20.5, 36.3, 36.4, 36.6_
+
+  - [x] 30.5 固定简码归级（纯核心/核心+上屏）、无归级不丢弃、占用 bitmask
+    - `src/context.rs`：`FixedSimpleCode.li: Option<usize>`；归级两解释（纯核心 / 核心+上屏），多命中取最小级别并告警；无归级 → li=None、告警、不丢弃（仍 assigned、计常量贡献、输出）
+    - `simple_fixed_occupancy[li][code]` 改 `Vec<u32>` bitmask（占用上屏键位）；仅归到「核心+上屏」级别时置位；纯核心/无归级不占 commit slot
+    - 配置确认日志逐条打印固定简码归属级别（或无归属告警）
+    - _Requirements: 21.2, 21.5, 21.6, 21.7, 21.11, 21.13, 22.3_
+
+  - [x] 30.6 输出不遗漏固定简码（含无归级）
+    - `src/output.rs` `simple_code_str` 追加实际上屏键字符；两个输出函数 per-level 用 `fc.li == Some(li)`，循环后加无归属（`li==None`）固定简码收尾段；`save_simple_code_output` 与 `save_combined_output` 均不漏
+    - _Requirements: 20.8, 20.9, 21.10_
+
+  - [x] 30.7 占用保护备注（按 S 判定不变）
+    - `src/evaluator.rs` `is_code_blocked` 仍按核心桶编码 S 判定；加注释说明 commit_keys 非空时的已知近似与设计者责任
+    - _Requirements: 33.10_
+
+  - [x] 30.8 同步配置文件
+    - `config.toml.example` 与 `moling/config*.toml` 的 `[[simple_levels]]` 用 `commit_keys`（默认 `""`）替代 `space_commit` 并注释说明；保留 `space_commit` 废弃说明
+    - _Requirements: 20.1, 21.12_
+
+  - [x] 30.9 测试与回归
+    - 等价性单测：`commit_keys==""` 等价旧 space_commit=false、`commit_keys=="_"` 等价旧 space_commit=true（base_saving/equiv/dist/输出逐字段）
+    - 更新 Property 16/17（上屏键 base_saving/当量/分布/输出/左右手偏好）、Property 18/19（占用 bitmask、无归级处理）；新增偏好表构建单测、case B 轮转单测、固定简码归级（纯核心/核心+上屏/无归级）单测、`_` 中间位置报错单测
+    - prop1/prop2/prop13 在含 commit_keys 的上下文下保持全绿；`cargo build` + `cargo test` 全绿
+    - _Requirements: 20.4, 20.6, 22.4, 36.4_
+
 ## Task Dependency Graph
 
 ```json
