@@ -182,6 +182,9 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
   $roots{$F[0]} = lc($F[1]);
 
   END {
+      %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
+      %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
+
       if ($ENV{ENCODE_RULE} eq "xiaoming") {
           print "不\tk";
           print "在\tf";
@@ -189,12 +192,18 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
           print "我\ti";
           print "的\td";
           print "了\te";
+
+          $short_chars{"在"} = 1;
       } elsif ($ENV{ENCODE_RULE} eq "moqing") {
           print "不\ta";
           print "是\ti";
           print "我\to";
           print "的\te";
           print "一\tfi";
+
+          delete $short_chars{"了"};
+          $short_chars{"一"} = 1;
+          $short_codes{"fi"} = 1;
       } else {
           print "不\tu";
           print "是\ti";
@@ -280,13 +289,6 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
           $chars{$a[0]}{y} = substr($roots{$b[-1]}, 1, 1) if $ENV{ENCODE_RULE} eq "xiaoming";
       }
 
-      %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
-      $short_chars{"在"} = 1 if $ENV{ENCODE_RULE} eq "xiaoming";
-      $short_chars{"一"} = 1 if $ENV{ENCODE_RULE} eq "moqing";
-      delete $short_chars{"了"} if $ENV{ENCODE_RULE} eq "moqing";
-
-      %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
-
       for $i (2 .. 3) {
           while (($k, $v) = each %chars) {
               $v->{score} = ($v->{len} - $i) * $v->{freq};
@@ -326,7 +328,6 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
                             $s = substr($v->{code}, 0, $i - 1) . "i" if exists $short_codes{$s};
                             $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
                         }
-                        next if exists $short_codes{$s};
                     } else {
                         $s = substr($v->{code}, 0, $i - 1) . "i";
                         $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
@@ -334,7 +335,6 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
                             $s = substr($v->{code}, 0, $i - 1) . "e" if exists $short_codes{$s};
                             $s = substr($v->{code}, 0, $i - 1) . "a" if exists $short_codes{$s};
                         }
-                        next if exists $short_codes{$s};
                     }
                 } else {
                     $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
