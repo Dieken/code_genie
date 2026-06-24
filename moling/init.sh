@@ -18,7 +18,8 @@ case "$SCHEMA" in
         : "${ENCODE_RULE:=moling}"      # 单字编码规则
         : "${USE_VOWEL:=0}"             # 韵码取字根首笔笔画
 
-        : "${USE_PINYIN_DU_FOR_TU:=1}"  # “土” 使用 du
+        : "${USE_PINYIN_DU_FOR_TU:=1}"      # “土” 使用 du
+        #: "${USE_PINYIN_VOU_FOR_KOU:=1}"    # “口” 使用 vou
 
         : "${OPTIMIZE_KEY_0=w}"         # 首根笔画时，多次退火优化都选择了 w
         : "${OPTIMIZE_KEY_y=k}"         # y 热力太高，首根笔画时，多次退火优化都选择映射到 k
@@ -119,6 +120,7 @@ esac
 : "${MAX_CODE_LEN:=4}"                          # 最大码长
 
 : "${USE_PINYIN_DU_FOR_TU:=0}"                  # 默认 “土” 使用 tu
+: "${USE_PINYIN_VOU_FOR_KOU:=0}"                # 默认 “口” 使用 kou
 : "${USE_STROKE_5_FOR_6:=1}"                    # 默认将笔画 6 合并到笔画 5
 
 : "${ENABLE_SPACE_SHORTCODE:=0}"                # 是否启用空格简码，默认关闭
@@ -131,7 +133,7 @@ esac
 # Perl 脚本里用到这些环境变量
 export SCHEMA ENCODE_RULE USE_VOWEL
 export TOP_ROOT_FREQ TOP_ROOT_KEYS HOT_ROOT_FREQ HOT_ROOT_KEYS ALL_ROOT_KEYS B_AREA_KEYS MAX_CODE_LEN
-export USE_PINYIN_DU_FOR_TU USE_STROKE_5_FOR_6
+export USE_PINYIN_DU_FOR_TU USE_PINYIN_VOU_FOR_KOU USE_STROKE_5_FOR_6
 export ENABLE_SPACE_SHORTCODE PREFER_SPACE_SHORTCODE
 
 ## 方案可以自行提供全字集字频文件、算码字集文件、字根小码补码表、字根聚类表

@@ -234,7 +234,8 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use Unicode::Normalize;
       "屮"     => "ca",  # ce，取 cao
       "丶"     => "da",  # zu, 取 dian
       "乀"     => "da",  # fu, 与 丶 归并
-      "土"     => $ENV{USE_PINYIN_DU_FOR_TU} ? "du" : "tu",    # tu, 音托时取 du
+      "土"     => $ENV{USE_PINYIN_DU_FOR_TU} ? "du" : "tu",     # tu, 音托时取 du
+      "口"     => $ENV{USE_PINYIN_VOU_FOR_KOU} ? "vo" : "ko",   # kou, 取 vou 降低 K 的压力
       "朩"     => "mu",  # de, 与 木 归并
       "丨"     => "su",  # gu, 取 shu
       "丆"     => "ca",  # ha, 与 厂 归并
