@@ -110,6 +110,7 @@ esac
 : "${ENCODE_RULE:=moling}"                      # 默认使用魔灵单字编码规则
 : "${USE_VOWEL:=0}"                             # 默认韵码取字根首笔
 : "${USE_MIXED_FREQ:=0.1}"                      # 默认混合 10% 加权的繁体字频
+: "${USE_YULING_NEW_WORD_RULE:=1}"              # 默认使用灵明新的词语编码规则
 
 : "${TOP_ROOT_FREQ:=2.5}"                       # 高频字根频率阈值
 : "${TOP_ROOT_KEYS:=sdfghjkl}"                  # 高频字根大码约束
@@ -131,7 +132,7 @@ esac
 [ "${PREFER_SPACE_SHORTCODE:-}" = 1 ] && export ENABLE_SPACE_SHORTCODE=1
 
 # Perl 脚本里用到这些环境变量
-export SCHEMA ENCODE_RULE USE_VOWEL
+export SCHEMA ENCODE_RULE USE_VOWEL USE_YULING_NEW_WORD_RULE
 export TOP_ROOT_FREQ TOP_ROOT_KEYS HOT_ROOT_FREQ HOT_ROOT_KEYS ALL_ROOT_KEYS B_AREA_KEYS MAX_CODE_LEN
 export USE_PINYIN_DU_FOR_TU USE_PINYIN_VOU_FOR_KOU USE_STROKE_5_FOR_6
 export ENABLE_SPACE_SHORTCODE PREFER_SPACE_SHORTCODE

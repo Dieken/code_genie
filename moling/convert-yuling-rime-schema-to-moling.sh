@@ -275,7 +275,7 @@ MOLING="$MOLING" perl -CSDA -Mutf8 -Mautodie -F'\t' -i -lanE '
     for (@a) { die "Unknown char in $ARGV: $_\n" unless exists $codes{$_}; }
 
     if (@a == 2) {
-        if ($ENV{ENCODE_RULE} eq "yuling") {        # 使用宇浩灵明二字词编码规则
+        if ($ENV{ENCODE_RULE} eq "yuling" && $ENV{USE_YULING_NEW_WORD_RULE}) {  # 使用宇浩灵明二字词编码规则
             my $code = "";
             my $seq = $chaifen{ $a[0] };
             if (@$seq == 1) {   # 首字是单根字
