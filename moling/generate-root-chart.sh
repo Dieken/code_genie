@@ -27,7 +27,7 @@ SOURCE="$1/source"
 }
 
 echo "Writing $1/roots.tsv ..."
-if grep -Eq '^\S+\.[UASY]\t' "$1/output-keymap.txt"; then
+if grep -Eq '^\S+\.[UASY]' "$1/output-keymap.txt"; then
   perl -CSDA -lanE '
   next unless /^(\S+)\.([UASY])/;
   $h{$1}{$2} = lc($F[1]);
