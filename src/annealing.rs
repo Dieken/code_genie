@@ -1081,6 +1081,18 @@ pub fn simulated_annealing_resumable(
 
     let sa_start = Instant::now();
 
+    // === 进度日志速率窗口状态 ===
+    // 用「自上次进度汇报以来」的窗口统计计算吞吐与接受率，而非自退火开始的累计平均：
+    // - 窗口吞吐：能反映当前阶段的真实速度（累计平均会被早期高温段稀释、迟钝）。
+    // - 窗口接受率：能读出当前退火阶段（高温接近 1、趋冻接近 0），累计接受率被早期主导、几乎不动。
+    // 窗口锚点（起始时刻/步号）在每次进度汇报后重置。窗口锚点初始化为本次会话起点
+    //（resume 时 = start_step / 恢复时刻），从而续算的窗口速率只统计「本次会话新增」，
+    // 不会把续算前的历史步数算进来（修复 resume 路径吞吐爆表）。
+    let mut window_start = sa_start;
+    let mut window_start_step = start_step;
+    let mut win_accepted: u64 = 0;
+    let mut win_proposed: u64 = 0;
+
     // === 权重渐进日志状态（任务 11.1，需求 16.2/16.3）===
     // 渐进期 10 个进度点（p, α, w）；仅在 p_ramp > 0 时逐点输出，p_ramp == 0 走硬激活分支。
     let ramp_points = ramp_log_points(p_start, p_ramp, w_target);
@@ -1298,10 +1310,12 @@ pub fn simulated_annealing_resumable(
 
         // 邻域分发：启用时每步抽取一次 r 决定走冲突路径还是既有 swap/move；
         // 关闭时跳过抽样，直接走既有分发，保持 RNG 消耗序列与原实现一致。
+        // 每步恰好提议一次邻域移动；`proposal_accepted` 记录本步是否被（含概率）接受，用于窗口接受率。
+        let mut proposal_accepted = false;
         let did_conflict = if conflict_enabled {
             let r = rng.gen::<f64>();
             if r < conflict_prob && !collisions.is_empty() {
-                try_resolve_conflict(
+                proposal_accepted = try_resolve_conflict(
                     ctx,
                     &mut assignment,
                     &mut evaluator,
@@ -1332,19 +1346,25 @@ pub fn simulated_annealing_resumable(
                     && ctx.groups[r1].allowed_keys.contains(&k2)
                     && ctx.groups[r2].allowed_keys.contains(&k1)
                 {
-                    evaluator.try_swap(ctx, &mut assignment, r1, r2, temp, &mut rng);
+                    proposal_accepted = evaluator.try_swap(ctx, &mut assignment, r1, r2, temp, &mut rng);
                 } else {
                     let r = r1;
                     let allowed = &ctx.groups[r].allowed_keys;
                     let new_k = allowed[rng.gen_range(0..allowed.len())];
-                    evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
+                    proposal_accepted = evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
                 }
             } else {
                 let r = rng.gen_range(0..n_groups);
                 let allowed = &ctx.groups[r].allowed_keys;
                 let new_k = allowed[rng.gen_range(0..allowed.len())];
-                evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
+                proposal_accepted = evaluator.try_move(ctx, &mut assignment, r, new_k, temp, &mut rng);
             }
+        }
+
+        // 窗口接受率累计（每步一次提议；智能扰动的额外移动不计入，保持接受率口径纯净）。
+        win_proposed += 1;
+        if proposal_accepted {
+            win_accepted += 1;
         }
 
         let current_score = evaluator.get_score(ctx);
@@ -1363,13 +1383,15 @@ pub fn simulated_annealing_resumable(
             if thread_id == 0 && best_score <= last_best_score - 0.9 {
                 let m = best_metrics;
                 let elapsed = sa_start.elapsed().as_secs_f64();
-                let speed = if elapsed > 0.0 { step as f64 / elapsed } else { 0.0 };
+                // 自本次会话起的平均吞吐：用 (step - start_step) 而非绝对 step，
+                // 否则 resume 续算时 step 从历史步号起算、elapsed 从 0 起算会使速率瞬间爆表。
+                let speed = if elapsed > 0.0 { (step - start_step) as f64 / elapsed } else { 0.0 };
                 let scores = evaluator.get_metric_scores(ctx);
                 // 分量分数（需求 16.4/16.5）：最佳解全码/简码分量以当前有效权重重算。
                 let best_full_comp = weight_full * best_full_score;
                 let best_simple_comp = w_eff * best_simple_score;
                 println!(
-                    "   [T0] 步数 {}/{} | {:.1} 万步/分钟 | 温度 {:.6} | 重码:{}({:.4}) 重码率:{:.4}%({:.4}) 当量:{:.4}({:.4}) CV:{:.4}({:.4}) 分布:{:.4}({:.4}) | 得分: {:.4} (全码分量:{:.4} 简码分量:{:.4})",
+                    "   [T0] 步数 {}/{} | 均速 {:.1} 万步/分钟 | 温度 {:.6} | 重码:{}({:.4}) 重码率:{:.4}%({:.4}) 当量:{:.4}({:.4}) CV:{:.4}({:.4}) 分布:{:.4}({:.4}) | 得分: {:.4} (全码分量:{:.4} 简码分量:{:.4})",
                     step, steps, speed * 60.0 / 10000.0, temp,
                     m.collision_count, scores.collision_count,
                     m.collision_rate * 100.0, scores.collision_rate,
@@ -1391,9 +1413,10 @@ pub fn simulated_annealing_resumable(
 
             if thread_id == 0 {
                 let elapsed = sa_start.elapsed().as_secs_f64();
-                let speed = if elapsed > 0.0 { step as f64 / elapsed } else { 0.0 };
+                // 自本次会话起的平均吞吐（同上，修正 resume 爆表）。
+                let speed = if elapsed > 0.0 { (step - start_step) as f64 / elapsed } else { 0.0 };
                 println!(
-                    "   [T0] 步数 {} | {:.1} 万步/分钟: Reheat ×{:.1} (基温 {:.6})",
+                    "   [T0] 步数 {} | 均速 {:.1} 万步/分钟: Reheat ×{:.1} (基温 {:.6})",
                     step, speed * 60.0 / 10000.0, cfg.annealing.reheat_factor, base_temp
                 );
             }
@@ -1446,9 +1469,21 @@ pub fn simulated_annealing_resumable(
         if thread_id == 0 && step % report_interval == 0 && step > 0 {
             let pct = step * 100 / steps;
             let m = evaluator.get_metrics(ctx);
-            let elapsed = sa_start.elapsed().as_secs_f64();
-            let speed = if elapsed > 0.0 { step as f64 / elapsed } else { 0.0 };
             let scores = evaluator.get_metric_scores(ctx);
+
+            // === 窗口速率（自上次进度汇报以来，区别于事件行的会话均速）===
+            // win_steps/win_elapsed 为本汇报区间内的步数与耗时，反映「当前阶段」真实吞吐；
+            // accept_rate 为本区间内（含概率）接受的提议占比，反映退火当前所处阶段。
+            let now = Instant::now();
+            let win_elapsed = now.duration_since(window_start).as_secs_f64();
+            let win_steps = step - window_start_step;
+            let win_speed = if win_elapsed > 0.0 { win_steps as f64 / win_elapsed } else { 0.0 };
+            let accept_rate = if win_proposed > 0 { win_accepted as f64 / win_proposed as f64 } else { 0.0 };
+            // 总吞吐：自本次会话起的累计平均速度（= (step - start_step)/总耗时），即原进度行的速度字段。
+            // 用 (step - start_step) 而非绝对 step，避免 resume 续算时把历史步数算进来导致爆表。
+            let sa_elapsed = sa_start.elapsed().as_secs_f64();
+            let avg_speed = if sa_elapsed > 0.0 { (step - start_step) as f64 / sa_elapsed } else { 0.0 };
+
             // 分量分数（需求 16.4/16.5）：当前解与最佳解的全码/简码分量。
             let cur_full_comp = weight_full * evaluator.full_score_component(ctx);
             let cur_simple_comp = w_eff * evaluator.simple_score_component(ctx);
@@ -1458,11 +1493,11 @@ pub fn simulated_annealing_resumable(
             // 最优总分按当前 w_eff 重算（= 全码分量 + 简码分量），与下方简码行的最优简码分量自洽；
             // 不直接用存储的 best_score（其由上次采纳时的 w_eff 计算，渐进期会与当前分量口径不一致）。
             let best_total_disp = best_full_comp + best_simple_comp;
-            // 全码行（始终输出）：保留全码分量，去掉简码分量（简码移至下方独立行，需求 16）。
-            // pct/speed/基温 取定宽，使下方简码行的指标块对齐。
+            // 全码行（始终输出）：速度已移至下方独立「速率」行，本行只保留进度/基温/指标/得分。
+            // pct/基温 取定宽，使下方速率行与简码行的指标块对齐。
             println!(
-                "   [T0] 进度: {:>3}% | {:>5.1} 万步/分钟 | 基温: {:.6} | 重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) CV={:.4}({:.4}) 分布={:.4}({:.4}) | 当前: {:.4} (全码:{:.4}) 🏆最优: {:.4} (全码:{:.4})",
-                pct, speed * 60.0 / 10000.0, base_temp,
+                "   [T0] 进度: {:>3}% | 基温: {:.6} | 重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) CV={:.4}({:.4}) 分布={:.4}({:.4}) | 当前: {:.4} (全码:{:.4}) 🏆最优: {:.4} (全码:{:.4})",
+                pct, base_temp,
                 m.collision_count, scores.collision_count,
                 m.collision_rate * 100.0, scores.collision_rate,
                 m.equiv_mean, scores.equivalence,
@@ -1471,13 +1506,17 @@ pub fn simulated_annealing_resumable(
                 total, cur_full_comp,
                 best_total_disp, best_full_comp
             );
-            // 简码行（仅简码启用时）：单独展示简码指标与简码分量；前导空格使「覆盖=…」对齐
-            // 到上方全码行「重码=…」的列起点（前缀按定宽计算，CJK 按 2 列宽）。
+            // 速率行（始终输出）：左起加进度百分比（与进度行对齐）；先「总吞吐」（会话累计均速，
+            // 即原进度行的速度字段）后「窗口吞吐」（自上次汇报以来），再窗口接受率（附原始计数）。
+            // 作为本次汇报最后一行输出。
+            // 简码行（仅简码启用时）：紧接进度行之后；左起同样加进度百分比，前导空格使「重码=…」
+            // 对齐到上方进度行「重码=…」的列起点（含百分比前缀后缩进为 17 空格）。
             if simple_enabled {
                 let sm = evaluator.get_simple_metrics(ctx);
                 let ss = evaluator.get_simple_metric_scores(ctx);
                 println!(
-                    "   [T0] 简码:                                         重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) 覆盖={:.2}%({:.4}) 分布={:.4}({:.4}) | 当前简码:{:.4} 🏆最优简码:{:.4}\n",
+                    "   [T0] 简码: {:>3}% |                  重码={}({:.4}) 重码率={:.4}%({:.4}) 当量={:.4}({:.4}) 覆盖={:.2}%({:.4}) 分布={:.4}({:.4}) | 当前简码:{:.4} 🏆最优简码:{:.4}",
+                    pct,
                     sm.collision_count, ss.collision_count,
                     sm.collision_rate * 100.0, ss.collision_rate,
                     sm.equiv_mean, ss.equiv,
@@ -1486,6 +1525,17 @@ pub fn simulated_annealing_resumable(
                     cur_simple_comp, best_simple_comp
                 );
             }
+            println!(
+                "   [T0] 速率: {:>3}% | 总吞吐 {:>5.1} 万步/分钟 | 窗口吞吐 {:>5.1} 万步/分钟 | 窗口接受率 {:>5.2}% (接受 {}/{} 步)\n",
+                pct, avg_speed * 60.0 / 10000.0, win_speed * 60.0 / 10000.0,
+                accept_rate * 100.0, win_accepted, win_proposed
+            );
+
+            // 重置窗口锚点，使下个汇报区间重新计速/计接受率。
+            window_start = now;
+            window_start_step = step;
+            win_accepted = 0;
+            win_proposed = 0;
         }
 
         // === 周期对账：每 M 步用全量重算覆盖增量值，纠正浮点/整型漂移（需求 15.4/15.5）===
