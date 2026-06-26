@@ -107,6 +107,10 @@ pub struct WorkerResult {
     pub max_gumbel_score: f64,
     pub best_candidate: Option<OperatorResult>,
     pub results: Vec<OperatorResult>,
+    /// 本轮该 worker 最终无效（连续重采样 MAX_RETRY 次仍未采到有效邻域）的候选数
+    pub invalid_count: u64,
+    /// 本轮该 worker 因无效邻域而额外重采样的总次数（反映约束紧度）
+    pub retry_count: u64,
 }
 
 impl WorkerResult {
@@ -115,6 +119,8 @@ impl WorkerResult {
             max_gumbel_score: f64::NEG_INFINITY,
             best_candidate: None,
             results: Vec::new(),
+            invalid_count: 0,
+            retry_count: 0,
         }
     }
 
@@ -122,6 +128,8 @@ impl WorkerResult {
         self.max_gumbel_score = f64::NEG_INFINITY;
         self.best_candidate = None;
         self.results.clear();
+        self.invalid_count = 0;
+        self.retry_count = 0;
     }
 }
 
@@ -296,8 +304,9 @@ fn run_local_tasks(
         let op_idx = task_buffer[task_pos];
         let op = &operators[op_idx];
 
-        // 调用算子进行增量探测
-        let op_result = op.explore(ctx, evaluator, assignment, task_pos, rng);
+        // 调用算子进行增量探测（内部带重采样）
+        let (op_result, wasted) = op.explore(ctx, evaluator, assignment, task_pos, rng);
+        result.retry_count += wasted as u64;
         if let Some((delta_e, result_op)) = op_result {
             // Gumbel-Max trick
             let u: f64 = rng.sample(gumbel_uniform).clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
@@ -309,6 +318,9 @@ fn run_local_tasks(
                 result.best_candidate = Some(result_op.clone());
             }
             result.results.push(result_op);
+        } else {
+            // 连续 MAX_RETRY 次都没采到有效邻域
+            result.invalid_count += 1;
         }
 
         local_completed += 1;

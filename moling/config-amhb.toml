@@ -47,9 +47,9 @@ word = 0.0       # 多字词全码权重（需同时启用 word_code.enabled）
 [weights.full_code]
 top_n = 0                     # 字频前 N 重码数的 N 值
 top_n_collision_count = 0     # 前 N 重码数权重
-collision_count = 25          # 总重码数权重
+collision_count = 13          # 总重码数权重
 collision_rate = 47           # 重码率权重
-equivalence = 24              # 当量权重
+equivalence = 36              # 当量权重
 distribution = 4              # 键位分布偏差权重
 
 # 单字简码子权重（同上，无需归一化）
@@ -74,7 +74,7 @@ distribution = 1.0              # 键位分布偏差权重
 [amhb]
 total_neighbors = 80       # EXP3 算子池大小（总邻居数）；每线程 10 个候选，足够。
                            # 调大（如默认 240）不会更快，只会让相同时间内步数变少、每步更重。
-steal_threshold = 0        # 工作窃取阈值
+steal_threshold = 1        # 工作窃取阈值（设为 0 会让窃取过于激进、增加原子竞争；1 更稳健）
 total_steps = 15000000     # 降温总步数：steps_ratio 模式下作为各段步数分配的基数，同时仍是硬上限
 temp_start = 5.0           # AMHB 初始温度（原 40.0）。温度归一化后有效区间是 O(1)，
                            # 由 40 降到 5 可避免开头约 1M 步的随机游走浪费。
@@ -105,7 +105,7 @@ steps_ratio = 0.505
 # 🌡️ 模拟退火参数
 # -------------------------------------------------------------------------
 [annealing]
-threads = 8              # 并行线程数
+threads = 4              # 并行线程数
 total_steps = 2000000     # 单线程迭代步数
 temp_start = 100.0         # 初始温度 (0=自动校准，推荐)
 temp_end = 0.000001      # 结束温度

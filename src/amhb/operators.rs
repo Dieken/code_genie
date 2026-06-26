@@ -85,8 +85,11 @@ impl AmhbOperator {
         }
     }
 
-    /// 探测邻域：增量计算 delta_score 并自动回滚
-    /// 返回 (delta_score, OperatorResult)
+    /// 探测邻域：增量计算 delta_score 并自动回滚。
+    /// 返回 `(候选, wasted)`：
+    /// - 候选为 `Some((delta_score, result))` 表示成功采到有效邻域；`None` 表示连续
+    ///   `MAX_RETRY` 次都没采到有效邻域而放弃。
+    /// - `wasted` 为本次 explore 内部失败的重采样次数（0 = 一次命中），用于统计采样健康度。
     #[inline]
     pub fn explore<R: Rng + ?Sized>(
         &self,
@@ -95,13 +98,16 @@ impl AmhbOperator {
         assignment: &mut [u8],
         task_index: usize,
         rng: &mut R,
-    ) -> Option<(f64, OperatorResult)> {
+    ) -> (Option<(f64, OperatorResult)>, u32) {
         match self {
             AmhbOperator::Pointwise(op) => op.explore(ctx, evaluator, assignment, task_index, rng),
             AmhbOperator::Exchange(op) => op.explore(ctx, evaluator, assignment, task_index, rng),
         }
     }
 }
+
+/// 单次 explore 内部最大重采样次数（对齐 C++ 的 while/do-while 重采样，但加上限防病态死循环）
+const MAX_RETRY: u32 = 16;
 
 /// 单点修改算子
 #[derive(Clone)]
@@ -130,37 +136,49 @@ impl PointwiseOperator {
         assignment: &mut [u8],
         task_index: usize,
         rng: &mut R,
-    ) -> Option<(f64, OperatorResult)> {
-        let rad_dist = self.rad_dist.as_ref()?;
-
-        let rad_idx = rng.sample(rad_dist);
-        let allowed = &ctx.groups[rad_idx].allowed_keys;
-        if allowed.len() <= 1 {
-            return None;
-        }
-
-        let old_key = assignment[rad_idx];
-
-        // 从该组的 allowed_keys 中采样不同于当前的新键位
-        let new_key = loop {
-            let k = allowed[rng.gen_range(0..allowed.len())];
-            if k != old_key {
-                break k;
-            }
+    ) -> (Option<(f64, OperatorResult)>, u32) {
+        let rad_dist = match self.rad_dist.as_ref() {
+            Some(d) => d,
+            None => return (None, 0),
         };
 
-        // 增量探测 + 自动回滚
-        let delta_score = evaluator.probe_move(ctx, assignment, rad_idx, new_key);
+        let mut wasted = 0u32;
+        while wasted < MAX_RETRY {
+            let rad_idx = rng.sample(rad_dist);
+            let allowed = &ctx.groups[rad_idx].allowed_keys;
+            // 该组只有一个可选键位，无法移动 → 换一个组重试，而非直接放弃
+            if allowed.len() <= 1 {
+                wasted += 1;
+                continue;
+            }
 
-        Some((
-            delta_score,
-            OperatorResult::Pointwise(PointwiseResult {
-                delta_score,
-                task_index,
-                radical_idx: rad_idx,
-                new_key,
-            }),
-        ))
+            let old_key = assignment[rad_idx];
+
+            // 从该组的 allowed_keys 中采样不同于当前的新键位
+            let new_key = loop {
+                let k = allowed[rng.gen_range(0..allowed.len())];
+                if k != old_key {
+                    break k;
+                }
+            };
+
+            // 增量探测 + 自动回滚
+            let delta_score = evaluator.probe_move(ctx, assignment, rad_idx, new_key);
+
+            return (
+                Some((
+                    delta_score,
+                    OperatorResult::Pointwise(PointwiseResult {
+                        delta_score,
+                        task_index,
+                        radical_idx: rad_idx,
+                        new_key,
+                    }),
+                )),
+                wasted,
+            );
+        }
+        (None, wasted)
     }
 }
 
@@ -191,43 +209,51 @@ impl ExchangeOperator {
         assignment: &mut [u8],
         task_index: usize,
         rng: &mut R,
-    ) -> Option<(f64, OperatorResult)> {
-        let rad_dist = self.rad_dist.as_ref()?;
-        // 采样两个不同的字根
-        let rad_idx1 = rng.sample(rad_dist);
-        let rad_idx2 = loop {
-            let idx = rng.sample(rad_dist);
-            if idx != rad_idx1 {
-                break idx;
-            }
+    ) -> (Option<(f64, OperatorResult)>, u32) {
+        let rad_dist = match self.rad_dist.as_ref() {
+            Some(d) => d,
+            None => return (None, 0),
         };
 
-        let k1 = assignment[rad_idx1];
-        let k2 = assignment[rad_idx2];
+        let mut wasted = 0u32;
+        while wasted < MAX_RETRY {
+            // 采样两个不同的字根
+            let rad_idx1 = rng.sample(rad_dist);
+            let rad_idx2 = loop {
+                let idx = rng.sample(rad_dist);
+                if idx != rad_idx1 {
+                    break idx;
+                }
+            };
 
-        // 只交换不同键位的字根
-        if k1 == k2 {
-            return None;
+            let k1 = assignment[rad_idx1];
+            let k2 = assignment[rad_idx2];
+
+            // 同键位交换无意义，或交换后越出对方的 allowed_keys 约束 → 重新采样一对
+            if k1 == k2
+                || !ctx.groups[rad_idx1].allowed_keys.contains(&k2)
+                || !ctx.groups[rad_idx2].allowed_keys.contains(&k1)
+            {
+                wasted += 1;
+                continue;
+            }
+
+            // 增量探测 + 自动回滚
+            let delta_score = evaluator.probe_swap(ctx, assignment, rad_idx1, rad_idx2);
+
+            return (
+                Some((
+                    delta_score,
+                    OperatorResult::Exchange(ExchangeResult {
+                        delta_score,
+                        task_index,
+                        radical_idx1: rad_idx1,
+                        radical_idx2: rad_idx2,
+                    }),
+                )),
+                wasted,
+            );
         }
-
-        // 检查交换后的键位是否在对方的 allowed_keys 中
-        if !ctx.groups[rad_idx1].allowed_keys.contains(&k2)
-            || !ctx.groups[rad_idx2].allowed_keys.contains(&k1)
-        {
-            return None;
-        }
-
-        // 增量探测 + 自动回滚
-        let delta_score = evaluator.probe_swap(ctx, assignment, rad_idx1, rad_idx2);
-
-        Some((
-            delta_score,
-            OperatorResult::Exchange(ExchangeResult {
-                delta_score,
-                task_index,
-                radical_idx1: rad_idx1,
-                radical_idx2: rad_idx2,
-            }),
-        ))
+        (None, wasted)
     }
 }

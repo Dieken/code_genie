@@ -243,6 +243,11 @@ impl AmhbOptimizer {
             // 简码重建计数器
             let simple_rebuild_interval: usize = 10000;
 
+            // 采样健康度累计器（每 10000 步汇总打印一次后清零，避免高频日志）
+            let mut cum_valid: u64 = 0;     // 有效候选累计
+            let mut cum_invalid: u64 = 0;   // 最终无效候选累计（重采样 MAX_RETRY 次仍失败）
+            let mut cum_retry: u64 = 0;     // 重采样次数累计
+
             for iter in 1..=param.max_iterations as usize {
                 // 1. EXP3 调度 + 任务分配给 workers
                 let total_generated = self.operator_pool.cal_refs(
@@ -303,6 +308,10 @@ impl AmhbOptimizer {
 
                 for thread_id in 0..self.num_workers {
                     let wr = unsafe { &mut *results_ptr.ptr().add(thread_id) };
+                    // 采样健康度统计（无论是否有 best_candidate 都累计）
+                    cum_valid += wr.results.len() as u64;
+                    cum_invalid += wr.invalid_count;
+                    cum_retry += wr.retry_count;
                     if wr.best_candidate.is_some() {
                         if wr.max_gumbel_score > global_max_score {
                             global_max_score = wr.max_gumbel_score;
@@ -368,6 +377,26 @@ impl AmhbOptimizer {
                         );
                     }
                     println!();
+
+                    // 采样健康度汇总（近 ~10000 轮均值，避免逐轮高频打印）
+                    let cand_total = cum_valid + cum_invalid;
+                    let invalid_pct = if cand_total > 0 {
+                        cum_invalid as f64 / cand_total as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    let rounds = simple_rebuild_interval as f64; // 两次打印间的轮数
+                    println!(
+                        "  [采样健康度] 近{}轮均值: 有效 {:.1}/轮, 无效 {:.3}/轮 ({:.3}%), 重采样 {:.2} 次/轮",
+                        simple_rebuild_interval,
+                        cum_valid as f64 / rounds,
+                        cum_invalid as f64 / rounds,
+                        invalid_pct,
+                        cum_retry as f64 / rounds,
+                    );
+                    cum_valid = 0;
+                    cum_invalid = 0;
+                    cum_retry = 0;
 
                     for wid in 0..1 {
                         let eval = unsafe { &*evaluators_ptr.ptr().add(wid) };

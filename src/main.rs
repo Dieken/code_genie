@@ -66,6 +66,10 @@ enum Commands {
         /// 使用键魂当量模型替代 pair_equivalence.txt
         #[arg(long)]
         keysoul: bool,
+
+        /// 指定输出目录（不存在则创建，已存在则直接使用）；不指定则自动生成 output-{时间戳}
+        #[arg(short = 'd', long = "output-dir")]
+        output_dir: Option<String>,
     },
 
     /// 根据 keymap 为汉字编码
@@ -181,10 +185,10 @@ fn main() {
                 &output,
             );
         }
-        Some(Commands::Optimize { amhb, keysoul }) => run_optimize(&cfg, amhb, keysoul, &cli.config),
+        Some(Commands::Optimize { amhb, keysoul, output_dir }) => run_optimize(&cfg, amhb, keysoul, &cli.config, output_dir),
         Some(Commands::Resume { checkpoint }) => run_resume(&cfg, &checkpoint),
         Some(Commands::Keysoul { sequence, debug }) => run_keysoul(&sequence, debug),
-        None => run_optimize(&cfg, false, false, &cli.config),
+        None => run_optimize(&cfg, false, false, &cli.config, None),
     }
 }
 
@@ -670,7 +674,7 @@ fn build_evaluate_report(
 // optimize 子命令（原有优化流程）
 // =========================================================================
 
-fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path: &str) {
+fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path: &str, output_dir_override: Option<String>) {
     let start_time = Instant::now();
     println!("=== CodeGenie 码灵算法优化器 v10 ===");
 
@@ -742,9 +746,14 @@ fn run_optimize(cfg: &Config, use_amhb: bool, use_keysoul: bool, cli_config_path
         println!("\n算法选择: SA (Simulated Annealing)");
     }
 
-    // 创建输出目录
-    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let output_dir = format!("output-{}", timestamp);
+    // 创建输出目录：指定了 -d 则用指定目录（不存在则创建，已存在直接使用），否则自动生成
+    let output_dir = match output_dir_override {
+        Some(dir) => dir,
+        None => {
+            let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+            format!("output-{}", timestamp)
+        }
+    };
     std::fs::create_dir_all(&output_dir).expect("无法创建输出目录");
     println!("输出目录: {}", output_dir);
     if let Err(e) = std::fs::copy(cli_config_path, format!("{}/config.toml", output_dir)) {
