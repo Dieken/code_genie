@@ -23,22 +23,16 @@
 
 > 推荐 Windows 用户使用 [MSYS2](https://packages.msys2.org/) 来运行以下工具，在 MSYS2 里使用 `pacman -S git rust perl` 安装 Git、Rust、Perl，参照 [TUNA crates.io 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)配置 Cargo。
 
-1. 在上层目录运行 `cargo build --release` 构建码灵；
-2. 在本目录运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；
+1. 视情况调整 `config.toml`(如果 `config-$SCHEMA.toml` 存在则优化用此文件)；
+2. 运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；
 
-`optimize.sh` 调用了 `prepare-inputs.sh`，后者接受几个环境变量来定制行为：
+`optimize.sh` 调用了 `prepare-inputs.sh`(可以使用环境变量 `NO_PREPARE=1` 跳过)，后者接受几个环境变量来定制行为：
 
-* `USE_MIXED_FREQ`：非零时表示组合台版繁体字频的权重，默认为 0.1，设置为空或 0 时表示只使用简体字频；
-* `USE_VOWEL`: 设置为 1 表示字根的补码使用字根的韵母，默认是使用字根的首笔笔画；
-* `USE_YULING_RULE`： 设置为 1 表示使用宇浩灵明的单字编码规则，并从宇浩灵明字根表初始化 `roots.txt`(如果文件不存在)，后续需手动维护此文件，默认是使用魔灵的单字编码规则；
-* `USE_YAOLING_RULE`: 设置为 1 表示使用 @Evildoer 的妖灵规则（大根声码映射且韵码固定），包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
-* `USE_YUELING_RULE`: 设置为 1 表示使用 @枕月 的月灵规则(韵码仿日月映射)，包含了 `USE_YULING_RULE=1` 和 `USE_VOWEL=1`，默认关闭，使用魔灵规则；
+* `SCHEMA`：值为 moling, moqing, xiaoming, yaoling, yueling, yuling 中的一个，表示优化对应方案，默认为 moling；
 * `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
-    * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w；
-    * 包含 q 时，使用退火算法决定声母 q 的按键，默认不映射；
-    * 包含 r 时，使用退火算法决定声母 r 的按键，默认不映射；
-    * 包含 y 时，使用退火算法决定声母 y 的按键，默认使用 k；
-    * 包含 z 时，使用退火算法决定声母 z 的按键，默认使用 v；
+    * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w，可以使用环境变量 `OPTIMIZE_KEY_0` 设置；
+    * 包含 y 时，使用退火算法决定声母 y 的按键，默认使用 k，可以使用环境变量 `OPTIMIZE_KEY_y` 设置；
+    * 包含 z 时，使用退火算法决定声母 z 的按键，默认使用 v，可以使用环境变量 `OPTIMIZE_KEY_z` 设置；
     * 包含 1 时，使用退火算法决定笔画「横」的按键，默认使用 o；
     * 包含 2 时，使用退火算法决定笔画「竖」的按键，默认使用 u；
     * 包含 3 时，使用退火算法决定笔画「撇」的按键，默认使用 e；
@@ -49,23 +43,34 @@
     * 包含 8 时，使用退火算法决定声码在键盘左手侧时笔画「撇」的按键，默认使用 i；
     * 包含 9 时，使用退火算法决定声码在键盘右手侧时笔画「点」的按键，默认使用 e；
     * 包含 A 时，使用退火算法决定声码在键盘左手侧时笔画「折」的按键，默认使用 u；
+* 更多开关参考 `init.sh` 开头部分以及 `prepare-inputs.sh`；
 
 例如：
 
 ```sh
-# 优化全部十个键映射，使用字根首笔作为韵码
-OPTIMIZE_KEYS=012345qryz ./optimize.sh
+# 查看帮助
+./optimize.sh -h
 
-# 优化全部五个键映射，使用字根韵母作为韵码
-USE_VOWEL=1 OPTIMIZE_KEYS=0qryz ./optimize.sh
+# 优化魔灵
+./optimize.sh
 
-# 计算妖灵
-rm roots.txt # 从灵明字根表初始化
-USE_YAOLING_RULE=1 ./optimize.sh
+# 优化魔卿
+SCHEMA=moqing ./optimize.sh
 
-# 计算月灵
-## !!! 注意提前调整 roots.txt 的字根拼音
-USE_YUELING_RULE=1 ./optimize.sh
+# 优化潇明
+SCHEMA=xiaoming ./optimize.sh
+
+# 优化妖灵
+## 从灵明字根表初始化
+SCHEMA=yaoling ./optimize.sh
+
+# 优化月灵
+## 从灵明字根表初始化，注意调整 roots-yueling.txt 的字根拼音
+SCHEMA=yueling ./optimize.sh
+
+# 优化灵明
+## 从灵明字根表初始化，注意调整 roots-yueling.txt 的字根拼音
+SCHEMA=yuling ./optimize.sh
 ```
 
 注意：开启按键映射后，`roots.txt` 中的字根声码不是最终版，关闭 `USE_VOWEL` 使用字根首笔时，
@@ -104,11 +109,11 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 
 3. `config.toml` 为魔灵定制，其它方案应注意调整：
 
-    1. `total_steps` 可取 8000000 用于调整参数时的试验，当调大步数时，观察日志，如果在某一进度百分比后过早停滞，说明已经收敛，更多的步数只是浪费；
-    2. 观察日志里的优化真正有效时起始温度，保留开头的 20~30% 步数用于探索，以及优化进展比较大的温度区间、优化停滞时结束温度，适度调整 temp_start, temp_end, comfort_temp，可以把 `config.toml` 和日志、代码丢给大语言模型分析，让其给出解释和建议；
+    1. `total_steps` 可取 2000000 至 8000000 用于调整参数时的试验，步数多耗时长结果更稳定，当调大步数时，观察日志，如果在某一进度百分比后过早停滞，说明已经收敛，更多的步数只是浪费，一般不超过 4000 万步；
+    2. 观察日志里的优化真正有效时（也即 T0 线程分数小于最佳分数）起始温度，调整 temp_start 以保证探索阶段（也即 T0 线程分数大于最佳分数）的步数在 20% 至 30%，观察分数低于最佳分数后下降比较快的温度区间中心点、优化停滞时结束温度，适度调整 comfort_temp 和 temp_end，让结尾的停滞步数不超过 10%，可以把 `config.toml` 和日志、代码丢给大语言模型分析，让其给出解释和建议；
     3. 先注释掉 `[scale]` 段，通过自动校正得出合适的值设置上，以保证调整参数时的稳定性；
     4. 先关掉 `[targets.full_code]` 段，观察多次优化的结果再设置上，目标应比优化的最好结果略微低一点，以提供足够的优化动力；
-    5. 理解[基于目标偏差优化](https://github.com/Dieken/code_genie/commit/ad79690efe454140886ab69bf6341f2a07561307)的设计原理，`[weights.full_code]` 用作指标重要性的度量，总和应为 1，`[scale]` 作为优化动力强度的度量，优化时主要调整这两处，注意修改 `[scale]` 后，优化得分跟之前的轮次再无可比性，只能比较指标数值本身。`[targets.full_code]` 经过多次摸底后应少改，以方便朝既定目标调整参数对比。
+    5. 理解[基于目标偏差优化](https://github.com/Dieken/code_genie/commit/ad79690efe454140886ab69bf6341f2a07561307)的设计原理，`[weights.full_code]` 用作指标重要性的度量，总和应为 1，`[scale]` 作为优化动力强度的度量，优化时主要调整这两处，注意修改 `[scale]` 后，优化得分跟之前的轮次再无可比性，只能比较指标数值本身。`[targets.full_code]` 经过多次摸底后应少改，以方便朝既定目标调整参数对比。观察日志中各指标的数值变化幅度、与目标的差距，对比括号中的分数相对大小，以评估 `weights`、`scale` 和 `weights` 设置的合理性。
 
 
 ## 字根练习
@@ -124,19 +129,20 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
 ## 文件说明
 
 * 脚本程序
-    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-inputs.sh` 和 `code_genie optimize`，支持环境变量 `USE_YULING_RULE`
-    * `prepare-inputs.sh`         准备码灵输入文件所用的脚本，支持环境变量 `USE_YULING_RULE`
+    * `optimize.sh`               算码流程包装脚本，调用 `./prepare-inputs.sh` 和 `code_genie optimize`，支持环境变量 `SCHEMA`
+    * `prepare-inputs.sh`         准备码灵输入文件所用的脚本，支持环境变量 `SCHEMA`
+    * `init.sh`                   各个方案的默认配置
     * `stat-moling-roots.pl`      统计优化出的魔灵码表和字根表
     * `generate-root-chart.sh`    生成字根表和字根图
     * `batch-test-weights.sh`     批处理优化以探测合理的权重参数范围
     * `analyze-duplicates-by-cluster.pl`
-                                  分析字根聚类带来的重码，支持环境变量 `USE_YULING_RULE`
+                                  分析字根聚类带来的重码，支持环境变量 `SCHEMA`
     * `analyze-duplicates-by-cluster.sh`
-                                  评估 roots-cluster.txt 中每一行聚类单独可能带来的重码，支持环境变量 `USE_YULING_RULE`
+                                  评估 roots-cluster.txt 中每一行聚类单独可能带来的重码，支持环境变量 `SCHEMA`
     * `analyze-results-of-batch-test-weights.sh`
                                   分析 `batch-test-weights.sh` 的运行结果
     * `convert-yuling-rime-schema-to-moling.sh`
-                                  转换灵明 RIME 方案为魔灵 RIME 方案，支持环境变量 `USE_YULING_RULE`
+                                  转换灵明 RIME 方案为魔灵 RIME 方案，支持环境变量 `SCHEMA`
     * `compare-optimization-results.sh`
                                   比较 `output-<TIMESTAMP>/thread-<NN>` 的优化结果，依赖[命令行版本的宇浩测评](https://github.com/Dieken/yuhao-assess/tree/cli)
 

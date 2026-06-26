@@ -6,12 +6,14 @@
 set -euo pipefail
 shopt -s failglob
 
+. ./init.sh
+
 no_cluster=$(./analyze-duplicates-by-cluster.pl --cluster "" |
     grep -E '动重|静重|组数' |
     sed -e 's/:/\t/' |
     LC_ALL=C sort)
 
-grep -v '^#' roots-cluster.txt |
+grep -v '^#' $ROOTS_CLUSTER_TXT |
     grep -v '^\s*$' |
     sed -e 's/\t.*//' |
     while read cluster; do

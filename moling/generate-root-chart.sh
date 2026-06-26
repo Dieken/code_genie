@@ -3,10 +3,9 @@
 set -euo pipefail
 shopt -s failglob
 
-: "${TYPER_ROOT:="$HOME/home/typer"}"
+. ./init.sh
 
-[ "${USE_YAOLING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
-[ "${USE_YUELING_RULE:-}" = 1 ] && export USE_YULING_RULE=1 USE_VOWEL=1
+: "${TYPER_ROOT:="$HOME/home/typer"}"
 
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=typer
 [ -d "$TYPER_ROOT/scripts" ] || TYPER_ROOT=../../typer
@@ -20,8 +19,16 @@ shopt -s failglob
   exit 1
 }
 
+SOURCE="$1/source"
+[ -d "$SOURCE" ] || SOURCE="$1/../source"
+[ -d "$SOURCE" ] || {
+  echo "ERROR: source directory not found in $1/source or $1/../source" >&2
+  exit 1
+}
+
 echo "Writing $1/roots.tsv ..."
-perl -CSDA -lanE '
+if grep -Eq '^\S+\.[UASY]' "$1/output-keymap.txt"; then
+  perl -CSDA -lanE '
   next unless /^(\S+)\.([UASY])/;
   $h{$1}{$2} = lc($F[1]);
   END {
@@ -40,6 +47,12 @@ perl -CSDA -lanE '
     for (@roots) { print "$_->[0]\t", ucfirst($_->[1]); }
   }
   ' "$1/output-keymap.txt" > "$1/roots.tsv"
+else
+  perl -CSDA -lanE '
+  next if /^\s*#/;
+  print "$F[0]\t$F[1]";
+  ' "$1/output-keymap.txt" > "$1/roots.tsv"
+fi
 
 echo "Writing $1/roots-mapping.tsv ..."
 perl -CSDA -F, -lanE '
@@ -48,7 +61,11 @@ perl -CSDA -F, -lanE '
     $h{$F[1]} = 1;
     ' yuhao-zigens.csv | LC_ALL=C sort -u > "$1/roots-mapping.tsv"
 
-echo "Writing $1/zigen-moling.csv and $1/zigen-trainer-moling.json ..."
+echo "Writing $1/zigen-$SCHEMA.csv and $1/zigen-trainer-$SCHEMA.json ..."
+export ROOTS_TXT="$SOURCE/roots-$SCHEMA.txt"
+[ -f "$ROOTS_TXT" ] || ROOTS_TXT="$SOURCE/roots.txt"
+export ROOTS_CLUSTER_TXT="$SOURCE/roots-cluster-$SCHEMA.txt"
+[ -f "$ROOTS_CLUSTER_TXT" ] || ROOTS_CLUSTER_TXT="$SOURCE/roots-cluster.txt"
 perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
   $roots{$F[0]} = lc($F[1]);
 
@@ -68,7 +85,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
       }
       undef $fh;
 
-      open $fh, "roots.txt";
+      open $fh, $ENV{ROOTS_TXT};
       while (<$fh>) {
           chomp;
           @a = split;
@@ -76,7 +93,7 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
       }
       undef $fh;
 
-      open $fh, "roots-cluster.txt";
+      open $fh, $ENV{ROOTS_CLUSTER_TXT};
       while (<$fh>) {
           next if /^\s*#/ || /^\s*$/;
           @a = split /\t/;
@@ -144,30 +161,65 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
 
       print STDERR JSON::PP->new->canonical->pretty->encode(\@zigen);
   }
-' "$1/roots.tsv" > "$1/zigen-moling.csv" 2>"$1/zigen-trainer-moling.json"
+' "$1/roots.tsv" > "$1/zigen-$SCHEMA.csv" 2>"$1/zigen-trainer-$SCHEMA.json" || {
+    echo
+    cat "$1/zigen-trainer-$SCHEMA.json"
+    exit 1
+}
 
 echo "Writing $1/chaifen.tsv ..."
-perl -CSDA -F'\t' -lanE '$F[1]=~s/\s+//g; print "$F[0]\t$F[1]"' chaifen-all.txt > "$1/chaifen.tsv"
+export CHAIFEN_TXT="$SOURCE/chaifen.txt"
+export CHAIFEN_ALL_TXT="$SOURCE/chaifen-all.txt"
+[ -f "$CHAIFEN_ALL_TXT" ] || {
+    # 老的 ./optimize.sh 没有备份 ./chaifen-all.txt
+    echo "    !!! use './chaifen-all.txt' for '$1', may be inconsistent!" >&2;
+    CHAIFEN_ALL_TXT="chaifen-all.txt"
+}
+perl -CSDA -F'\t' -lanE '$F[1]=~s/\s+//g; print "$F[0]\t$F[1]"' "$CHAIFEN_ALL_TXT" > "$1/chaifen.tsv"
 
 echo "Writing $1/mabiao.tsv ..."
-perl -CSDA -Mutf8 -F'\t' -lanE '
+perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
   $roots{$F[0]} = lc($F[1]);
 
   END {
-      print "不\tu";
-      print "是\ti";
-      print "我\to";
-      print "的\te";
-      print "了\ta";
+      %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
+      %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
 
-      open my $fh, $ENV{DISABLE_FULL_CHARSET} ? "chaifen.txt" : "chaifen-all.txt";
+      if ($ENV{ENCODE_RULE} eq "xiaoming") {
+          print "不\tk";
+          print "在\tf";
+          print "是\tj";
+          print "我\ti";
+          print "的\td";
+          print "了\te";
+
+          $short_chars{"在"} = 1;
+      } elsif ($ENV{ENCODE_RULE} eq "moqing") {
+          print "不\ta";
+          print "是\ti";
+          print "我\to";
+          print "的\te";
+          print "一\tfi";
+
+          delete $short_chars{"了"};
+          $short_chars{"一"} = 1;
+          $short_codes{"fi"} = 1;
+      } else {
+          print "不\tu";
+          print "是\ti";
+          print "我\to";
+          print "的\te";
+          print "了\ta";
+      }
+
+      open my $fh, $ENV{DISABLE_FULL_CHARSET} ? $ENV{CHAIFEN_TXT} : $ENV{CHAIFEN_ALL_TXT};
       while (<$fh>) {
           chomp;
           @a = split /\t/;
           @b = split /\s+/, $a[1];
           $s = "";
 
-          if ($ENV{USE_YULING_RULE}) {  # 使用宇浩灵明单字编码规则
+          if ($ENV{ENCODE_RULE} eq "yuling") {          # 使用宇浩灵明单字编码规则
               for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
 
               $s .= substr($roots{$b[0]}, 0, 1);
@@ -183,7 +235,31 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
                   $s .= substr($roots{$b[-1]}, 1, 1) if length($roots{$b[-1]}) > 2;
                   $s .= substr($roots{$b[-1]}, -1);
               }
-          } else {                      # 使用魔灵单字编码规则
+          } elsif ($ENV{ENCODE_RULE} eq "xiaoming") {   # 使用潇明单字编码规则
+              for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
+
+              $s = substr($roots{$b[0]}, 0, 2);
+              if (@b == 1) {
+                  $s = $roots{$b[0]};
+              } elsif (@b == 2) {
+                  $s .= substr($roots{$b[1]}, 0, 2);
+              } elsif (@b == 3) {
+                  $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[2]}, 0, 2);
+              } else {
+                  $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[2]}, 0, 1) . substr($roots{$b[-1]}, 0, 1);
+              }
+          } elsif ($ENV{ENCODE_RULE} eq "moqing") {   # 使用魔卿单字编码规则
+              for (@b) { die "Unknown root $_\n" unless exists $roots{$_}; }
+
+              $s = substr($roots{$b[0]}, 0, 1);
+              if (@b == 1) {
+                  $s .= substr($roots{$b[0]}, 1, 1) x 2;
+              } elsif (@b == 2) {
+                  $s .= $roots{$b[1]};
+              } else {
+                  $s .= substr($roots{$b[1]}, 0, 1) . substr($roots{$b[-1]}, 0, 1);
+              }
+          } else {                                      # 使用魔灵单字编码规则
               for (@b) {
                   die "Unknown root: $_ in $_\n" unless exists $roots{$_};
                   $s .= substr($roots{$_}, 0, 1);
@@ -197,7 +273,8 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
               }
               $s .= substr($roots{$r}, 1);
           }
-          $s = substr($s, 0, 4) if length($s) > 4;
+
+          $s = substr($s, 0, $ENV{MAX_CODE_LEN}) if length($s) > $ENV{MAX_CODE_LEN};
 
           $len = length($s);
           if (exists $full_codes{$s}) {
@@ -208,11 +285,9 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
           $chars{$a[0]} = { code => $s, len => $len, freq => $a[2],
                             y => substr($roots{$b[-1]}, -1), seq => $. };
+
+          $chars{$a[0]}{y} = substr($roots{$b[-1]}, 1, 1) if $ENV{ENCODE_RULE} eq "xiaoming";
       }
-
-      %short_chars = map { $_ => 1 } qw/不 是 我 的 了/;
-
-      %stroke_mapping = qw(e i i e a u);    # 不映射 u 和 o 到 e 以避免减少可用简码空间
 
       for $i (2 .. 3) {
           while (($k, $v) = each %chars) {
@@ -224,7 +299,47 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             $v = $chars{$char};
             next if $i >= length($v->{code}) || $v->{freq} < 1;
-            $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
+
+            $s = "";
+
+            if ($ENV{PREFER_SPACE_SHORTCODE}) {
+                $s = substr($v->{code}, 0, $i - 1) . "_" unless $ENV{ENCODE_RULE} eq "xiaoming" && $i > 2;  # 潇明只有 A_ 空格简
+            }
+
+            if (! $s || exists $short_codes{$s}) {
+                if ($ENV{ENCODE_RULE} eq "xiaoming") {
+                    if (length($v->{code}) == 3) {                  # 字根字
+                        next unless $ENV{ENABLE_SPACE_SHORTCODE};
+                        $s = substr($v->{code}, 0, 1) . "_";        # 只可能是二简 A_
+                    } else {                                        # 二根及以上根字，全码长一定 >= 4
+                        if ($i == 2) {                              # 二简 AA
+                            $s = substr($v->{code}, 0, 1) . substr($v->{code}, 2, 1);
+                        } elsif ($i == 3) {                         # 三简 ABB
+                            $s = substr($v->{code}, 0, 2) . $v->{y};
+                        } else {                                    # 只出到三简
+                            next;
+                        }
+                    }
+                } elsif ($ENV{ENCODE_RULE} eq "moqing") {
+                    if (substr($v->{code}, $i - 2, 1) =~ /[yuiophjklnm]/) {
+                        $s = substr($v->{code}, 0, $i - 1) . "e";
+                        $s = substr($v->{code}, 0, $i - 1) . "a" if exists $short_codes{$s};
+                        if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
+                            $s = substr($v->{code}, 0, $i - 1) . "i" if exists $short_codes{$s};
+                            $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
+                        }
+                    } else {
+                        $s = substr($v->{code}, 0, $i - 1) . "i";
+                        $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
+                        if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
+                            $s = substr($v->{code}, 0, $i - 1) . "e" if exists $short_codes{$s};
+                            $s = substr($v->{code}, 0, $i - 1) . "a" if exists $short_codes{$s};
+                        }
+                    }
+                } else {
+                    $s = substr($v->{code}, 0, $i - 1) . $v->{y};   # 对二根字也取末根的韵码，不回头，以避开高频的部首首根
+                }
+            }
 
             if ($ENV{ENABLE_SHORTCODE_MAPPING}) {   # 默认不开启，会损害简码效率
                 # 根据魔灵的笔画映射提升手感
@@ -234,12 +349,13 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
 
             if (exists $short_codes{$s}) {
                 next unless $ENV{ENABLE_SPACE_SHORTCODE};
+                next if $ENV{ENCODE_RULE} eq "xiaoming" && $i > 2;  # 潇明只有 A_ 空格简
                 $s = substr($v->{code}, 0, $i - 1) . "_";
                 next if exists $short_codes{$s};
             }
 
             # 抢占低频字的码位，有可能增大一点重码率！！！
-            next if exists $full_codes{$s} && $chars{ $full_codes{$s} }{seq} <= 6000;
+            next if exists $full_codes{$s} && $chars{ $full_codes{$s} }{seq} <= $ENV{SIMPLE_PROTECT_TOP_N};
 
             $short_codes{$s} = 1;
             $short_chars{$char} = 1;
@@ -253,14 +369,22 @@ perl -CSDA -Mutf8 -F'\t' -lanE '
   }
 ' "$1/roots.tsv" > "$1/mabiao.tsv"
 
-echo "Writing $1/moling.js ..."
-"$TYPER_ROOT/scripts/turn-roots-chaifen-mabiao-into-js.pl" "$1/roots.tsv" "$1/chaifen.tsv" "$1/mabiao.tsv" > "$1/moling.js"
+echo "Writing $1/$SCHEMA.js ..."
+"$TYPER_ROOT/scripts/turn-roots-chaifen-mabiao-into-js.pl" "$1/roots.tsv" "$1/chaifen.tsv" "$1/mabiao.tsv" > "$1/$SCHEMA.js"
 
 echo "Downloading https://shurufa.app/fonts/Yuniversus.woff to $1/Yuniversus.woff ..."
 curl -L -z "$1/Yuniversus.woff" -o "$1/Yuniversus.woff" 'https://shurufa.app/fonts/Yuniversus.woff'
 
 VER=$(date +%Y.%m.%d)
-echo "Writing $1/moling-$VER.html ..."
-"$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/moling.js" -t "魔靈輸入法字根表 $VER" -c full-freq.txt \
+echo "Writing $1/$SCHEMA-$VER.html ..."
+export FULL_FREQ_TXT="$SOURCE/full-freq-$SCHEMA.txt"
+[ -f "$FULL_FREQ_TXT" ] || FULL_FREQ_TXT="$SOURCE/full-freq.txt"
+[ -f "$FULL_FREQ_TXT" ] || {
+    FULL_FREQ_TXT="./full-freq-$SCHEMA.txt"
+    [ -f "$FULL_FREQ_TXT" ] || FULL_FREQ_TXT="./full-freq.txt"
+    # 老的 ./optimize.sh 没有备份 ./full-freq*.txt
+    echo "    !!! use '$FULL_FREQ_TXT' for '$1', may be inconsistent!" >&2;
+}
+"$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/$SCHEMA.js" -t "${SCHEMA_NAME}輸入法字根表 $VER" -c "$FULL_FREQ_TXT" \
   -f "$1/Yuniversus.woff" -r "$1/roots-mapping.tsv" \
-  "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 8000 full-freq.txt | awk '{print $1}') > "$1/moling-$VER.html"
+  "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 8000 "$FULL_FREQ_TXT" | awk '{print $1}') > "$1/$SCHEMA-$VER.html"

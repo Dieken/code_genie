@@ -16,8 +16,8 @@ key_dist = "key_distribution.txt"    # 用指分布文件
 # 🌡️ 模拟退火参数
 # -------------------------------------------------------------------------
 [annealing]
-threads = @@THREADS@@             # 并行线程数
-total_steps = @@TOTAL_STEPS@@     # 总迭代步数
+threads = 4              # 并行线程数
+total_steps = 2000000    # 总迭代步数
 temp_start = 0.005       # 初始温度
 temp_end = 0.00005       # 结束温度
 comfort_temp = 0.0005    # 舒适温度区间
@@ -56,11 +56,11 @@ display_order = "qwertyuiopasdfghjklzxcvbnm"
 # -------------------------------------------------------------------------
 [weights.full_code]
 # 全码部分权重（总和应为 1.0）
-collision_count = @@COLLISION_COUNT@@    # 重码数权重
-collision_rate = @@COLLISION_RATE@@     # 重码率权重
-equivalence = @@EQUIVALENCE@@        # 当量权重
-equiv_cv = @@EQUIV_CV@@           # 当量变异系数权重
-distribution = @@DISTRIBUTION@@       # 分布偏差权重
+collision_count = 0.13    # 重码数权重
+collision_rate = 0.47     # 重码率权重
+equivalence = 0.36        # 当量权重
+equiv_cv = 0.01           # 当量变异系数权重
+distribution = 0.03       # 分布偏差权重
 
 [weights.simple_code]
 # 简码优化开关与权重
@@ -102,29 +102,40 @@ simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保
 
 [[simple_levels]]
 level = 1
+# code_num：每个"有效简码"最多可分配给几个全码字。有效简码 = 核心码（commit_keys 为空时）或
+#   核心码 + 一个上屏键（commit_keys 非空时，每个上屏键各算一个独立有效简码）。
+#   例：commit_keys="dk"、code_num=2 时 Ad 最多 2 字、Ak 最多 2 字（各自独立、互不超额）。
+#   0 = 该级退火不分配简码（但归属该级的固定简码仍生效并照常输出）。
 code_num = 0
 rules = ["Aa"]
-space_commit = true      # 是否需要空格上屏（默认 false）；为 true 时该级简码效率长度+1，且输出末尾追加 "_"
+commit_keys = "_"        # 上屏键序列（默认 ""）。字母=主键盘键、_=空格；"" 表示自动上屏。
+                         # 例 "dk_"：上屏键可为 d/k/空格，按左右手交替偏好 + 轮转分配；
+                         # _ 只能放在序列开头(偏爱空格)或末尾(偏爱主键)。
+                         # "" 等价旧 space_commit=false；"_" 等价旧 space_commit=true。
+commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
 
 [[simple_levels]]
 level = 2
 code_num = 1
 rules = ["AaZz"]
-space_commit = false
+commit_keys = ""
+commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
 
 [[simple_levels]]
 level = 3
 code_num = 1
 rules = ["AaBaZz"]
-space_commit = false
+commit_keys = ""
+commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
 
 # -------------------------------------------------------------------------
 # 🔒 固定简码映射（可选，默认整段注释）
-# 预先定义「汉字 = 简码」，简码可选以 _ 结尾表示空格上屏（输出保留下划线）。
+# 预先定义「汉字 = 简码」，简码为完整字面键位串（末键可为任意上屏键，含 _ 表示空格）。
 # - 不影响候选字按 simple_coverage_ratio 的选取，仅在选完后将这些字从候选集剔除；
-# - 每条固定简码按其码长归属对应级别，并占用该级该桶的 code_num 名额；
-# - 结尾下划线的有无须与该级 [[simple_levels]].space_commit 一致；
-# - 有效简码长度须严格小于该字全码长度。
+# - 归级规则：长度 T 的简码，匹配「核心码长==T 且该级 commit_keys 为空（纯核心）」
+#   或「核心码长==T-1 且末键∈该级 commit_keys（核心+上屏，占该上屏键的 commit slot）」；
+# - 无法归属任何级别时仅告警、不丢弃（仍输出、仍排除候选，但不占 commit slot）；
+# - 有效核心码长须严格小于该字全码长度。
 # 下例仅用于表达配置格式（默认全部注释）。
 # -------------------------------------------------------------------------
 [fixed_simple_codes]
