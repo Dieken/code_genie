@@ -61,7 +61,7 @@ perl -CSDA -F, -lanE '
     $h{$F[1]} = 1;
     ' yuhao-zigens.csv | LC_ALL=C sort -u > "$1/roots-mapping.tsv"
 
-echo "Writing $1/zigen-moling.csv and $1/zigen-trainer-moling.json ..."
+echo "Writing $1/zigen-$SCHEMA.csv and $1/zigen-trainer-$SCHEMA.json ..."
 export ROOTS_TXT="$SOURCE/roots-$SCHEMA.txt"
 [ -f "$ROOTS_TXT" ] || ROOTS_TXT="$SOURCE/roots.txt"
 export ROOTS_CLUSTER_TXT="$SOURCE/roots-cluster-$SCHEMA.txt"
@@ -161,9 +161,9 @@ perl -CSDA -Mautodie -Mutf8 -lanE 'use List::Util qw/uniqstr/; use JSON::PP;
 
       print STDERR JSON::PP->new->canonical->pretty->encode(\@zigen);
   }
-' "$1/roots.tsv" > "$1/zigen-moling.csv" 2>"$1/zigen-trainer-moling.json" || {
+' "$1/roots.tsv" > "$1/zigen-$SCHEMA.csv" 2>"$1/zigen-trainer-$SCHEMA.json" || {
     echo
-    cat "$1/zigen-trainer-moling.json"
+    cat "$1/zigen-trainer-$SCHEMA.json"
     exit 1
 }
 
@@ -369,14 +369,14 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
   }
 ' "$1/roots.tsv" > "$1/mabiao.tsv"
 
-echo "Writing $1/moling.js ..."
-"$TYPER_ROOT/scripts/turn-roots-chaifen-mabiao-into-js.pl" "$1/roots.tsv" "$1/chaifen.tsv" "$1/mabiao.tsv" > "$1/moling.js"
+echo "Writing $1/$SCHEMA.js ..."
+"$TYPER_ROOT/scripts/turn-roots-chaifen-mabiao-into-js.pl" "$1/roots.tsv" "$1/chaifen.tsv" "$1/mabiao.tsv" > "$1/$SCHEMA.js"
 
 echo "Downloading https://shurufa.app/fonts/Yuniversus.woff to $1/Yuniversus.woff ..."
 curl -L -z "$1/Yuniversus.woff" -o "$1/Yuniversus.woff" 'https://shurufa.app/fonts/Yuniversus.woff'
 
 VER=$(date +%Y.%m.%d)
-echo "Writing $1/moling-$VER.html ..."
+echo "Writing $1/$SCHEMA-$VER.html ..."
 export FULL_FREQ_TXT="$SOURCE/full-freq-$SCHEMA.txt"
 [ -f "$FULL_FREQ_TXT" ] || FULL_FREQ_TXT="$SOURCE/full-freq.txt"
 [ -f "$FULL_FREQ_TXT" ] || {
@@ -385,6 +385,6 @@ export FULL_FREQ_TXT="$SOURCE/full-freq-$SCHEMA.txt"
     # 老的 ./optimize.sh 没有备份 ./full-freq*.txt
     echo "    !!! use '$FULL_FREQ_TXT' for '$1', may be inconsistent!" >&2;
 }
-"$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/moling.js" -t "魔靈輸入法字根表 $VER" -c "$FULL_FREQ_TXT" \
+"$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/$SCHEMA.js" -t "${SCHEMA_NAME}輸入法字根表 $VER" -c "$FULL_FREQ_TXT" \
   -f "$1/Yuniversus.woff" -r "$1/roots-mapping.tsv" \
-  "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 8000 "$FULL_FREQ_TXT" | awk '{print $1}') > "$1/moling-$VER.html"
+  "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 8000 "$FULL_FREQ_TXT" | awk '{print $1}') > "$1/$SCHEMA-$VER.html"

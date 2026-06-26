@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
-shopt -s failglob
-
 #########################################################################################################################
 
 ## 方案名
@@ -15,6 +12,7 @@ shopt -s failglob
 case "$SCHEMA" in
     # https://shurufa.app/ime/moling.html
     moling)     # 魔灵，@qq3qq, 四码自定码，25 键，大码聚类，小码(声码)为字根声母，补码(韵码)为字根首笔笔画，A1A2A3AzSzYz，仿灵明和星陈，二根字回头 A1A2S2S1Y1
+        : "${SCHEMA_NAME:=魔靈}"
         : "${ENCODE_RULE:=moling}"      # 单字编码规则
         : "${USE_VOWEL:=0}"             # 韵码取字根首笔笔画
 
@@ -29,6 +27,7 @@ case "$SCHEMA" in
         ;;
 
     moqing)     # 魔卿，@Litles，三码自定码，25 键，大码聚类，小码为字根声母，字根字 ASS，多根字 A1A2AzSz，仿潇湘
+        : "${SCHEMA_NAME:=魔卿}"
         : "${ENCODE_RULE:=moqing}"      # 单字编码规则
         : "${USE_VOWEL:=1}"             # 实际上魔卿是双编字根，并不用韵码，这里是为了跳过笔画处理
 
@@ -49,6 +48,7 @@ case "$SCHEMA" in
 
     # https://github.com/Dieken/code_genie/commit/741a1571b37505806e4058c2c6952935f6aa57a5
     xiaoming)   # 潇明，@恷子，五码自定码，25 键，大码聚类，小码映射字根声母，韵码为字根首笔笔画，单根字 ASY，多根字 A1S1A2A3AzSz，仿潇湘
+        : "${SCHEMA_NAME:=潇明}"
         : "${ENCODE_RULE:=xiaoming}"    # 单字编码规则
         : "${USE_VOWEL:=0}"             # 韵码取字根首笔笔画
 
@@ -68,6 +68,7 @@ case "$SCHEMA" in
 
     # https://shurufa.app/ime/yaoling.html
     yaoling)    # 妖灵，@Evildoer, 四码自定码，25 键，大码聚类，小码映射字根声母，韵码为字根韵腹，单根字 ASY, 多根字 A1S1A2A3AzSzYz，仿灵明，分大小根、第三根跳根
+        : "${SCHEMA_NAME:=妖靈}"
         : "${ENCODE_RULE:=yuling}"      # 单字编码规则
         : "${USE_VOWEL:=1}"             # 韵码取韵母
 
@@ -77,6 +78,7 @@ case "$SCHEMA" in
 
     # https://shurufa.app/ime/yueling.html
     yueling)    # 月灵，@枕月，四码自定码，25 键，大码聚类，小码为字根声母，韵码映射字根韵母，单根字 ASY，多根字 A1S1A2A3AzSzYz，仿灵明，分大小根，第三根跳根
+        : "${SCHEMA_NAME:=月靈}"
         : "${ENCODE_RULE:=yuling}"      # 单字编码规则
         : "${USE_VOWEL:=1}"             # 韵码取韵母
 
@@ -86,6 +88,7 @@ case "$SCHEMA" in
 
     # https://shurufa.app/docs/ling.html
     yuling)     # 灵明，@朱宇浩，四码自定码，25 键，大码聚类，小码为字根声母，韵码为字根韵腹，单根字 ASY，多根字 A1S1A2A3AzSzYz，分大小根，第三根跳根
+        : "${SCHEMA_NAME:=靈明}"
         : "${ENCODE_RULE:=yuling}"      # 单字编码规则
         : "${USE_VOWEL:=1}"             # 韵码取韵母
 
@@ -132,7 +135,7 @@ esac
 [ "${PREFER_SPACE_SHORTCODE:-}" = 1 ] && export ENABLE_SPACE_SHORTCODE=1
 
 # Perl 脚本里用到这些环境变量
-export SCHEMA ENCODE_RULE USE_VOWEL USE_YULING_NEW_WORD_RULE
+export SCHEMA SCHEMA_NAME ENCODE_RULE USE_VOWEL USE_YULING_NEW_WORD_RULE
 export TOP_ROOT_FREQ TOP_ROOT_KEYS HOT_ROOT_FREQ HOT_ROOT_KEYS ALL_ROOT_KEYS B_AREA_KEYS MAX_CODE_LEN
 export USE_PINYIN_DU_FOR_TU USE_PINYIN_VOU_FOR_KOU USE_STROKE_5_FOR_6
 export ENABLE_SPACE_SHORTCODE PREFER_SPACE_SHORTCODE
