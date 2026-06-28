@@ -129,7 +129,8 @@ esac
 
 : "${ENABLE_SPACE_SHORTCODE:=0}"                # 是否启用空格简码，默认关闭
 : "${PREFER_SPACE_SHORTCODE:=0}"                # 是否优先使用空格简码，默认优先使用韵码简码
-: "${SIMPLE_PROTECT_TOP_N:=8000}"               # 简码不会抢前 N 个高频字的码位
+: "${SHORTCODE_PROTECT_TOP_N:=11000}"           # 简码不会抢前 N 个高频字的码位
+: "${DUP_WEIGHT_FOR_SHORTCODE:=0.01}"           # 计算简码时动重相对简码效率的权重，为 0 表示仅考虑简码效率，为超大数表示仅考虑动重
 
 # 优先空格简意味着开启空格简
 [ "${PREFER_SPACE_SHORTCODE:-}" = 1 ] && export ENABLE_SPACE_SHORTCODE=1
@@ -138,7 +139,7 @@ esac
 export SCHEMA SCHEMA_NAME ENCODE_RULE USE_VOWEL USE_YULING_NEW_WORD_RULE
 export TOP_ROOT_FREQ TOP_ROOT_KEYS HOT_ROOT_FREQ HOT_ROOT_KEYS ALL_ROOT_KEYS B_AREA_KEYS MAX_CODE_LEN
 export USE_PINYIN_DU_FOR_TU USE_PINYIN_VOU_FOR_KOU USE_STROKE_5_FOR_6
-export ENABLE_SPACE_SHORTCODE PREFER_SPACE_SHORTCODE
+export ENABLE_SPACE_SHORTCODE PREFER_SPACE_SHORTCODE SHORTCODE_PROTECT_TOP_N DUP_WEIGHT_FOR_SHORTCODE
 
 ## 方案可以自行提供全字集字频文件、算码字集文件、字根小码补码表、字根聚类表
 for s in full-freq chars roots roots-cluster; do

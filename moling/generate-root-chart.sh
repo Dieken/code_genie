@@ -212,6 +212,9 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
           print "了\ta";
       }
 
+      my $total_freq = 0.0;
+      my $dup_freq = 0.0;
+      my $full_code_len = 0.0;
       open my $fh, $ENV{DISABLE_FULL_CHARSET} ? $ENV{CHAIFEN_TXT} : $ENV{CHAIFEN_ALL_TXT};
       while (<$fh>) {
           chomp;
@@ -279,9 +282,13 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
           $len = length($s);
           if (exists $full_codes{$s}) {
               ++$len;                   # 非首选加一码，不考虑翻页，不递归考虑已设的简码
+              $dup_freq += $a[2];
           } else {
               $full_codes{$s} = $a[0];  # 只记录首选
           }
+
+          $total_freq += $a[2];
+          $full_code_len += $len * $a[2];
 
           $chars{$a[0]} = { code => $s, len => $len, freq => $a[2],
                             y => substr($roots{$b[-1]}, -1), seq => $. };
@@ -289,16 +296,23 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
           $chars{$a[0]}{y} = substr($roots{$b[-1]}, 1, 1) if $ENV{ENCODE_RULE} eq "xiaoming";
       }
 
+      $full_code_len /= $total_freq;
+      $dup_freq /= $total_freq;
+      printf STDERR "全码长: %.2f 动重: %.2f‱\n", $full_code_len,  10000 * $dup_freq;
+
       for $i (2 .. 3) {
           while (($k, $v) = each %chars) {
-              $v->{score} = ($v->{len} - $i) * $v->{freq};
+              $v->{score} = ($v->{len} - $i) * $v->{freq} / $total_freq / $full_code_len;                   # 节约码长相对全码长的比例
+              if ($v->{len} > length($v->{code})) {     # 非首选
+                  $v->{score} += $ENV{DUP_WEIGHT_FOR_SHORTCODE} * $v->{freq} / $total_freq / $dup_freq;     # 减少动重相对动重的比例
+              }
           }
 
         for $char (sort { $chars{$b}{score} <=> $chars{$a}{score} || $chars{$b}{freq} <=> $chars{$a}{freq} || $a cmp $b } keys %chars) {
             next if exists $short_chars{$char};
 
             $v = $chars{$char};
-            next if $i >= length($v->{code}) || $v->{freq} < 1;
+            next if $i > length($v->{code}) || $v->{freq} < 1;
 
             $s = "";
 
@@ -355,7 +369,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
             }
 
             # 抢占低频字的码位，有可能增大一点重码率！！！
-            next if exists $full_codes{$s} && $chars{ $full_codes{$s} }{seq} <= $ENV{SIMPLE_PROTECT_TOP_N};
+            next if exists $full_codes{$s} && $chars{ $full_codes{$s} }{seq} <= $ENV{SHORTCODE_PROTECT_TOP_N};
 
             $short_codes{$s} = 1;
             $short_chars{$char} = 1;
