@@ -21,7 +21,7 @@
 
 ## 算码流程
 
-> 推荐 Windows 用户使用 [MSYS2](https://packages.msys2.org/) 来运行以下工具，在 MSYS2 里使用 `pacman -S git rust perl` 安装 Git、Rust、Perl，参照 [TUNA crates.io 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)配置 Cargo。
+> 推荐 Windows 用户使用 [MSYS2](https://packages.msys2.org/) 来运行以下工具，在 MSYS2 里使用 `pacman -S git rust perl` 安装 Git、Rust、Perl，参照 [TUNA crates.io 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)配置 Cargo。注意不要用 MSYS2 UCRT64，有字符编码兼容问题，用 MSYS2 MSYS/MINGW64/Clang64 都可以。
 
 1. 视情况调整 `config.toml`(如果 `config-$SCHEMA.toml` 存在则优化用此文件)；
 2. 运行 `./optimize.sh` 或 `./optimize.sh --amhb --keysoul`(需最新版 Code Genie)；

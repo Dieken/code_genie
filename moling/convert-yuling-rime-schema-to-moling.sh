@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-YULING="${1:-靈明輸入法_v3.12.0-beta.20260410.105121}"
-OUTPUT="${2:-output-20260506-000635}"
-YUSTAR="${3:-星陳輸入法_v3.11.0}"
+YULING="${1:-靈明輸入法_v3.12.0}"
+OUTPUT="${2:-output-20260603-072215/thread-03}"
+YUSTAR="${3:-星陳輸入法_v3.12.0}"
 
 . ./init.sh
 
@@ -28,7 +28,7 @@ find "$YULING" -name 'yuling*' | while read f; do
 done
 
 echo "(3) 替换文件中的「靈明」和「yuling」字样"
-perl -CSDA -Mutf8 -i -pE 's/yuling/$ENV{SCHEMA}/g; s/(宇浩.*)?靈明/$ENV{SCHEMA_NAME}/g' $(find "$YULING" -name "$SCHEMA*") \
+perl -CSDA -Mutf8 -i -pE 'BEGIN { use Encode qw/decode/; $name = decode("UTF-8", $ENV{SCHEMA_NAME}, Encode::FB_CROAK); } s/yuling/$ENV{SCHEMA}/g; s/(宇浩.*)?靈明/$name/g' $(find "$YULING" -name "$SCHEMA*") \
     "$YULING"/schema/default.custom.yaml "$YULING"/readme.txt
 
 echo "(4) 删除五灵方案"
@@ -183,7 +183,9 @@ perl -CSDA -Mutf8 -F, -lanE '
     push @{ $h{substr($F[1], 0, 1)} }, $F[0];
     push @{ $h2{substr($F[1], 0, 1)}{substr($F[1], 1)} }, $F[0];
     END {
-        print "$ENV{SCHEMA_NAME}字根編碼提示\t/ml";
+        use Encode qw/decode/;
+        $name = decode("UTF-8", $ENV{SCHEMA_NAME}, Encode::FB_CROAK);
+        print "${name}字根編碼提示\t/ml";
         print "輸入對應大碼字母\t/ml";
         for (sort keys %h) {
             print join("", @{ $h{$_} }), "\t/ml$_";

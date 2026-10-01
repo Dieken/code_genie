@@ -24,6 +24,8 @@ case "$SCHEMA" in
         : "${OPTIMIZE_KEY_z=v}"         # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
         export OPTIMIZE_KEY_0 OPTIMIZE_KEY_y OPTIMIZE_KEY_z
 
+        : "${SHORTCODE_PROTECT_TOP_N:=6000}"            # 简码不会抢前 N 个高频字的码位
+
         ;;
 
     moqing)     # 魔卿，@Litles，三码自定码，25 键，大码聚类，小码为字根声母，字根字 ASS，多根字 A1A2AzSz，仿潇湘
