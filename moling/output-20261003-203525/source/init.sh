@@ -66,8 +66,6 @@ case "$SCHEMA" in
         MAX_CODE_LEN=5                                  # 最大码长为 5
         USE_STROKE_5_FOR_6=0                            # 区分笔画 5 和 6
 
-        : "${SHORTCODE_PROTECT_TOP_N:=6000}"            # 简码不会抢前 N 个高频字的码位
-
         ;;
 
     # https://shurufa.app/ime/yaoling.html
