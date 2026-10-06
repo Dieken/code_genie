@@ -338,5 +338,5 @@ perl -CSDA -lnE 'next unless /\t/; next if exists $h{$_}; $h{$_} = 1; print' \
     > "$YULING/mabiao/chartab/$SCHEMA_NAME.txt"
 
 perl -CSDA -lanE 'print "$F[1] $F[0]"' "$YULING/mabiao/chartab/$SCHEMA_NAME.txt" > "$YULING/mabiao/baidu/$SCHEMA_NAME.txt"
-perl -CSDA -lanE 'print "$F[1]\t$F[0]"' "$YULING/mabiao/chartab/$SCHEMA_NAME.txt" > "$YULING/mabiao/dazhu/$SCHEMA_NAME.txt"
-cp "$YULING/mabiao/dazhu/$SCHEMA_NAME.txt" "$YULING/mabiao/duoduo/$SCHEMA_NAME.txt"
+perl -CSDA -lanE 'print "$F[1]\t$F[0]"' "$YULING/mabiao/chartab/$SCHEMA_NAME.txt" > "$YULING/mabiao/duoduo/$SCHEMA_NAME.txt"
+perl -CSDA -lanE 'next if /\//; $F[1] .= "_" unless length($F[1]) >= $ENV{MAX_CODE_LEN} || $F[1] =~ /[$ENV{B_AREA_KEYS}]$/; print "$F[1]\t$F[0]"' "$YULING/mabiao/chartab/$SCHEMA_NAME.txt" > "$YULING/mabiao/dazhu/$SCHEMA_NAME.txt"

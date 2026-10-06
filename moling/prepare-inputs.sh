@@ -123,7 +123,7 @@ for s in chaifen chaifen_tw; do
         next unless /^\.\.\./;
         $ok = 1;
     }
-    next unless /^(\S)\t\[([^,]+)/;
+    next unless /^([^\t]+)\t\[([^,]+)/;		# 注意第一列可能有特殊的变体选择符，因为 length($1) 可能大于 1
     $a = $1;
     @a = $2 =~ /\{[^\}]+\}|\S/g;
     @a = map { $root_mapping{$_} // $_ } @a;
