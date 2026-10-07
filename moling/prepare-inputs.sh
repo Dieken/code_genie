@@ -32,7 +32,7 @@ if [ "$FULL_FREQ_TXT" = full-freq.txt ]; then
             # 使用 max 以保持简体高频字顺序和繁体高频字各自的顺序
             for (keys %$h2) { $h->{$_} = max($h->{$_} // 0, $r * $h2->{$_}) }
 
-            for (sort { $h->{$b} <=> $h->{$a} || $a cmp $b } %$h) {
+            for (sort { $h->{$b} <=> $h->{$a} || $a cmp $b } keys %$h) {
                 print "$_\t", ceil($h->{$_});
             }
         ' > full-freq.txt
