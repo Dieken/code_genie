@@ -12,3 +12,8 @@ done-*
 config-c*-r*-e*.toml
 test-*.log
 batch-test-weights.html
+
+*.woff
+*.ttf
+*.otf
+
