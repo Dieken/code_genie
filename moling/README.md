@@ -147,6 +147,8 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
                                   比较 `output-<TIMESTAMP>/thread-<NN>` 的优化结果，依赖[命令行版本的宇浩测评](https://github.com/Dieken/yuhao-assess/tree/cli)
     * `generate-xiaoming-words-dict.pl`
                                   生成潇明的词组码表
+    * `evaluate-xiaoming-mabiao-to-tsv.sh`
+                                  潇明批量生成码表批量测评的脚本
 
 * 第三方文件
     * `beiyu-char-freq.txt`       北语字频, https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm
