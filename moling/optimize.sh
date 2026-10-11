@@ -37,7 +37,7 @@ usage() {
 
 参数:
   -d, --dir, --output-dir <DIR>
-                输出目录。未指定时默认 output-<时间戳>，并自动追加 -d <DIR>；
+                输出目录。未指定时默认 $SCHEMA-output/output-<时间戳>，并自动追加 -d <DIR>；
                 resume 复用既有 <DIR>。其余参数原样透传给 code_genie。
 
 环境变量:
@@ -52,7 +52,7 @@ usage() {
   - 日志写入 <DIR>/optimize-<时间戳>.log。
 
 示例:
-  $0                        # 全新优化，输出到 output-<时间戳>
+  $0                        # 全新优化，输出到 $SCHEMA-output/output-<时间戳>
   NO_PREPARE=1 $0 -d out1   # 跳过 prepare，输出/复用 out1
   $0 resume -d out1         # 从 out1 断点续算
   $0 --seed-dir out1        # 复用 out1/thread-NN/output-keymap.txt 作为退火初始按键分配
@@ -79,7 +79,7 @@ else
 fi
 
 
-# (2) 从参数中解析 -d / --dir / --output-dir 的值；未指定则默认 output-$TS 并追加 -d $OUT
+# (2) 从参数中解析 -d / --dir / --output-dir 的值；未指定则默认 $SCHEMA-output/output-$TS 并追加 -d $OUT
 TS=$(date +%Y%m%d-%H%M%S)
 ARGS=("$@")
 OUT=
@@ -96,7 +96,7 @@ while [ $i -lt ${#ARGS[@]} ]; do
     i=$((i + 1))
 done
 if [ -z "$OUT" ]; then
-    OUT="output-$TS"
+    OUT="$SCHEMA-output/output-$TS"
     ARGS+=(-d "$OUT")
 fi
 

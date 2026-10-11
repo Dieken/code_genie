@@ -15,7 +15,7 @@ shopt -s failglob
 }
 
 [ $# = 0 ] && {
-  echo "Usage: $0 output-TIMESTAMP" >&2
+  echo "Usage: $0 $SCHEMA-output/output-TIMESTAMP" >&2
   exit 1
 }
 

@@ -17,7 +17,7 @@ which tabulate >/dev/null && TABULATE="tabulate -f plain" || TABULATE=cat
     exit 1
 }
 
-for f in */thread*/output-combined.txt; do
+for f in $SCHEMA-output/*/thread*/output-combined.txt; do
     d=$(dirname $f)
     [ -f $d/evaluation.txt ] && continue
     date

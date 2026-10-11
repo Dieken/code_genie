@@ -3,7 +3,7 @@
 set -euo pipefail
 
 YULING="${1:-靈明輸入法_v3.12.0}"
-OUTPUT="${2:-output-20260603-072215/thread-03}"
+OUTPUT="${2:-moling-output/output-20260603-072215/thread-03}"
 YUSTAR="${3:-星陳輸入法_v3.12.0}"
 
 . ./init.sh

@@ -122,15 +122,37 @@ ceping() {
     for thread in $output/thread-*; do
         echo "$thread/ceping.txt" >&2
         [ -f "$thread/ceping.txt" ] ||
-            pnpm --dir ~/home/yuhao-assess exec tsx src/cli/index.ts \
+            pnpm --dir "$YUHAO_ASSESS" exec tsx src/cli/index.ts \
                 "$thread/mabiao.tsv"  \
-                --scheme ~/home/yuhao-assess-data/schemes/xiaoming.json \
+                --scheme "$YUHAO_ASSESS_DATA"/schemes/xiaoming.json \
                 --format table --output "$thread/ceping.txt"
     done
 }
 
+
 [ "${1:-}" ] || {
     echo "Usage: $0 xiaoming-output/output-*" >&2
+    exit 1
+}
+
+: "${YUHAO_ASSESS:=../../yuhao-assess}"
+: "${YUHAO_ASSESS_DATA:=../../yuhao-assess-data}"
+
+[ -f "$YUHAO_ASSESS/src/cli/index.ts" ] || YUHAO_ASSESS=../../yuhao-assess/src
+[ -f "$YUHAO_ASSESS/src/cli/index.ts" ] || YUHAO_ASSESS=yuhao-assess
+[ -f "$YUHAO_ASSESS/src/cli/index.ts" ] || YUHAO_ASSESS=.
+[ -f "$YUHAO_ASSESS/src/cli/index.ts" ] || {
+    echo "Cannot find yuhao-assess. Please set YUHAO_ASSESS environment variable." >&2
+    echo "You may download it from https://github.com/forfudan/yuhao-assess" >&2
+    exit 1
+}
+
+[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS=../../yuhao-assess-data/src
+[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS=yuhao-assess-data
+[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS=.
+[ -d "$YUHAO_ASSESS_DATA/schemes" ] || {
+    echo "Cannot find yuhao-assess-data. Please set YUHAO_ASSESS_DATA environment variable." >&2
+    echo "You may download it from https://github.com/forfudan/yuhao-assess-data" >&2
     exit 1
 }
 
