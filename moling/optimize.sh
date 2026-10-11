@@ -124,8 +124,7 @@ else
 
     mkdir -p "$BAK"
     # backup configuration for later review
-    cp batch-test-weights.txt \
-       chaifen*.txt \
+    cp chaifen*.txt \
        charAbsoluteFrequency*.json \
        freq.txt \
        init.sh \
