@@ -144,7 +144,7 @@ diff --color -U0 <(./analyze-duplicates-by-cluster.pl -m 0 --cluster "") <(./ana
     * `convert-yuling-rime-schema-to-moling.sh`
                                   转换灵明 RIME 方案为魔灵 RIME 方案，支持环境变量 `SCHEMA`
     * `compare-optimization-results.sh`
-                                  比较 `$SCHEMA-output/output-<TIMESTAMP>/thread-<NN>` 的优化结果，依赖[命令行版本的宇浩测评](https://github.com/Dieken/yuhao-assess/tree/cli)
+                                  比较 `$SCHEMA-output/output-<TIMESTAMP>/thread-<NN>` 的优化结果，依赖[宇浩测评](https://github.com/forfudan/yuhao-assess)。默认使用 `../../yuhao-assess`，可用环境变量 `YUHAO_ASSESS` 指定
     * `generate-xiaoming-words-dict.pl`
                                   生成潇明的词组码表
     * `evaluate-xiaoming-mabiao-to-tsv.sh`

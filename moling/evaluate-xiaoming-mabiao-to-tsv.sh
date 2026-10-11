@@ -147,9 +147,9 @@ ceping() {
     exit 1
 }
 
-[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS=../../yuhao-assess-data/src
-[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS=yuhao-assess-data
-[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS=.
+[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS_DATA=../../yuhao-assess-data/src
+[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS_DATA=yuhao-assess-data
+[ -d "$YUHAO_ASSESS_DATA/schemes" ] || YUHAO_ASSESS_DATA=.
 [ -d "$YUHAO_ASSESS_DATA/schemes" ] || {
     echo "Cannot find yuhao-assess-data. Please set YUHAO_ASSESS_DATA environment variable." >&2
     echo "You may download it from https://github.com/forfudan/yuhao-assess-data" >&2

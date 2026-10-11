@@ -13,7 +13,7 @@ which tabulate >/dev/null && TABULATE="tabulate -f plain" || TABULATE=cat
 [ -f "$YUHAO_ASSESS/src/cli/index.ts" ] || YUHAO_ASSESS=.
 [ -f "$YUHAO_ASSESS/src/cli/index.ts" ] || {
     echo "Cannot find yuhao-assess. Please set YUHAO_ASSESS environment variable." >&2
-    echo "You may get it from https://github.com/Dieken/yuhao-assess/tree/cli" >&2
+    echo "You may get it from https://github.com/forfudan/yuhao-assess" >&2
     exit 1
 }
 
