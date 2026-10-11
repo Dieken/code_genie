@@ -87,6 +87,10 @@ SCHEMA=yuling ./optimize.sh
 
 ## 优化指北
 
+注意：本目录实际已经演变成多方案共存，可以参考 `HOWTO-OPTIMIZATION.md` 和各方案自己
+的 `$SCHEMA-OPTIMIZATION.md` 里的算码流程，这两份 Markdown 文档定位是给 LLM
+模型自主循环算码优化用的。
+
 1. 可以使用 `./batch-test-weights.sh` 来探测合理的权重参数范围：
 
 ```sh
