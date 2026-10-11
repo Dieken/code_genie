@@ -386,8 +386,8 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
 echo "Writing $1/$SCHEMA.js ..."
 "$TYPER_ROOT/scripts/turn-roots-chaifen-mabiao-into-js.pl" "$1/roots.tsv" "$1/chaifen.tsv" "$1/mabiao.tsv" > "$1/$SCHEMA.js"
 
-echo "Downloading https://shurufa.app/fonts/Yuniversus.woff to $1/Yuniversus.woff ..."
-curl -L -z "$1/Yuniversus.woff" -o "$1/Yuniversus.woff" 'https://shurufa.app/fonts/Yuniversus.woff'
+echo "Downloading https://shurufa.app/fonts/Yuniversus.woff to Yuniversus.woff ..."
+curl -L -z "Yuniversus.woff" -o "Yuniversus.woff" 'https://shurufa.app/fonts/Yuniversus.woff'
 
 VER=$(date +%Y.%m.%d)
 echo "Writing $1/$SCHEMA-$VER.html ..."
@@ -400,5 +400,5 @@ export FULL_FREQ_TXT="$SOURCE/full-freq-$SCHEMA.txt"
     echo "    !!! use '$FULL_FREQ_TXT' for '$1', may be inconsistent!" >&2;
 }
 "$TYPER_ROOT/scripts/generate-roots-chart.pl" -e "$1/$SCHEMA.js" -t "${SCHEMA_NAME}輸入法字根表 $VER" -c "$FULL_FREQ_TXT" \
-  -f "$1/Yuniversus.woff" -r "$1/roots-mapping.tsv" \
+  -f "Yuniversus.woff" -r "$1/roots-mapping.tsv" \
   "$1/roots.tsv" "$1/chaifen.tsv" <(head -n 8000 "$FULL_FREQ_TXT" | awk '{print $1}') > "$1/$SCHEMA-$VER.html"
