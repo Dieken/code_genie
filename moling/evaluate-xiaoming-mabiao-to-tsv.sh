@@ -124,7 +124,7 @@ ceping() {
         [ -f "$thread/ceping.txt" ] ||
             pnpm --dir "$YUHAO_ASSESS" exec tsx src/cli/index.ts \
                 "$thread/mabiao.tsv"  \
-                --scheme "$YUHAO_ASSESS_DATA"/schemes/xiaoming.json \
+                --scheme $(realpath "$YUHAO_ASSESS_DATA"/schemes/xiaoming.json) \
                 --format table --output "$thread/ceping.txt"
     done
 }
@@ -159,7 +159,7 @@ ceping() {
 for output in "$@"; do
     mabiao "$output"
     ceping "$output"
-done
+done 1>&2
 
 for output in "$@"; do
     grep -E '^測評結果.*\t[0-9.]+$' $output/thread-*/ceping.txt

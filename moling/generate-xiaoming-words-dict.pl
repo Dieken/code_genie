@@ -20,8 +20,8 @@ use Encode   qw(decode);
 use Getopt::Long;
 use autodie;
 
-my $chaifen_file = "xiaoming-output/output-20261003-203525/source/chaifen-all.txt";
-my $roots_file = "xiaoming-output/output-20261003-203525/thread-04/output-keymap.txt";
+my $chaifen_file = "xiaoming-output/output-20261011-061440/source/chaifen-all.txt";
+my $roots_file = "xiaoming-output/output-20261011-061440/thread-06/output-keymap.txt";
 my $is_trailing = 0;    # 是否使用每字的末根
 
 GetOptions(

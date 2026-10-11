@@ -383,6 +383,9 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
   }
 ' "$1/roots.tsv" > "$1/mabiao.tsv"
 
+# skip html generate because it's slow
+[ -z "${NO_HTML:-}" ] || exit 0
+
 echo "Writing $1/$SCHEMA.js ..."
 "$TYPER_ROOT/scripts/turn-roots-chaifen-mabiao-into-js.pl" "$1/roots.tsv" "$1/chaifen.tsv" "$1/mabiao.tsv" > "$1/$SCHEMA.js"
 
