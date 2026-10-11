@@ -701,3 +701,7 @@ if sed -ne '/^\s*\[weights.simple_code\]/,/^\s*\[/p' "$CONFIG_TOML" | grep -qi '
     echo '(13) 替换 input-fixed.txt 和 input-division.txt 中的 .A, .S, .Y  为 .0, .1, .2 以让码灵能计算简码 ...'
     perl -CSDA -i -lpE 's/(\S)\.A/\1.0/g;  s/(\S)\.S/\1.1/g;  s/(\S)\.Y/\1.2/g' input-fixed.txt input-division.txt
 fi
+
+echo
+echo '数据准备工作成功完成！'
+
