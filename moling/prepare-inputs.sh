@@ -472,19 +472,27 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
 
   # 潇明声码约束
   if ($ENV{SCHEMA} eq "xiaoming") {
-    %stroke_mapping = qw( 1 d 2 k 3 f 4 j 5 i 6 e );
+    ### 2026-10-11: 潇明不再使用人为定义好的笔画映射，以利于退火优化时得到更好的当量
+    #%stroke_mapping = qw( 1 d 2 k 3 f 4 j 5 i 6 e );
     if (length($F[1]) > 1) {
         push @{ $xiaoming_consonants{ substr($F[1], 0, 1) } }, $F[0];
     } else {
-        print "$F[0].S\t", $stroke_mapping{ $strokes{ $F[0] } };
+        #print "$F[0].S\t", $stroke_mapping{ $strokes{ $F[0] } };
+        push @{ $xiaoming_strokes{ $strokes{ $F[0] } } }, "$F[0].S";
     }
-    print "$F[0].Y\t", $stroke_mapping{ $strokes{ $F[0] } };
+    #print "$F[0].Y\t", $stroke_mapping{ $strokes{ $F[0] } };
+    push @{ $xiaoming_strokes{ $strokes{ $F[0] } } }, "$F[0].Y";
     next;
 
     END {
         for (sort keys %xiaoming_consonants) {
             print "# $_";
             print join(" ", map { "$_.S" } @{ $xiaoming_consonants{$_} }), "\t", join(" ", split /\s*/, "dfjkei");
+        }
+
+        for (sort keys %xiaoming_strokes) {
+            print "# $_";
+            print join(" ", map { "$_" } @{ $xiaoming_strokes{$_} }), "\t", join(" ", split /\s*/, "dfjkei");
         }
     }
   }
