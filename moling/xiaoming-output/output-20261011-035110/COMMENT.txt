@@ -1,0 +1,1 @@
+./optimize.sh -c config-xiaoming.toml optimize --seed-keymap output-20261010-225330/thread-04/output-keymap.txt : round-28: 当量硬顶1.252，键位收回第14轮，从第14轮T4起步

@@ -1,0 +1,1 @@
+./optimize.sh -c config-xiaoming.toml optimize --seed-keymap output-20261011-035110/thread-04/output-keymap.txt : round-29: 当量硬顶收到1.249，从第28轮T4起步

@@ -1,0 +1,1 @@
+./optimize.sh -c config-xiaoming.toml optimize --seed-keymap output-20261011-071720/thread-00/output-keymap.txt : round-33: P高惩罚收到5，静重目标保持120，从第32轮T0起步
