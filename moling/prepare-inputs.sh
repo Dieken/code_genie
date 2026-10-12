@@ -504,7 +504,9 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
     if ($ENV{SCHEMA} eq "yaoling") {
         push @{ $yaoling_consonants{$a} }, $F[0];    # 妖灵的声母重新映射到声码，并且对应固定的韵码
     } else {
-        if ($ENV{OPTIMIZE_KEYS} =~ /$a/) {
+        if ($F[0] eq '口' && $ENV{OPTIMIZE_KEYS} =~ /K/) {      # 单独映射高频根「口」的声母 k
+            push @{ $consonants{$F[0]} }, $F[0];
+        } elsif ($ENV{OPTIMIZE_KEYS} =~ /$a/) {
             push @{ $consonants{$a} }, $F[0];
         } else {
             # 补充处理自行提供的 roots.txt
