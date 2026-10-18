@@ -178,7 +178,7 @@ export CHAIFEN_ALL_TXT="$SOURCE/chaifen-all.txt"
 perl -CSDA -F'\t' -lanE '$F[1]=~s/\s+//g; print "$F[0]\t$F[1]"' "$CHAIFEN_ALL_TXT" > "$1/chaifen.tsv"
 
 echo "Writing $1/mabiao.tsv ..."
-perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
+perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use List::Util qw/min/;
   $roots{$F[0]} = lc($F[1]);
 
   END {
@@ -300,7 +300,7 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE '
       $dup_freq /= $total_freq;
       printf STDERR "全码长: %.2f 动重: %.2f‱\n", $full_code_len,  10000 * $dup_freq;
 
-      for $i (2 .. 3) {
+      for $i (2 .. min(3, $ENV{MAX_CODE_LEN} - 1)) {
           while (($k, $v) = each %chars) {
               $v->{score} = ($v->{len} - $i) * $v->{freq} / $total_freq / $full_code_len;                   # 节约码长相对全码长的比例
               if ($v->{len} > length($v->{code})) {     # 非首选
