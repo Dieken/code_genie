@@ -10,14 +10,14 @@ fixed = "input-fixed.txt"        # 固定字根文件
 dynamic = "input-roots.txt"      # 动态字根文件
 splits = "input-division.txt"    # 拆分表文件
 pair_equiv = "pair_equivalence.txt"  # 字根对当量文件
-key_dist = "key_distribution.txt"    # 用指分布文件
+key_dist = "key_distribution-moqing.txt"    # 用指分布文件
 
 # -------------------------------------------------------------------------
 # 🌡️ 模拟退火参数
 # -------------------------------------------------------------------------
 [annealing]
-threads = 4              # 并行线程数
-total_steps = 2000000    # 总迭代步数
+threads = 8              # 并行线程数（第 1 轮摸底）
+total_steps = 20000000   # 第 16 轮：T4 前沿长程细化
 temp_start = 0.005       # 初始温度
 temp_end = 0.00005       # 结束温度
 comfort_temp = 0.0005    # 舒适温度区间
@@ -50,39 +50,41 @@ conflict_weight_by_freq = false  # 冲突排序：false=按汉字数量(优化�
 allowed = "qwertyuiopasdfghjklxcvbnm"
 # 键位显示顺序（用于输出报告）
 display_order = "qwertyuiopasdfghjklzxcvbnm"
+# 全码末键属于这些键时不追加虚拟空格转移当量
+termination_keys = "aeio_"
 
 # -------------------------------------------------------------------------
 # ⚖️ 权重配置
 # -------------------------------------------------------------------------
 [weights.full_code]
 # 全码部分权重（总和应为 1.0）
-collision_count = 0.13    # 重码数权重
-collision_rate = 0.47     # 重码率权重
-equivalence = 0.36        # 当量权重
-equiv_cv = 0.01           # 当量变异系数权重
-distribution = 0.03       # 分布偏差权重
+collision_count = 0.02    # 第 46 轮：撤回第45轮退化调整，恢复重码保护
+collision_rate = 0.00     # 第 20 轮让出重码率梯度
+equivalence = 0.96        # 第 44 轮：增加全码当量权重
+equiv_cv = 0.02           # 当量变异系数权重
+distribution = 0.00       # 分布不占梯度
 
 [weights.simple_code]
 # 简码优化开关与权重
 enabled = true           # 是否启用简码优化
-full_code_weight = 0.6   # 全码目标总权重
-simple_code_weight = 0.4 # 简码目标总权重
+full_code_weight = 0.4   # 第 42 轮：撤回简码总权重实验
+simple_code_weight = 0.6
 
 # 简码内部子权重（总和应为 1.0）
-collision_count = 0.1    # 重码数权重
-collision_rate = 0.3     # 重码率权重
-freq = 0.2               # 频率覆盖权重
-equiv = 0.2              # 当量权重
-dist = 0.2               # 分布偏差权重
+collision_count = 0.03   # 重码数权重
+collision_rate = 0.10    # 保留重码率安全约束
+freq = 0.05              # 频率覆盖权重
+equiv = 0.78             # 第 49 轮：小幅提高简码当量权重
+dist = 0.04              # 第 49 轮：从分布权重转出
 
 # 简码评估性能优化：激活、权重渐进、候选字与对账配置
 simple_start_progress = 0.4      # 简码计算激活进度阈值（进度 = 当前步/总步数；建议落在舒适区前沿，默认 0.4）
 simple_ramp_progress = 0.1       # 有效权重从 0 渐进到目标权重的进度长度（默认 0.1）
 simple_activation_reheat = 1.2   # 激活当刻温度升温倍率（独立于 reheat_factor；合理范围 [1.0, temp_start/激活基温]，默认 1.2）
 simple_coverage_ratio = 1.0      # 候选字累计字频覆盖率阈值（默认 1.0）
-simple_active_coverage = 0.90    # 退火期 active 候选覆盖率（须 ≤ simple_coverage_ratio）；其余(passive)候选仅在最终上报与输出时纳入，以降低每步简码计算量（默认 0.90）
+simple_active_coverage = 0.90    # 退火期 active 候选覆盖率
 reconcile_interval_ratio = 0.05  # 周期对账间隔比例，M = floor(total_steps × ratio)，M ≥ 1（默认 0.05）
-simple_assign_mode = "efficiency" # 桶内出简排序模式："frequency" 或 "efficiency"（默认 "efficiency"）
+simple_assign_mode = "frequency" # 第 9 轮：按频率分配简码，直接对照 efficiency
 simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保护汉字的全码；0=保护全部汉字，N>0=仅保护全字频前 N 名（默认 0）
 
 # -------------------------------------------------------------------------
@@ -177,7 +179,7 @@ distribution = 0.0           # 目标分布偏差
 low_weight = 0.01            # 低权重系数（已达目标时的持续优化动力）
 collision_count_max = 0.0    # 硬约束：重码数超过此值直接拒绝（0 = 不启用）
 collision_rate_max = 0.0     # 硬约束：重码率超过此值直接拒绝（0 = 不启用）
-equivalence_max = 0.0        # 硬约束：当量超过此值直接拒绝（0 = 不启用）
+equivalence_max = 1.26        # 第 43 轮：按1.29简码目标继续收紧全码当量
 equiv_cv_max = 0.0           # 硬约束：当量变异系数超过此值直接拒绝（0 = 不启用）
 distribution_max = 0.0       # 硬约束：分布偏差超过此值直接拒绝（0 = 不启用）
 
@@ -192,5 +194,5 @@ low_weight = 0.01            # 低权重系数
 collision_count_max = 0.0    # 硬约束：简码重码数超过此值直接拒绝（0 = 不启用）
 collision_rate_max = 0.0     # 硬约束：简码重码率超过此值直接拒绝（0 = 不启用）
 freq_max = 0.0               # 硬约束：覆盖率低于此值直接拒绝（0 = 不启用）
-equiv_max = 0.0              # 硬约束：简码当量超过此值直接拒绝（0 = 不启用）
+equiv_max = 1.22              # 第 39 轮：保持热力前沿，收紧简码当量硬上限
 dist_max = 0.0               # 硬约束：简码分布偏差超过此值直接拒绝（0 = 不启用）

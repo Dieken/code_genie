@@ -1,0 +1,1 @@
+./optimize.sh -c config-moqing.toml optimize --seed-keymap moqing-output/output-20261018-155052/thread-02/output-keymap.txt : round-49: 简码 equiv 0.75→0.78、dist 0.07→0.04，按1.29简码目标从第48轮 T02 增量优化
