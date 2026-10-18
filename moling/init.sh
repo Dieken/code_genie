@@ -39,12 +39,14 @@ case "$SCHEMA" in
         : "${OPTIMIZE_KEY_z=v}"         # 25 键方案，映射到 v，https://shurufa.app/docs/ling.html#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-z-%E9%94%AE
         export OPTIMIZE_KEY_z OPTIMIZE_KEYS
 
-        : "${TOP_ROOT_KEYS:=sdfghjkl}"                  # 高频字根大码约束
-        : "${HOT_ROOT_KEYS:=wru sdfghjkl vnm}"          # 中频字根大码约束
+        : "${TOP_ROOT_KEYS:=qwrtyup sdfghjkl xcvbnm}"   # 高频字根大码约束
+        : "${HOT_ROOT_KEYS:=qwrtyup sdfghjkl xcvbnm}"   # 中频字根大码约束
         : "${ALL_ROOT_KEYS:=qwrtyup sdfghjkl xcvbnm}"   # 低频字根大码约束
         : "${B_AREA_KEYS:=eaio}"                        # B 区小码 or 补码约束，实际在此脚本并没有用到，只用于后期简码分配
 
         MAX_CODE_LEN=3                                  # 最大码长为 3
+
+        export ENABLE_MOQING_ALL_SHORTCODE=1            # 对应 config-moqing.toml 里 commit_alt_hand_only=false
 
         ;;
 
