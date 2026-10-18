@@ -444,8 +444,9 @@ pub fn save_equiv_distribution_to_dir(ctx: &OptContext, assignment: &[u8], dir: 
 
     let mut char_equivs: Vec<(char, f64, u64)> = Vec::new();
     for (i, (ch, _, _)) in ctx.raw_splits.iter().enumerate() {
-        let equiv = ctx.calc_equiv_from_parts(i, assignment);
-        char_equivs.push((*ch, equiv, ctx.char_infos[i].frequency));
+        if let Some(equiv) = ctx.calc_equiv_from_parts(i, assignment) {
+            char_equivs.push((*ch, equiv, ctx.char_infos[i].frequency));
+        }
     }
     char_equivs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 

@@ -298,7 +298,7 @@ fn run_evaluate(
     // 构建 OptContext
     let scale_config = types::ScaleConfig::default();
     let weights = cfg.get_weight_config();
-    let ctx = OptContext::new_with_fixed(
+    let ctx = OptContext::new_with_fixed_and_termination(
         &splits,
         &fixed_roots,
         &groups,
@@ -309,6 +309,7 @@ fn run_evaluate(
         weights,
         TargetsConfig::default(),
         &cfg.get_fixed_simple_codes(),
+        &cfg.keys.termination_keys,
     );
 
     println!("  编码基数: {}", ctx.code_base);
@@ -518,8 +519,9 @@ fn build_evaluate_report(
     // 计算每个汉字的当量
     let mut char_equivs: Vec<(char, f64, u64)> = Vec::new();
     for (i, (ch, _, _)) in ctx.raw_splits.iter().enumerate() {
-        let equiv = ctx.calc_equiv_from_parts(i, assignment);
-        char_equivs.push((*ch, equiv, ctx.char_infos[i].frequency));
+        if let Some(equiv) = ctx.calc_equiv_from_parts(i, assignment) {
+            char_equivs.push((*ch, equiv, ctx.char_infos[i].frequency));
+        }
     }
     char_equivs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
@@ -935,7 +937,7 @@ fn run_optimize(
         } else {
         println!("\n📐 正在进行初始尺度校准...");
         let temp_scale = types::ScaleConfig::default();
-        let temp_ctx = OptContext::new_with_fixed(
+        let temp_ctx = OptContext::new_with_fixed_and_termination(
             &splits,
             &fixed_roots,
             &dynamic_groups,
@@ -946,6 +948,7 @@ fn run_optimize(
             weights,
             TargetsConfig::default(),
             &cfg.get_fixed_simple_codes(),
+        &cfg.keys.termination_keys,
         );
 
         let initial_assignment = annealing::smart_init(&temp_ctx, cfg);
@@ -1100,7 +1103,7 @@ fn run_optimize(
         None => {
             let equiv_table_2 = loader::load_pair_equivalence(&cfg.files.pair_equiv);
             let key_dist_config_2 = loader::load_key_distribution(&cfg.files.key_dist);
-            OptContext::new_with_fixed(
+            OptContext::new_with_fixed_and_termination(
                 &splits,
                 &fixed_roots,
                 &dynamic_groups,
@@ -1111,6 +1114,7 @@ fn run_optimize(
                 weights,
                 targets_config,
                 &cfg.get_fixed_simple_codes(),
+                &cfg.keys.termination_keys,
             )
         }
     };
@@ -1404,7 +1408,7 @@ fn run_resume(dir: &str) {
         SimpleCodeConfig { levels: vec![] }
     };
     let weights = cfg.get_weight_config();
-    let ctx = OptContext::new_with_fixed(
+    let ctx = OptContext::new_with_fixed_and_termination(
         &splits,
         &fixed_roots,
         &dynamic_groups,
@@ -1415,6 +1419,7 @@ fn run_resume(dir: &str) {
         weights,
         cfg.get_targets_config(),
         &cfg.get_fixed_simple_codes(),
+        &cfg.keys.termination_keys,
     );
     evaluator::log_bucket_backends(&ctx);
 

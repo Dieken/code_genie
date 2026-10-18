@@ -43,6 +43,8 @@ pub struct OptContext {
     pub fixed_roots: HashMap<String, u8>,
     /// 当量表
     pub equiv_table: EquivTable,
+    /// 全码终止键掩码：末键属于这些键时不追加虚拟空格当量。
+    pub termination_key_mask: [bool; EQUIV_TABLE_SIZE],
     /// 键位分布配置
     pub key_dist_config: [KeyDistConfig; EQUIV_TABLE_SIZE],
     /// 总频率
@@ -144,7 +146,7 @@ impl OptContext {
         targets_config: TargetsConfig,
     ) -> Self {
         // 无固定简码的常规构造（向后兼容既有调用点）
-        Self::new_with_fixed(
+        Self::new_with_fixed_and_termination(
             splits,
             fixed_roots,
             groups,
@@ -155,14 +157,11 @@ impl OptContext {
             weights,
             targets_config,
             &[],
+            "_",
         )
     }
 
-    /// 创建优化上下文（含固定简码映射，需求 21）。
-    ///
-    /// `fixed_simple_codes` 为 `(汉字, 字面简码串)` 列表（简码串可选以 `_` 结尾表示空格上屏）。
-    /// 仅在启用简码时生效：本方法在退火前一次性完成固定简码的级别归属、一致性/长度校验、
-    /// 候选字解耦与常量贡献预计算（不一致/越长/无效项告警并拒绝）。
+    /// 创建优化上下文（含固定简码映射，默认全码终止键为 `_`）。
     pub fn new_with_fixed(
         splits: &[(char, Vec<String>, u64)],
         fixed_roots: &HashMap<String, u8>,
@@ -175,6 +174,41 @@ impl OptContext {
         targets_config: TargetsConfig,
         fixed_simple_codes: &[(char, String)],
     ) -> Self {
+        Self::new_with_fixed_and_termination(
+            splits,
+            fixed_roots,
+            groups,
+            equiv_table,
+            key_dist_config,
+            scale_config,
+            simple_config,
+            weights,
+            targets_config,
+            fixed_simple_codes,
+            "_",
+        )
+    }
+
+    /// 创建优化上下文（含固定简码映射和全码终止键配置）。
+    pub fn new_with_fixed_and_termination(
+        splits: &[(char, Vec<String>, u64)],
+        fixed_roots: &HashMap<String, u8>,
+        groups: &[RootGroup],
+        equiv_table: EquivTable,
+        key_dist_config: [KeyDistConfig; EQUIV_TABLE_SIZE],
+        scale_config: ScaleConfig,
+        simple_config: SimpleCodeConfig,
+        weights: WeightConfig,
+        targets_config: TargetsConfig,
+        fixed_simple_codes: &[(char, String)],
+        termination_keys: &str,
+    ) -> Self {
+        let mut termination_key_mask = [false; EQUIV_TABLE_SIZE];
+        for c in termination_keys.chars() {
+            if let Some(k) = char_to_key_index(c) {
+                termination_key_mask[k] = true;
+            }
+        }
         let enable_simple_code = weights.enable_simple_code;
         let mut root_to_group: HashMap<String, usize> = HashMap::new();
         for (gi, g) in groups.iter().enumerate() {
@@ -563,13 +597,13 @@ impl OptContext {
                         }
                     }
 
-                    // 常量贡献（需求 21.8/21.9）：核心键位转移当量 + 可选末位上屏键转移；divisor 取核心码长。
+                    // 常量贡献：只按实际有效按键对计算当量；没有有效按键对的固定简码不参与当量统计。
                     let freq = char_infos[ci].frequency;
                     let freq_f = freq as f64;
                     fixed_covered_freq += freq;
-                    fixed_equiv_freq_sum += freq;
 
                     let mut total_equiv = 0.0f64;
+                    let mut pair_count = core_len.saturating_sub(1);
                     let mut prev = core_keys[0] as usize;
                     for i in 1..core_len {
                         let cur = core_keys[i] as usize;
@@ -578,9 +612,12 @@ impl OptContext {
                     }
                     if let Some(ck) = commit_key {
                         total_equiv += equiv_table[prev][ck as usize];
+                        pair_count += 1;
                     }
-                    let eq = total_equiv / core_len as f64;
-                    fixed_equiv_weighted += eq * freq_f;
+                    if pair_count > 0 {
+                        fixed_equiv_freq_sum += freq;
+                        fixed_equiv_weighted += (total_equiv / pair_count as f64) * freq_f;
+                    }
 
                     // 分布：核心键位各 +freq；上屏键（若有）+freq。
                     let mut effective_len = core_len;
@@ -639,6 +676,7 @@ impl OptContext {
             groups: groups.to_vec(),
             fixed_roots: fixed_roots.clone(),
             equiv_table,
+            termination_key_mask,
             key_dist_config,
             total_frequency,
             code_base,
@@ -696,25 +734,38 @@ impl OptContext {
         code
     }
 
-    /// 从拆分计算等价值
+    /// 从拆分计算全码等价值。返回 `None` 表示没有有效按键对，不参与当量统计。
     #[inline(always)]
-    pub fn calc_equiv_from_parts(&self, ci: usize, assignment: &[u8]) -> f64 {
+    pub fn calc_equiv_from_parts(&self, ci: usize, assignment: &[u8]) -> Option<f64> {
         let info = &self.char_infos[ci];
         let n = info.parts.len();
         if n == 0 {
-            return 0.0;
+            return None;
         }
 
         let mut prev_key = self.resolve_key(info.parts[0], assignment) as usize;
         let mut total = 0.0;
+        let mut pair_count = n.saturating_sub(1);
 
         for i in 1..n {
             let cur_key = self.resolve_key(info.parts[i], assignment) as usize;
             total += self.equiv_table[prev_key][cur_key];
             prev_key = cur_key;
         }
-        total += self.equiv_table[prev_key][KEY_SPACE];
-        total / n as f64
+
+        if n < self.max_parts
+            && prev_key != KEY_SPACE
+            && !self.termination_key_mask[prev_key]
+        {
+            total += self.equiv_table[prev_key][KEY_SPACE];
+            pair_count += 1;
+        }
+
+        if pair_count == 0 {
+            None
+        } else {
+            Some(total / pair_count as f64)
+        }
     }
 
     /// 计算简码
@@ -782,10 +833,9 @@ impl OptContext {
         true
     }
 
-    /// 计算简码等价值（需求 20.7）。
-    ///
-    /// `commit_key`：该字实际分得的上屏键（`Some(k)` 计入末位核心键→k 的转移当量；`None` 不计）。
-    /// divisor 取核心指令步数 n（保持「每键平均」语义），与全量/增量路径一致。
+    /// 计算简码等价值（需求 20.7）。返回 `None` 表示没有有效按键对，不参与当量统计。
+    /// `commit_key` 为 `Some(k)` 时计入末位核心键到该键的转移；`None` 时不追加虚拟键。
+    /// 分母始终是实际按键对数量，而不是固定的核心键数量。
     #[inline]
     pub fn calc_simple_equiv(
         &self,
@@ -793,41 +843,46 @@ impl OptContext {
         level_idx: usize,
         assignment: &[u8],
         commit_key: Option<u8>,
-    ) -> f64 {
+    ) -> Option<f64> {
         let si = &self.char_simple_infos[ci];
         let instr = match si.level_instructions.get(level_idx) {
             Some(Some(ref v)) => v,
-            _ => return 0.0,
+            _ => return None,
         };
         let n = instr.len();
         if n == 0 {
-            return 0.0;
+            return None;
         }
 
         let (root_idx0, code_idx0) = instr[0];
         let lr0 = &si.logical_roots[root_idx0];
         if code_idx0 >= lr0.full_code_parts.len() {
-            return 0.0;
+            return None;
         }
         let mut prev_key = self.resolve_key(lr0.full_code_parts[code_idx0], assignment) as usize;
         let mut total = 0.0;
+        let mut pair_count = n.saturating_sub(1);
 
         for i in 1..n {
             let (ri, ci_code) = instr[i];
             let lr = &si.logical_roots[ri];
             if ci_code >= lr.full_code_parts.len() {
-                return 0.0;
+                return None;
             }
             let cur_key = self.resolve_key(lr.full_code_parts[ci_code], assignment) as usize;
             total += self.equiv_table[prev_key][cur_key];
             prev_key = cur_key;
         }
-        // 上屏键（需求 20.7）：该字实际分得上屏键 `commit_key` 时，计入末位核心键到该键的转移当量。
-        // divisor 仍取核心步数 n（此处 n >= 1，无除零风险）。`None`（无上屏键）时不含该项。
         if let Some(ck) = commit_key {
             total += self.equiv_table[prev_key][ck as usize];
+            pair_count += 1;
         }
-        total / n as f64
+
+        if pair_count == 0 {
+            None
+        } else {
+            Some(total / pair_count as f64)
+        }
     }
 
     /// 出简长度资格（需求 22）：判断候选字 `ci` 在级别 `li` 的核心码长（指令步数）是否严格短于全码长度。

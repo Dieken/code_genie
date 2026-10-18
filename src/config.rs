@@ -47,6 +47,13 @@ pub struct FilesConfig {
 pub struct KeysConfig {
     pub allowed: String,
     pub display_order: String,
+    /// 全码末键属于这些键时，不追加虚拟空格转移当量。
+    #[serde(default = "default_termination_keys")]
+    pub termination_keys: String,
+}
+
+fn default_termination_keys() -> String {
+    "_".to_string()
 }
 
 /// 权重配置
@@ -670,6 +677,7 @@ impl Default for Config {
             keys: KeysConfig {
                 allowed: "qwertyuiopasdfghjklzxcvbnm".to_string(),
                 display_order: "qwertyuiopasdfghjklzxcvbnm".to_string(),
+                termination_keys: default_termination_keys(),
             },
             weights: WeightsConfig {
                 full_code: FullCodeWeights {

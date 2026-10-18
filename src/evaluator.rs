@@ -70,12 +70,8 @@ struct SimpleLevelTracker {
     key_usage: [f64; EQUIV_TABLE_SIZE],
     /// 键击次数
     key_presses: f64,
-    /// 出简贡献缓存（按 ci 索引，仅当 `selected[ci]` 时有效）：选中时刻该字的简码当量值。
-    ///
-    /// 用于在「取消选中 / 刷新」时精确扣除该字曾累加进 `equiv_weighted` 的贡献
-    /// （`sel_equiv[ci] * freq`）。因增量更新发生在 `assignment` 已更新之后，无法再由
-    /// 当前 `assignment` 复原旧贡献，故在选中时刻就地存储，保证逐字段与全量一致（需求 1.4）。
-    sel_equiv: Vec<f64>,
+    /// 出简贡献缓存（按 ci 索引，仅当 `selected[ci]` 且有有效按键对时有效）。
+    sel_equiv: Vec<Option<f64>>,
     /// 出简贡献缓存（按 ci 索引，仅当 `selected[ci]` 时有效）：选中时刻该字的简码键位列表。
     /// 配合 `sel_keys_len` 使用，避免存储变长 `Vec` 带来的每步堆分配（需求 3.1）。
     sel_keys: Vec<[u8; SIMPLE_KEYS_CAP]>,
@@ -112,7 +108,7 @@ struct BucketSnap {
 struct ContribUndo {
     li: usize,
     ci: usize,
-    old_equiv: f64,
+    old_equiv: Option<f64>,
     old_keys: [u8; SIMPLE_KEYS_CAP],
     old_len: u8,
 }
@@ -306,7 +302,7 @@ impl SimpleEvaluator {
                     equiv_freq_sum: 0,
                     key_usage: [0.0; EQUIV_TABLE_SIZE],
                     key_presses: 0.0,
-                    sel_equiv: vec![0.0; n_chars],
+                    sel_equiv: vec![None; n_chars],
                     sel_keys: vec![[0u8; SIMPLE_KEYS_CAP]; n_chars],
                     sel_keys_len: vec![0u8; n_chars],
                 }
@@ -651,12 +647,13 @@ impl SimpleEvaluator {
                     self.all_assigned_flags[ci] = true;
                     self.levels[li].covered_freq += freq;
 
-                    let eq = ctx.calc_simple_equiv(ci, li, assignment, commit_key);
-                    self.levels[li].equiv_weighted += eq * freq_f;
-                    self.levels[li].equiv_freq_sum += freq;
-
-                    // 记录选中时刻的当量与键位贡献，供后续增量「取消选中/刷新」精确扣除。
-                    self.levels[li].sel_equiv[ci] = eq;
+                    if let Some(eq) = ctx.calc_simple_equiv(ci, li, assignment, commit_key) {
+                        self.levels[li].equiv_weighted += eq * freq_f;
+                        self.levels[li].equiv_freq_sum += freq;
+                        self.levels[li].sel_equiv[ci] = Some(eq);
+                    } else {
+                        self.levels[li].sel_equiv[ci] = None;
+                    }
                     let has_keys = self.fill_keys_with_commit(ctx, ci, li, assignment, commit_key);
                     if has_keys {
                         let klen = self.key_buf.len();
@@ -1114,7 +1111,6 @@ impl SimpleEvaluator {
         self.all_assigned_flags[ci] = true;
 
         self.levels[li].covered_freq += freq;
-        self.levels[li].equiv_freq_sum += freq;
 
         let eq = ctx.calc_simple_equiv(ci, li, assignment, commit_key);
         let has_keys = self.fill_keys_with_commit(ctx, ci, li, assignment, commit_key);
@@ -1131,8 +1127,13 @@ impl SimpleEvaluator {
             old_keys: lvl.sel_keys[ci],
             old_len: lvl.sel_keys_len[ci],
         });
-        lvl.equiv_weighted += eq * freq_f;
-        lvl.sel_equiv[ci] = eq;
+        if let Some(eq) = eq {
+            lvl.equiv_weighted += eq * freq_f;
+            lvl.equiv_freq_sum += freq;
+            lvl.sel_equiv[ci] = Some(eq);
+        } else {
+            lvl.sel_equiv[ci] = None;
+        }
         for i in 0..n {
             let k = self.key_buf[i];
             lvl.sel_keys[ci][i] = k;
@@ -1143,8 +1144,10 @@ impl SimpleEvaluator {
 
         // 全局聚合同步（需求 29.3）：与上面级别聚合施加相同 Δ。
         self.g_covered_freq += freq;
-        self.g_equiv_freq_sum += freq;
-        self.g_equiv_weighted += eq * freq_f;
+        if let Some(eq) = eq {
+            self.g_equiv_freq_sum += freq;
+            self.g_equiv_weighted += eq * freq_f;
+        }
         for i in 0..n {
             let k = self.key_buf[i];
             self.g_key_usage[k as usize] += freq_f;
@@ -1173,8 +1176,10 @@ impl SimpleEvaluator {
         let lvl = &mut self.levels[li];
         lvl.selected[ci] = false;
         lvl.covered_freq -= freq;
-        lvl.equiv_freq_sum -= freq;
-        lvl.equiv_weighted -= lvl.sel_equiv[ci] * freq_f;
+        if let Some(eq) = lvl.sel_equiv[ci] {
+            lvl.equiv_freq_sum -= freq;
+            lvl.equiv_weighted -= eq * freq_f;
+        }
         let klen = lvl.sel_keys_len[ci] as usize;
         for i in 0..klen {
             let k = lvl.sel_keys[ci][i];
@@ -1184,8 +1189,10 @@ impl SimpleEvaluator {
 
         // 全局聚合同步（需求 29.3）：sel_equiv/sel_keys 在 deselect 中不被改写，可在 lvl 借用结束后回读。
         self.g_covered_freq -= freq;
-        self.g_equiv_freq_sum -= freq;
-        self.g_equiv_weighted -= self.levels[li].sel_equiv[ci] * freq_f;
+        if let Some(eq) = self.levels[li].sel_equiv[ci] {
+            self.g_equiv_freq_sum -= freq;
+            self.g_equiv_weighted -= eq * freq_f;
+        }
         for i in 0..klen {
             let k = self.levels[li].sel_keys[ci][i];
             self.g_key_usage[k as usize] -= freq_f;
@@ -1223,7 +1230,10 @@ impl SimpleEvaluator {
             old_len: lvl.sel_keys_len[ci],
         });
         // 扣除旧值型贡献
-        lvl.equiv_weighted -= lvl.sel_equiv[ci] * freq_f;
+        if let Some(old_eq) = lvl.sel_equiv[ci] {
+            lvl.equiv_freq_sum -= freq;
+            lvl.equiv_weighted -= old_eq * freq_f;
+        }
         let old_len = lvl.sel_keys_len[ci] as usize;
         for i in 0..old_len {
             let k = lvl.sel_keys[ci][i];
@@ -1231,8 +1241,13 @@ impl SimpleEvaluator {
         }
         lvl.key_presses -= freq_f * old_len as f64;
         // 加入新值型贡献并刷新缓存
-        lvl.equiv_weighted += eq * freq_f;
-        lvl.sel_equiv[ci] = eq;
+        if let Some(new_eq) = eq {
+            lvl.equiv_weighted += new_eq * freq_f;
+            lvl.equiv_freq_sum += freq;
+            lvl.sel_equiv[ci] = Some(new_eq);
+        } else {
+            lvl.sel_equiv[ci] = None;
+        }
         for i in 0..n {
             let k = self.key_buf[i];
             lvl.sel_keys[ci][i] = k;
@@ -1241,9 +1256,21 @@ impl SimpleEvaluator {
         lvl.sel_keys_len[ci] = n as u8;
         lvl.key_presses += freq_f * klen as f64;
 
-        // 全局聚合同步（需求 29.3）：covered_freq/equiv_freq_sum 不变（字仍选中、字频不变）；
-        // 当量与键用量按「减旧值型贡献、加新值型贡献」同步。
-        self.g_equiv_weighted += (eq - g_old_equiv) * freq_f;
+        // 全局聚合同步（需求 29.3）：当量有效性变化时同步调整有效字频分母。
+        match (g_old_equiv, eq) {
+            (Some(old_eq), Some(new_eq)) => {
+                self.g_equiv_weighted += (new_eq - old_eq) * freq_f;
+            }
+            (Some(old_eq), None) => {
+                self.g_equiv_freq_sum -= freq;
+                self.g_equiv_weighted -= old_eq * freq_f;
+            }
+            (None, Some(new_eq)) => {
+                self.g_equiv_freq_sum += freq;
+                self.g_equiv_weighted += new_eq * freq_f;
+            }
+            (None, None) => {}
+        }
         for i in 0..g_old_len {
             let k = g_old_keys[i];
             self.g_key_usage[k as usize] -= freq_f;
@@ -1883,8 +1910,8 @@ pub(crate) fn build_full_buckets(
 pub struct Evaluator {
     /// 当前编码列表
     current_codes: Vec<usize>,
-    /// 当前等价值列表
-    current_equiv_val: Vec<f64>,
+    /// 当前等价值列表；`None` 表示该字没有有效按键对。
+    current_equiv_val: Vec<Option<f64>>,
     /// 全码桶存储（取代基线的 code_to_chars/bucket_freq_sum/bucket_max_freq/bucket_first
     /// 四个 code_space 大小数组）。密集/稀疏后端按 code_space 阈值自适应（需求 1/5）。
     full_buckets: BucketStore<FullBucket>,
@@ -1908,8 +1935,10 @@ pub struct Evaluator {
 
     /// 加权等价值总和
     total_equiv_weighted: f64,
-    /// 加权等价值平方总和
+    /// 加权等价值平方总和（仅统计有有效按键对的字）
     total_equiv_sq_weighted: f64,
+    /// 有效当量字频分母
+    equiv_frequency: u64,
 
     /// 键位加权使用统计
     pub key_weighted_usage: [f64; EQUIV_TABLE_SIZE],
@@ -1991,6 +2020,7 @@ impl Evaluator {
 
         let mut total_equiv_weighted = 0.0f64;
         let mut total_equiv_sq_weighted = 0.0f64;
+        let mut equiv_frequency = 0u64;
         let mut key_weighted_usage = [0.0f64; EQUIV_TABLE_SIZE];
         let mut total_key_presses = 0.0f64;
 
@@ -2013,8 +2043,11 @@ impl Evaluator {
                 b.max_freq = info.frequency;
             }
 
-            total_equiv_weighted += equiv * freq_f;
-            total_equiv_sq_weighted += equiv * equiv * freq_f;
+            if let Some(eq) = equiv {
+                total_equiv_weighted += eq * freq_f;
+                total_equiv_sq_weighted += eq * eq * freq_f;
+                equiv_frequency += info.frequency;
+            }
 
             for &p in &info.parts {
                 let k = ctx.resolve_key(p, assignment) as usize;
@@ -2113,6 +2146,7 @@ impl Evaluator {
             collision_frequency,
             total_equiv_weighted,
             total_equiv_sq_weighted,
+            equiv_frequency,
             key_weighted_usage,
             total_key_presses,
             total_frequency: ctx.total_frequency,
@@ -2196,11 +2230,26 @@ impl Evaluator {
         let freq = ctx.char_infos[ci].frequency;
         let freq_f = freq as f64;
 
-        // 更新等价值
+        // 更新等价值，并同步有效当量字频分母。
         let old_eq = self.current_equiv_val[ci];
         let new_eq = ctx.calc_equiv_from_parts(ci, assignment);
-        self.total_equiv_weighted += (new_eq - old_eq) * freq_f;
-        self.total_equiv_sq_weighted += (new_eq * new_eq - old_eq * old_eq) * freq_f;
+        match (old_eq, new_eq) {
+            (Some(old), Some(new)) => {
+                self.total_equiv_weighted += (new - old) * freq_f;
+                self.total_equiv_sq_weighted += (new * new - old * old) * freq_f;
+            }
+            (Some(old), None) => {
+                self.total_equiv_weighted -= old * freq_f;
+                self.total_equiv_sq_weighted -= old * old * freq_f;
+                self.equiv_frequency -= freq;
+            }
+            (None, Some(new)) => {
+                self.total_equiv_weighted += new * freq_f;
+                self.total_equiv_sq_weighted += new * new * freq_f;
+                self.equiv_frequency += freq;
+            }
+            (None, None) => {}
+        }
         self.current_equiv_val[ci] = new_eq;
 
         let old_code_u = old_code as u32;
@@ -2348,7 +2397,11 @@ impl Evaluator {
         }
 
         if t.equivalence_max > 0.0 {
-            let equiv = self.total_equiv_weighted * self.inv_total_frequency;
+            let equiv = if self.equiv_frequency > 0 {
+                self.total_equiv_weighted / self.equiv_frequency as f64
+            } else {
+                0.0
+            };
             if equiv > t.equivalence_max {
                 return false;
             }
@@ -2427,7 +2480,11 @@ impl Evaluator {
 
             // equivalence (equiv_mean)
             if ctx.weights.weight_equivalence > 0.0 {
-                let v = self.total_equiv_weighted * self.inv_total_frequency;
+                let v = if self.equiv_frequency > 0 {
+                    self.total_equiv_weighted / self.equiv_frequency as f64
+                } else {
+                    0.0
+                };
                 let s = ctx.scale_config.equivalence;
                 let d = (v - t.equivalence).max(0.0) * s;
                 score += ctx.weights.weight_equivalence * (d + d * d + lw * (v * s));
@@ -2464,7 +2521,11 @@ impl Evaluator {
             }
 
             if ctx.weights.weight_equivalence > 0.0 {
-                let weighted_equiv = self.total_equiv_weighted * self.inv_total_frequency;
+                let weighted_equiv = if self.equiv_frequency > 0 {
+                    self.total_equiv_weighted / self.equiv_frequency as f64
+                } else {
+                    0.0
+                };
                 score += ctx.weights.weight_equivalence
                     * weighted_equiv
                     * ctx.scale_config.equivalence;
@@ -2572,11 +2633,15 @@ impl Evaluator {
     /// 计算等价值变异系数
     #[inline(always)]
     pub fn calc_equiv_cv(&self) -> f64 {
-        let mean = self.total_equiv_weighted * self.inv_total_frequency;
+        if self.equiv_frequency == 0 {
+            return 0.0;
+        }
+        let inv_equiv_frequency = 1.0 / self.equiv_frequency as f64;
+        let mean = self.total_equiv_weighted * inv_equiv_frequency;
         if mean <= 0.0 {
             return 0.0;
         }
-        let mean_sq = self.total_equiv_sq_weighted * self.inv_total_frequency;
+        let mean_sq = self.total_equiv_sq_weighted * inv_equiv_frequency;
         let variance = mean_sq - mean * mean;
         if variance <= 0.0 {
             return 0.0;
@@ -2609,7 +2674,11 @@ impl Evaluator {
         Metrics {
             collision_count: self.total_collisions,
             collision_rate: self.collision_frequency as f64 * self.inv_total_frequency,
-            equiv_mean: self.total_equiv_weighted * self.inv_total_frequency,
+            equiv_mean: if self.equiv_frequency > 0 {
+                self.total_equiv_weighted / self.equiv_frequency as f64
+            } else {
+                0.0
+            },
             equiv_cv: self.calc_equiv_cv(),
             dist_deviation: self.calc_distribution_deviation(&ctx.key_dist_config),
         }
@@ -5956,21 +6025,24 @@ mod space_commit_and_length_tests {
                 }
             }
 
-            // (B) 当量口径：全 1 等量表 ⟹ 步数 n 的级别，false=(n-1)/n，true=n/n=1
+            // (B) 当量口径：按实际按键对数计算。全 1 等量表时，n 步无上屏键
+            // 只有 n-1 个按键对；n=1 且无上屏键时没有有效按键对，应返回 None。
             for ci in 0..n_chars {
                 for li in 0..n_levels {
                     let n = step_count(&ctx_f, ci, li);
-                    if n == 0 { continue; }
+                    if n == 0 {
+                        continue;
+                    }
                     let eq_f = ctx_f.calc_simple_equiv(ci, li, &asg, None);
                     let eq_t = ctx_t.calc_simple_equiv(ci, li, &asg, Some(KEY_SPACE as u8));
-                    let exp_f = (n as f64 - 1.0) / n as f64;
-                    let exp_t = 1.0;
-                    prop_assert!((eq_f - exp_f).abs() < 1e-9,
-                        "space=false 当量应为 (n-1)/n: got {} expect {}", eq_f, exp_f);
-                    prop_assert!((eq_t - exp_t).abs() < 1e-9,
-                        "space=true 当量应为 1.0（含尾随空格转移）: got {}", eq_t);
-                    // 差额恰为一个「末位键→KEY_SPACE」转移除以 n（此处等量表为 1）
-                    prop_assert!((eq_t - eq_f - 1.0 / n as f64).abs() < 1e-9);
+                    prop_assert_eq!(eq_t, Some(1.0));
+                    if n == 1 {
+                        prop_assert_eq!(eq_f, None,
+                            "单键且无上屏键时没有有效按键对");
+                    } else {
+                        prop_assert_eq!(eq_f, Some(1.0),
+                            "无上屏键应按 n-1 个实际按键对求平均");
+                    }
                 }
             }
 
@@ -6299,6 +6371,7 @@ mod fixed_simple_code_tests {
             // 固定字常量贡献（级别 0、单键、无空格、equiv_table 全零）：
             //   fixed_covered_freq = Σ freq；fixed_equiv_weighted = 0；fixed_key_presses = Σ freq×1
             let mut exp_cov = 0u64;
+            let mut exp_equiv_freq = 0u64;
             let mut exp_presses = 0.0f64;
             for fc in &ctx.simple_fixed_codes {
                 // 级别归属正确：码长（核心键位数）== 该级简码键位数（此处级别 0 → 1 键）
@@ -6307,10 +6380,14 @@ mod fixed_simple_code_tests {
                 prop_assert_eq!(fc.keys.len(), 1, "核心码长应为 1");
                 let f = ctx.char_infos[fc.ci].frequency;
                 exp_cov += f;
+                let pair_count = fc.keys.len().saturating_sub(1) + usize::from(fc.commit_key.is_some());
+                if pair_count > 0 {
+                    exp_equiv_freq += f;
+                }
                 exp_presses += f as f64;
             }
             prop_assert_eq!(ctx.fixed_covered_freq, exp_cov, "fixed_covered_freq 不一致");
-            prop_assert_eq!(ctx.fixed_equiv_freq_sum, exp_cov, "fixed_equiv_freq_sum 不一致");
+            prop_assert_eq!(ctx.fixed_equiv_freq_sum, exp_equiv_freq, "fixed_equiv_freq_sum 不一致");
             prop_assert!(ctx.fixed_equiv_weighted.abs() < 1e-12, "equiv_table 全零时 fixed_equiv_weighted 应为 0");
             prop_assert!((ctx.fixed_key_presses - exp_presses).abs() < 1e-9, "fixed_key_presses 不一致");
 
