@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "timestamp": "2026-10-19 13:10:20",
+  "scale_config": {
+    "collision_count": 0.0002341372044017246,
+    "collision_rate": 18.04758821787748,
+    "equivalence": 0.737044026110581,
+    "equiv_cv": 7.290685166959258,
+    "distribution": 0.011510437340037202,
+    "simple_freq": 1.751921279676035,
+    "simple_equiv": 0.7814795194528098,
+    "simple_dist": 0.002575424753428392,
+    "simple_collision_count": 0.00023747328425546482,
+    "simple_collision_rate": 22.82671595348783
+  },
+  "total_steps": 40000000,
+  "num_threads": 8,
+  "temp_start": 0.005,
+  "temp_end": 0.00005,
+  "comfort_temp": 0.0005
+}

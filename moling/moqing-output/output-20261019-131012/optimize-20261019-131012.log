@@ -1,0 +1,519 @@
+Mon Oct 19 13:10:12 +08 2026
+检查优化相关环境变量：---->
+POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true
+SCHEMA=moqing
+NO_PROXY=localhost,127.0.0.1,::1
+NO_PREPARE=1
+NODE_USE_SYSTEM_CA=1
+<--------------------------
+GIT version: v3.0.0-54-gd1d2ca2
+On branch moling
+Your branch is up to date with 'origin/moling'.
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	modified:   MOQING-JOURNAL.md
+	modified:   MOQING-OPTIMIZATION.md
+	modified:   chaifen-all.txt
+	modified:   chaifen.txt
+	modified:   chaifen_tw-all.txt
+	modified:   config-moqing.toml
+	modified:   freq.txt
+	modified:   full-freq.txt
+	modified:   generate-root-chart.sh
+	modified:   init.sh
+	modified:   input-division.txt
+	modified:   input-fixed.txt
+	modified:   key_distribution-moqing.txt
+	modified:   roots-fly-candidates.txt
+	modified:   roots-freq.txt
+	modified:   roots-pinyin.txt
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   MOQING-JOURNAL.md
+	modified:   config-moqing.toml
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	a.sql
+	all-ceping.tsv
+	evaluate-moling-mabiao-to-tsv.sh
+	kc6000.txt
+	mabiao-ling.txt
+	mabiao-ming.txt
+	mabiao-star.txt
+	mabiao-tiger.txt
+	moling-a.sql
+	moling-all-ceping.tsv
+	xiaoming-full-words.txt
+	星陳輸入法_v3.12.0.zip
+	星陳輸入法_v3.12.0/
+	潇明单字码表-20261011-061440-thread-06.txt
+	瀟明.txt
+	靈明輸入法_v3.12.0.zip
+	魔卿大竹.txt
+	../tmp_check_current_coverage.py
+
+
++ '[' 1 = 1 ']'
++ echo 'NO_PREPARE=1，跳过 ./prepare-inputs.sh'
+NO_PREPARE=1，跳过 ./prepare-inputs.sh
++ echo
+
++ '[' 0 = 1 ']'
++ cargo build --profile=release
+warning: unused import: `LogicalRoot`
+  --> src/context.rs:12:37
+   |
+12 |     FixedSimpleCode, KeyDistConfig, LogicalRoot, RootGroup, ScaleConfig, SimpleAssignMode,
+   |                                     ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `KEY_SPACE`
+ --> src/loader.rs:8:65
+  |
+8 | use crate::types::{char_to_key_index, KeyDistConfig, RootGroup, KEY_SPACE};
+  |                                                                 ^^^^^^^^^
+
+warning: unused import: `extract_base_name`
+ --> src/validate.rs:8:20
+  |
+8 | use crate::types::{extract_base_name, RootGroup};
+  |                    ^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+    --> src/annealing.rs:1145:9
+     |
+1145 |     let mut write_ckpt = |step: usize,
+     |         ----^^^^^^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `best_metrics` is never read
+    --> src/annealing.rs:1590:9
+     |
+1590 |         best_metrics = best_eval.get_metrics(ctx);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+1610 |         best_metrics = eval.get_metrics(ctx);
+     |         ------------------------------------ `best_metrics` is overwritten here before the previous value is read
+     |
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `best_metrics` is never read
+    --> src/annealing.rs:1610:9
+     |
+1610 |         best_metrics = eval.get_metrics(ctx);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+1629 |             best_metrics = eval.get_metrics(ctx);
+     |             ------------------------------------ `best_metrics` is overwritten here before the previous value is read
+
+warning: value assigned to `best_metrics` is never read
+    --> src/annealing.rs:1629:13
+     |
+1629 |             best_metrics = eval.get_metrics(ctx);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+1662 |         best_metrics = best_eval.get_metrics(ctx);
+     |         ----------------------------------------- `best_metrics` is overwritten here before the previous value is read
+
+warning: value assigned to `best_simple_metrics` is never read
+    --> src/annealing.rs:1591:9
+     |
+1591 |         best_simple_metrics = best_eval.get_simple_metrics(ctx);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+1611 |         best_simple_metrics = eval.get_simple_metrics(ctx);
+     |         -------------------------------------------------- `best_simple_metrics` is overwritten here before the previous value is read
+
+warning: value assigned to `best_simple_metrics` is never read
+    --> src/annealing.rs:1611:9
+     |
+1611 |         best_simple_metrics = eval.get_simple_metrics(ctx);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+1630 |             best_simple_metrics = eval.get_simple_metrics(ctx);
+     |             -------------------------------------------------- `best_simple_metrics` is overwritten here before the previous value is read
+
+warning: value assigned to `best_simple_metrics` is never read
+    --> src/annealing.rs:1630:13
+     |
+1630 |             best_simple_metrics = eval.get_simple_metrics(ctx);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+1663 |         best_simple_metrics = best_eval.get_simple_metrics(ctx);
+     |         ------------------------------------------------------- `best_simple_metrics` is overwritten here before the previous value is read
+
+warning: unused variable: `display_order`
+   --> src/output.rs:389:9
+    |
+389 |     let display_order = &ctx.weights; // 从 ctx 获取显示顺序需要额外存储，暂时使用默认
+    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_display_order`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `load` is never used
+   --> src/config.rs:295:12
+    |
+293 | impl Config {
+    | ----------- associated function in this implementation
+294 |     /// 从 config.toml 加载配置
+295 |     pub fn load() -> Self {
+    |            ^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `root_full_codes`, `code_base_powers`, and `simple_fixed_assigned` are never read
+   --> src/context.rs:67:9
+    |
+ 25 | pub struct OptContext {
+    |            ---------- fields in this struct
+...
+ 67 |     pub root_full_codes: HashMap<String, Vec<String>>,
+    |         ^^^^^^^^^^^^^^^
+...
+ 71 |     pub code_base_powers: Vec<usize>,
+    |         ^^^^^^^^^^^^^^^^
+...
+113 |     pub simple_fixed_assigned: Vec<bool>,
+    |         ^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new`, `new_with_fixed`, and `get_simple_keys` are never used
+   --> src/context.rs:137:12
+    |
+135 | impl OptContext {
+    | --------------- associated items in this implementation
+136 |     /// 创建新的优化上下文
+137 |     pub fn new(
+    |            ^^^
+...
+165 |     pub fn new_with_fixed(
+    |            ^^^^^^^^^^^^^^
+...
+791 |     pub fn get_simple_keys(&self, ci: usize, level_idx: usize, assignment: &[u8]) -> Option<Vec<u8>> {
+    |            ^^^^^^^^^^^^^^^
+
+warning: field `code_num` is never read
+  --> src/evaluator.rs:54:5
+   |
+52 | struct SimpleLevelTracker {
+   |        ------------------ field in this struct
+53 |     /// 该级别的编码数
+54 |     code_num: usize,
+   |     ^^^^^^^^
+
+warning: method `full_rebuild` is never used
+   --> src/evaluator.rs:794:12
+    |
+265 | impl SimpleEvaluator {
+    | -------------------- method in this implementation
+...
+794 |     pub fn full_rebuild(
+    |            ^^^^^^^^^^^^
+
+warning: fields `total_key_presses` and `total_frequency` are never read
+    --> src/evaluator.rs:1946:9
+     |
+1910 | pub struct Evaluator {
+     |            --------- fields in this struct
+...
+1946 |     pub total_key_presses: f64,
+     |         ^^^^^^^^^^^^^^^^^
+...
+1949 |     pub total_frequency: u64,
+     |         ^^^^^^^^^^^^^^^
+
+warning: associated items `bucket_cf_static` and `rebuild_simple` are never used
+    --> src/evaluator.rs:2207:8
+     |
+1979 | impl Evaluator {
+     | -------------- associated items in this implementation
+...
+2207 |     fn bucket_cf_static(ctx: &OptContext, chars: &[usize]) -> u64 {
+     |        ^^^^^^^^^^^^^^^^
+...
+2831 |     pub fn rebuild_simple(&mut self, ctx: &OptContext, assignment: &[u8]) {
+     |            ^^^^^^^^^^^^^^
+
+warning: field `total` is never read
+   --> src/types.rs:224:9
+    |
+216 | pub struct MetricScores {
+    |            ------------ field in this struct
+...
+224 |     pub total: f64,
+    |         ^^^^^
+    |
+    = note: `MetricScores` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: associated functions `with_commit_keys` and `with_space_commit` are never used
+   --> src/types.rs:293:12
+    |
+285 | impl SimpleCodeLevel {
+    | -------------------- associated functions in this implementation
+...
+293 |     pub fn with_commit_keys(
+    |            ^^^^^^^^^^^^^^^^
+...
+312 |     pub fn with_space_commit(
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: fields `keys` and `commit_key` are never read
+   --> src/types.rs:345:9
+    |
+339 | pub struct FixedSimpleCode {
+    |            --------------- fields in this struct
+...
+345 |     pub keys: Vec<u8>,
+    |         ^^^^
+346 |     /// 末位上屏键（`Some(k)`：字母键或 `KEY_SPACE`；`None`：无上屏键 / 自动上屏）。
+347 |     pub commit_key: Option<u8>,
+    |         ^^^^^^^^^^
+    |
+    = note: `FixedSimpleCode` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: `code_genie` (bin "code_genie") generated 21 warnings (run `cargo fix --bin "code_genie" -p code_genie` to apply 5 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.13s
++ echo
+
++ caffeinate -imsu ../target/release/code_genie -c config-moqing.toml optimize --seed-keymap moqing-output/output-20261019-125310/thread-05/output-keymap.txt -d moqing-output/output-20261019-131012
+✅ 已加载配置文件: config-moqing.toml
+=== CodeGenie 码灵算法优化器 v10 ===
+线程数: 8, 总步数: 40000000
+初始温度: 0.005, 结束温度: 0.00005
+全局允许键位: qwertyuiopasdfghjklxcvbnm
+全码权重: 重码数=0.02, 重码率=0.01, 当量=0.94, CV=0.02, 分布=0.01
+简码优化: 开启 (全码占比=50%, 简码占比=50%)
+简码子权重: 频率覆盖=0.05, 当量=0.78, 分布=0.04, 重码数=0.03, 重码率=0.10
+用指分布输出顺序: qwertyuiopasdfghjklzxcvbnm
+输出目录: moqing-output/output-20261019-131012
+已备份输入文件至 moqing-output/output-20261019-131012/inputs/
+
+📋 简码配置:
+  - 1级简码: 每简码至多1字, 规则: Aa
+
+数据加载完毕:
+  - 固定字根(单键): 360
+  - 受限字根组(多键): 211 组
+  - 动态字根组: 211 组 (共 376 字根)
+  - 汉字数量: 11177
+  - 总字频: 1898197952
+  - 最大码长: 3
+
+🔍 正在校验字根定义...
+✅ 校验通过
+
+📐 正在进行初始尺度校准...
+⚠️ 警告：固定简码 "不" = "u"（长度 1）无法归属任何简码级别；仍输出并从候选集排除、计入常量贡献，但不占用任何级别名额
+⚠️ 警告：固定简码 "我" = "o"（长度 1）无法归属任何简码级别；仍输出并从候选集排除、计入常量贡献，但不占用任何级别名额
+⚠️ 警告：固定简码 "是" = "a"（长度 1）无法归属任何简码级别；仍输出并从候选集排除、计入常量贡献，但不占用任何级别名额
+⚠️ 警告：固定简码 "的" = "e"（长度 1）无法归属任何简码级别；仍输出并从候选集排除、计入常量贡献，但不占用任何级别名额
+  初始状态观测:
+    重码数: 4271,  重码率: 0.055409
+    当量: 1.3568,  CV: 0.1372,  分布偏差: 86.8777
+    简码覆盖: 42.9198%,  简码当量: 1.2796,  简码分布: 388.2855
+    简码重码数: 4211,  简码重码率: 4.380832%
+
+  📝 逻辑根解析验证 (前3字):
+    '的' 拆分: ["白.0", "勹.0", "丶.0"]
+      逻辑根[0] '白': 拆分中占位=[0], 完整编码=['s', 'b']
+      逻辑根[1] '勹': 拆分中占位=[1], 完整编码=['g', 'b']
+      逻辑根[2] '丶': 拆分中占位=[2], 完整编码=['h', 'd']
+      1级简码(规则: [Aa] 命中: Aa): ['s']
+    '一' 拆分: ["一.0", "一.1", "一.1"]
+      逻辑根[0] '一': 拆分中占位=[0, 1, 2], 完整编码=['f', 'i']
+      1级简码(规则: [Aa] 命中: Aa): ['f']
+    '了' 拆分: ["了.0", "了.1", "了.1"]
+      逻辑根[0] '了': 拆分中占位=[0, 1, 2], 完整编码=['h', 'l']
+      1级简码(规则: [Aa] 命中: Aa): ['h']
+  ScaleConfig 来源: 自动校准
+  校准尺度 (Scale):
+    CollisionCount: 0.000234
+    CollisionRate:  18.047588
+    Equivalence:    0.737044
+    EquivCV:        7.290685
+    Distribution:   0.011510
+    SimpleFreq:     1.751921
+    SimpleEquiv:    0.781480
+    SimpleDist:     0.002575
+    SimpleCollCnt:  0.000237
+    SimpleCollRate: 22.826716
+
+  - 编码基数: 32
+  - 编码空间: 32768
+📦 桶存储后端选择 (code_base=32, max_parts=3, code_space=32768, 阈值=2097152):
+   · 全码桶: Dense (容量 32768 ≤ 阈值 2097152；预估 ~1 MB/线程)
+   · 简码级别[0]桶: Dense (容量 32 ≤ 阈值 2097152；预估 ~0 MB/线程)
+💡 提示: 按 Ctrl-C 可暂停并保存检查点，之后用 `resume -d moqing-output/output-20261019-131012` 继续
+
+🚀 开始优化...
+🌱 播种来源: 1 个种子；8 线程按 round-robin(i % K) 映射
+   [T0] 配置确认 | 简码 active 候选覆盖率: 90.01% | active 候选字数: 1075 | 输出候选字数(full): 11173
+   [T0] 初始化完成 | 得分: 0.0046 (全码:0.0046 简码:0.0000) | 重码: 4818(0.0003) 重码率: 1.9521%(0.0000) 当量: 1.2549(0.0087) CV: 0.1233(0.0002) 分布: 50.0496(0.0001)
+   🌡️ 降温曲线预览:
+   舒适温度: 0.000500 (进度 50.0% 处)
+   舒适区宽度: 0.15, 减速深度: 60%
+   ┌──────────────────────────────────────────────────────
+   │  0% T=5.00e-3 │██████████████████████████████████████████████████
+   │  5% T=3.72e-3 │██████████████████████████████████████████████
+   │ 10% T=2.77e-3 │███████████████████████████████████████████
+   │ 15% T=2.08e-3 │████████████████████████████████████████
+   │ 20% T=1.57e-3 │█████████████████████████████████████
+   │ 25% T=1.21e-3 │██████████████████████████████████
+   │ 30% T=9.49e-4 │███████████████████████████████
+   │ 35% T=7.72e-4 │█████████████████████████████
+   │ 40% T=6.50e-4 │███████████████████████████
+   │ 45% T=5.65e-4 │██████████████████████████
+   │ 50% T=5.00e-4 │█████████████████████████ ◄ 舒适区
+   │ 55% T=4.43e-4 │███████████████████████
+   │ 60% T=3.85e-4 │██████████████████████
+   │ 65% T=3.24e-4 │████████████████████
+   │ 70% T=2.63e-4 │██████████████████
+   │ 75% T=2.07e-4 │███████████████
+   │ 80% T=1.59e-4 │████████████
+   │ 85% T=1.20e-4 │█████████
+   │ 90% T=9.02e-5 │██████
+   │ 95% T=6.72e-5 │███
+   │100% T=5.00e-5 │
+   └──────────────────────────────────────────────────────
+   [T0] 进度:   5% | 基温: 0.003719 | 重码=6448(0.0110) 重码率=8.6204%(0.0264) 当量=1.3444(0.0753) CV=0.1306(0.0010) 分布=85.7751(0.0059) | 当前: 0.0598 (全码:0.0598) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:   5% |                  重码=0(0.0000) 重码率=0.0000%(0.0000) 当量=0.0000(0.0000) 覆盖=0.00%(0.0000) 分布=0.0000(0.0000) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:   5% | 总吞吐 849.8 万步/分钟 | 窗口吞吐 849.8 万步/分钟 | 窗口接受率 89.40% (接受 1788088/2000001 步)
+
+   [T0] 步数 4000000 | 均速 823.5 万步/分钟: Reheat ×1.0 (基温 0.002772)
+   [T0] 进度:  10% | 基温: 0.002772 | 重码=6258(0.0095) 重码率=9.2002%(0.0300) 当量=1.3525(0.0818) CV=0.1320(0.0013) 分布=71.4257(0.0032) | 当前: 0.0628 (全码:0.0628) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:  10% |                  重码=0(0.0000) 重码率=0.0000%(0.0000) 当量=0.0000(0.0000) 覆盖=0.00%(0.0000) 分布=0.0000(0.0000) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:  10% | 总吞吐 823.5 万步/分钟 | 窗口吞吐 798.8 万步/分钟 | 窗口接受率 87.49% (接受 1749722/2000000 步)
+
+   [T0] 进度:  15% | 基温: 0.002076 | 重码=6031(0.0077) 重码率=8.1746%(0.0237) 当量=1.3289(0.0632) CV=0.1347(0.0017) 分布=73.8492(0.0036) | 当前: 0.0499 (全码:0.0499) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:  15% |                  重码=0(0.0000) 重码率=0.0000%(0.0000) 当量=0.0000(0.0000) 覆盖=0.00%(0.0000) 分布=0.0000(0.0000) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:  15% | 总吞吐 801.4 万步/分钟 | 窗口吞吐 760.5 万步/分钟 | 窗口接受率 85.20% (接受 1703977/2000000 步)
+
+   [T0] 进度:  20% | 基温: 0.001569 | 重码=5864(0.0065) 重码率=7.2189%(0.0184) 当量=1.3387(0.0709) CV=0.1283(0.0007) 分布=77.2609(0.0042) | 当前: 0.0503 (全码:0.0503) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:  20% |                  重码=0(0.0000) 重码率=0.0000%(0.0000) 当量=0.0000(0.0000) 覆盖=0.00%(0.0000) 分布=0.0000(0.0000) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:  20% | 总吞吐 782.8 万步/分钟 | 窗口吞吐 731.9 万步/分钟 | 窗口接受率 82.43% (接受 1648570/2000000 步)
+
+   [T0] 步数 8000001 | 均速 782.8 万步/分钟: Reheat ×1.0 (基温 0.001569)
+   [T0] 进度:  25% | 基温: 0.001205 | 重码=6205(0.0090) 重码率=7.7305%(0.0212) 当量=1.3161(0.0534) CV=0.1243(0.0002) 分布=85.2786(0.0058) | 当前: 0.0448 (全码:0.0448) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:  25% |                  重码=0(0.0000) 重码率=0.0000%(0.0000) 当量=0.0000(0.0000) 覆盖=0.00%(0.0000) 分布=0.0000(0.0000) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:  25% | 总吞吐 766.6 万步/分钟 | 窗口吞吐 707.9 万步/分钟 | 窗口接受率 79.31% (接受 1586152/2000000 步)
+
+   [T0] 进度:  30% | 基温: 0.000949 | 重码=6389(0.0105) 重码率=8.2823%(0.0243) 当量=1.3164(0.0536) CV=0.1281(0.0006) 分布=47.6083(0.0001) | 当前: 0.0446 (全码:0.0446) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:  30% |                  重码=0(0.0000) 重码率=0.0000%(0.0000) 当量=0.0000(0.0000) 覆盖=0.00%(0.0000) 分布=0.0000(0.0000) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:  30% | 总吞吐 750.2 万步/分钟 | 窗口吞吐 677.7 万步/分钟 | 窗口接受率 75.95% (接受 1519011/2000000 步)
+
+   [T0] 步数 12000002 | 均速 750.2 万步/分钟: Reheat ×1.0 (基温 0.000949)
+   [T0] 进度:  35% | 基温: 0.000772 | 重码=6245(0.0093) 重码率=7.9689%(0.0225) 当量=1.3011(0.0420) CV=0.1203(0.0002) 分布=42.2886(0.0000) | 当前: 0.0371 (全码:0.0371) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:  35% |                  重码=0(0.0000) 重码率=0.0000%(0.0000) 当量=0.0000(0.0000) 覆盖=0.00%(0.0000) 分布=0.0000(0.0000) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:  35% | 总吞吐 734.9 万步/分钟 | 窗口吞吐 654.6 万步/分钟 | 窗口接受率 72.55% (接受 1450981/2000000 步)
+
+   [T0] 步数 16000000/40000000 | 进度 0.400: 简码已激活（升温 ×1.20）
+   [T0] 简码权重渐进 | p=0.400 α=0.000 w=0.0000
+   [T0] 进度:  40% | 基温: 0.000650 | 重码=5834(0.0063) 重码率=7.6468%(0.0207) 当量=1.2971(0.0390) CV=0.1325(0.0013) 分布=55.8135(0.0008) | 当前: 0.0341 (全码:0.0341) 🏆最优: 0.0046 (全码:0.0046)
+   [T0] 简码:  40% |                  重码=5762(0.0094) 重码率=6.0004%(0.2533) 当量=1.2809(0.0290) 覆盖=42.65%(0.0005) 分布=397.7016(0.0122) | 当前简码:0.0000 🏆最优简码:0.0000
+   [T0] 速率:  40% | 总吞吐 719.8 万步/分钟 | 窗口吞吐 629.7 万步/分钟 | 窗口接受率 69.37% (接受 1387335/2000000 步)
+
+   [T0] 步数 16000003 | 均速 719.8 万步/分钟: Reheat ×1.0 (基温 0.000650)
+   [T0] 简码权重渐进 | p=0.410 α=0.100 w=0.0140
+   [T0] 简码权重渐进 | p=0.420 α=0.200 w=0.0520
+   [T0] 简码权重渐进 | p=0.430 α=0.300 w=0.1080
+   [T0] 简码权重渐进 | p=0.440 α=0.400 w=0.1760
+   [T0] 简码权重渐进 | p=0.450 α=0.500 w=0.2500
+   [T0] 进度:  45% | 基温: 0.000565 | 重码=5670(0.0052) 重码率=4.5840%(0.0069) 当量=1.2975(0.0394) CV=0.1288(0.0008) 分布=66.1236(0.0023) | 当前: 0.0610 (全码:0.0272) 🏆最优: 0.0115 (全码:0.0046)
+   [T0] 简码:  45% |                  重码=5614(0.0078) 重码率=3.5592%(0.0984) 当量=1.2623(0.0171) 覆盖=42.92%(0.0005) 分布=389.9579(0.0111) | 当前简码:0.0337 🏆最优简码:0.0069
+   [T0] 速率:  45% | 总吞吐 578.0 万步/分钟 | 窗口吞吐 224.4 万步/分钟 | 窗口接受率 56.92% (接受 1138345/2000000 步)
+
+   [T0] 简码权重渐进 | p=0.460 α=0.600 w=0.3240
+   [T0] 简码权重渐进 | p=0.470 α=0.700 w=0.3920
+   [T0] 简码权重渐进 | p=0.480 α=0.800 w=0.4480
+   [T0] 简码权重渐进 | p=0.490 α=0.900 w=0.4860
+   [T0] 简码已达目标权重 W=0.5000
+   [T0] 进度:  50% | 基温: 0.000500 | 重码=5466(0.0039) 重码率=4.3107%(0.0060) 当量=1.3040(0.0442) CV=0.1354(0.0018) 分布=61.1691(0.0015) | 当前: 0.0789 (全码:0.0287) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  50% |                  重码=5452(0.0062) 重码率=3.0381%(0.0733) 当量=1.2512(0.0102) 覆盖=42.99%(0.0005) 分布=383.8358(0.0102) | 当前简码:0.0502 🏆最优简码:0.0138
+   [T0] 速率:  50% | 总吞吐 489.5 万步/分钟 | 窗口吞吐 205.9 万步/分钟 | 窗口接受率 34.41% (接受 688262/2000000 步)
+
+   [T0] 步数 20000004 | 均速 489.5 万步/分钟: Reheat ×1.0 (基温 0.000500)
+   [T0] 进度:  55% | 基温: 0.000443 | 重码=5600(0.0047) 重码率=4.1671%(0.0055) 当量=1.2977(0.0395) CV=0.1305(0.0010) 分布=64.1342(0.0020) | 当前: 0.0776 (全码:0.0264) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  55% |                  重码=5499(0.0067) 重码率=3.0042%(0.0718) 当量=1.2587(0.0149) 覆盖=43.68%(0.0005) 分布=373.5134(0.0087) | 当前简码:0.0513 🏆最优简码:0.0138
+   [T0] 速率:  55% | 总吞吐 432.7 万步/分钟 | 窗口吞吐 200.3 万步/分钟 | 窗口接受率 28.18% (接受 563519/2000000 步)
+
+   [T0] 进度:  60% | 基温: 0.000385 | 重码=5235(0.0025) 重码率=3.2403%(0.0028) 当量=1.2942(0.0369) CV=0.1314(0.0012) 分布=59.9979(0.0014) | 当前: 0.0603 (全码:0.0224) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  60% |                  重码=5178(0.0037) 重码率=2.4724%(0.0493) 当量=1.2586(0.0148) 覆盖=43.42%(0.0005) 分布=365.0179(0.0075) | 当前简码:0.0379 🏆最优简码:0.0138
+   [T0] 速率:  60% | 总吞吐 393.7 万步/分钟 | 窗口吞吐 197.5 万步/分钟 | 窗口接受率 25.61% (接受 512124/2000000 步)
+
+   [T0] 步数 24000005 | 均速 393.7 万步/分钟: Reheat ×1.0 (基温 0.000385)
+   [T0] 进度:  65% | 基温: 0.000324 | 重码=5221(0.0024) 重码率=3.3788%(0.0032) 当量=1.2879(0.0323) CV=0.1319(0.0012) 分布=57.1379(0.0010) | 当前: 0.0551 (全码:0.0200) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  65% |                  重码=5176(0.0037) 重码率=2.3221%(0.0435) 当量=1.2600(0.0157) 覆盖=42.91%(0.0005) 分布=358.5563(0.0066) | 当前简码:0.0350 🏆最优简码:0.0138
+   [T0] 速率:  65% | 总吞吐 365.0 万步/分钟 | 窗口吞吐 194.7 万步/分钟 | 窗口接受率 22.75% (接受 455040/2000000 步)
+
+   [T0] 进度:  70% | 基温: 0.000263 | 重码=5223(0.0024) 重码率=3.5367%(0.0036) 当量=1.2873(0.0318) CV=0.1317(0.0012) 分布=64.8781(0.0021) | 当前: 0.0521 (全码:0.0206) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  70% |                  重码=5153(0.0035) 重码率=2.1489%(0.0371) 当量=1.2593(0.0153) 覆盖=42.64%(0.0005) 分布=359.0212(0.0067) | 当前简码:0.0316 🏆最优简码:0.0138
+   [T0] 速率:  70% | 总吞吐 343.4 万步/分钟 | 窗口吞吐 194.3 万步/分钟 | 窗口接受率 19.49% (接受 389890/2000000 步)
+
+   [T0] 步数 28000006 | 均速 343.4 万步/分钟: Reheat ×1.0 (基温 0.000263)
+   [T0] 进度:  75% | 基温: 0.000207 | 重码=5147(0.0020) 重码率=3.2579%(0.0028) 当量=1.2742(0.0223) CV=0.1271(0.0005) 分布=51.6262(0.0003) | 当前: 0.0376 (全码:0.0139) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  75% |                  重码=5103(0.0031) 重码率=1.9667%(0.0307) 当量=1.2471(0.0077) 覆盖=41.92%(0.0006) 分布=348.2874(0.0053) | 当前简码:0.0237 🏆最优简码:0.0138
+   [T0] 速率:  75% | 总吞吐 326.4 万步/分钟 | 窗口吞吐 192.4 万步/分钟 | 窗口接受率 16.49% (接受 329722/2000000 步)
+
+   [T0] 进度:  80% | 基温: 0.000159 | 重码=5123(0.0019) 重码率=3.0406%(0.0023) 当量=1.2603(0.0124) CV=0.1270(0.0005) 分布=47.7481(0.0001) | 当前: 0.0343 (全码:0.0085) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  80% |                  重码=5075(0.0029) 重码率=2.0535%(0.0337) 当量=1.2468(0.0076) 覆盖=41.88%(0.0006) 分布=359.3520(0.0068) | 当前简码:0.0258 🏆最优简码:0.0138
+   [T0] 速率:  80% | 总吞吐 312.3 万步/分钟 | 窗口吞吐 189.5 万步/分钟 | 窗口接受率 13.14% (接受 262724/2000000 步)
+
+   [T0] 步数 32000007 | 均速 312.3 万步/分钟: Reheat ×1.0 (基温 0.000159)
+   [T0] 进度:  85% | 基温: 0.000120 | 重码=5049(0.0015) 重码率=2.4579%(0.0009) 当量=1.2666(0.0169) CV=0.1263(0.0004) 分布=49.4897(0.0001) | 当前: 0.0277 (全码:0.0099) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  85% |                  重码=4992(0.0022) 重码率=1.6126%(0.0193) 当量=1.2526(0.0111) 覆盖=42.14%(0.0005) 分布=325.7163(0.0026) | 当前简码:0.0178 🏆最优简码:0.0138
+   [T0] 速率:  85% | 总吞吐 300.6 万步/分钟 | 窗口吞吐 187.9 万步/分钟 | 窗口接受率 10.49% (接受 209807/2000000 步)
+
+   [T0] 进度:  90% | 基温: 0.000090 | 重码=5104(0.0018) 重码率=2.3274%(0.0007) 当量=1.2584(0.0111) CV=0.1254(0.0002) 分布=48.8256(0.0001) | 当前: 0.0232 (全码:0.0069) 🏆最优: 0.0184 (全码:0.0046)
+   [T0] 简码:  90% |                  重码=5034(0.0025) 重码率=1.5124%(0.0163) 当量=1.2465(0.0076) 覆盖=42.26%(0.0005) 分布=350.9531(0.0057) | 当前简码:0.0163 🏆最优简码:0.0138
+   [T0] 速率:  90% | 总吞吐 290.6 万步/分钟 | 窗口吞吐 185.8 万步/分钟 | 窗口接受率  8.00% (接受 159912/2000000 步)
+
+   [T0] 步数 36000008 | 均速 290.6 万步/分钟: Reheat ×1.0 (基温 0.000090)
+   [T0] 进度:  95% | 基温: 0.000067 | 重码=4972(0.0011) 重码率=2.3500%(0.0007) 当量=1.2577(0.0106) CV=0.1246(0.0002) 分布=50.4828(0.0001) | 当前: 0.0196 (全码:0.0063) 🏆最优: 0.0173 (全码:0.0060)
+   [T0] 简码:  95% |                  重码=4883(0.0013) 重码率=1.3374%(0.0113) 当量=1.2473(0.0078) 覆盖=42.58%(0.0005) 分布=350.9726(0.0057) | 当前简码:0.0133 🏆最优简码:0.0112
+   [T0] 速率:  95% | 总吞吐 282.0 万步/分钟 | 窗口吞吐 183.8 万步/分钟 | 窗口接受率  6.42% (接受 128446/2000000 步)
+
+   [T0] 全量重建计数 | 主评估器 rebuild_simple: 0 | 简码 full_rebuild: 0 | SA 主循环增量: 0 ✓ 热路径零全量重建
+   [T0] SA 完成，执行最终精炼...
+   [T0] 最终爬山改进(active范围) → 得分: 0.0183 (全码:0.0051 简码:0.0140)
+   [T0] 坐标下降精炼(active范围): 0.0183 → 0.0170 (全码:0.0048 简码:0.0146)
+   [T0] 最终得分(output范围): 0.0194 (全码:0.0048 简码:0.0146) 重码:4844 简码覆盖:42.01%
+
+=================================
+🏆 最优结果 (线程 2):
+   综合得分: 0.0151 (全码:0.0048 简码:0.0102)
+   「全码」重码数: 4791  (分: 0.0002)
+   「全码」重码率: 2.233267%  (分: 0.0005)
+   「全码」加权键均当量: 1.2550  (分: 0.0087)
+   「全码」当量变异系数(CV): 0.1231  (分: 0.0002)
+   「全码」用指分布偏差(L2): 50.4413  (分: 0.0001)
+---------------------------------
+   「简码」总分: 0.0205  (范围: output 输出全集)
+   「简码」重码数: 4725  (分: 0.0003)
+   「简码」重码率: 1.135789%  (分: 0.0059)
+   「简码」覆盖率: 42.0370%  (分: 0.0005)
+   「简码」加权当量: 1.2473  (分: 0.0078)
+   「简码」分布偏差: 352.7695  (分: 0.0059)
+⏱️ 总耗时: 883.21914375s
+=================================
+
+📁 保存所有线程结果...
+结果已保存至 moqing-output/output-20261019-131012/output-keymap.txt, output-encode.txt, output-simple-codes.txt, output-combined.txt 等
+
+所有结果已保存至 moqing-output/output-20261019-131012/
+  - summary.txt              汇总排名
+  - output-*.txt             全局最优结果
+  - output-simple-codes.txt  简码分配
+  - thread-XX/               各线程结果
+
+real	14m43.843s
+user	116m32.695s
+sys	0m10.062s
++ set +x
+Mon Oct 19 13:24:56 +08 2026

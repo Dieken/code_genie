@@ -1,0 +1,197 @@
+# =========================================================================
+# 🔧 CodeGenie 配置文件
+# =========================================================================
+
+# -------------------------------------------------------------------------
+# 📂 文件路径配置
+# -------------------------------------------------------------------------
+[files]
+fixed = "input-fixed.txt"        # 固定字根文件
+dynamic = "input-roots.txt"      # 动态字根文件
+splits = "input-division.txt"    # 拆分表文件
+pair_equiv = "pair_equivalence.txt"  # 字根对当量文件
+key_dist = "key_distribution-moqing.txt"    # 用指分布文件
+
+# -------------------------------------------------------------------------
+# 🌡️ 模拟退火参数
+# -------------------------------------------------------------------------
+[annealing]
+threads = 8              # 并行线程数（第 1 轮摸底）
+total_steps = 40000000   # 自动优化 round-3：对接近正式速度前沿的 T03 加长搜索
+temp_start = 0.005       # 初始温度
+temp_end = 0.00005       # 结束温度
+comfort_temp = 0.0005    # 舒适温度区间
+comfort_width = 0.15     # 舒适区宽度
+comfort_slowdown = 0.6   # 舒适区减速因子
+swap_probability = 0.35  # 交换操作概率
+
+# 以下参数基于 total_steps 的比例计算
+min_improve_steps_ratio = 0.1    # 最小改进步数比例 (total_steps / 10)
+perturb_interval_ratio = 0.0    # 设为 0 可关闭低温扰动
+perturb_strength = 0.0          # 扰动强度
+perturb_trigger_temp_ratio = 0.01 # 扰动触发温度比例 (base_temp < comfort_temp * ratio)
+perturb_temp_multiplier = 2.0     # 扰动时温度倍率 (temp * multiplier)
+perturb_collision_pairs_limit = 10 # 扰动时优先采样的冲突对上限
+reheat_factor = 1.0             # 设为 1.0 可关闭重新加热
+max_parts = 3                    # 最大码长
+checkpoint_interval_ratio = 0.05 # checkpoint 写出间隔（单位：占 total_steps 的比例）；间隔步数 = max(1, floor(total_steps × ratio))，默认 0.05（约每 5% 写一次，与汇报频率一致）
+
+# 冲突导向算子（默认关闭：conflict_probability = 0.0）
+conflict_probability = 0.0       # 每步执行冲突导向移动的概率（0.0~1.0），0.0 表示关闭本特性
+conflict_refresh_interval = 1000 # 每隔多少步重建一次冲突缓存；0 表示初始化后不再重建
+conflict_sample_window = 20      # 在排序后冲突列表的前 N 个冲突组中采样
+conflict_weight_by_freq = false  # 冲突排序：false=按汉字数量(优化重码数)，true=按字频之和(优化重码率)
+
+# -------------------------------------------------------------------------
+# ⌨️ 键位配置
+# -------------------------------------------------------------------------
+[keys]
+# 允许的键位字符（用于动态字根分配）
+allowed = "qwertyuiopasdfghjklxcvbnm"
+# 键位显示顺序（用于输出报告）
+display_order = "qwertyuiopasdfghjklzxcvbnm"
+# 全码末键属于这些键时不追加虚拟空格转移当量
+termination_keys = "eauo_"
+
+# -------------------------------------------------------------------------
+# ⚖️ 权重配置
+# -------------------------------------------------------------------------
+[weights.full_code]
+# 全码部分权重（总和应为 1.0）
+collision_count = 0.02    # 四轮复盘：恢复重码保护
+collision_rate = 0.01     # 保留重码率梯度
+equivalence = 0.94        # 四轮复盘：撤回 round-4 的过强当量权重
+equiv_cv = 0.02           # 保留当量变异系数梯度
+distribution = 0.01       # 保留分布梯度
+
+[weights.simple_code]
+# 简码优化开关与权重
+enabled = true           # 是否启用简码优化
+full_code_weight = 0.5   # 自动优化 round-6：在通过全码后补回简码权重
+simple_code_weight = 0.5
+
+# 简码内部子权重（总和应为 1.0）
+collision_count = 0.03   # 重码数权重
+collision_rate = 0.10    # 保留重码率安全约束
+freq = 0.05              # 频率覆盖权重
+equiv = 0.78             # 第 49 轮：小幅提高简码当量权重
+dist = 0.04              # 第 49 轮：从分布权重转出
+
+# 简码评估性能优化：激活、权重渐进、候选字与对账配置
+simple_start_progress = 0.4      # 简码计算激活进度阈值（进度 = 当前步/总步数；建议落在舒适区前沿，默认 0.4）
+simple_ramp_progress = 0.1       # 有效权重从 0 渐进到目标权重的进度长度（默认 0.1）
+simple_activation_reheat = 1.2   # 激活当刻温度升温倍率（独立于 reheat_factor；合理范围 [1.0, temp_start/激活基温]，默认 1.2）
+simple_coverage_ratio = 1.0      # 候选字累计字频覆盖率阈值（默认 1.0）
+simple_active_coverage = 0.90    # 退火期 active 候选覆盖率
+reconcile_interval_ratio = 0.05  # 周期对账间隔比例，M = floor(total_steps × ratio)，M ≥ 1（默认 0.05）
+simple_assign_mode = "frequency" # 第 9 轮：按频率分配简码，直接对照 efficiency
+simple_protect_top_n = 0         # 简码占用保护：禁止简码等于受保护汉字的全码；0=保护全部汉字，N>0=仅保护全字频前 N 名（默认 0）
+
+# -------------------------------------------------------------------------
+# 📝 简码规则配置
+# -------------------------------------------------------------------------
+# 取码规则说明:
+#   每两个字符为一组，第一个字符选择逻辑根，第二个字符选择该根的码位
+#   根选择: A=第1根, B=第2根, C=第3根, ... Z=最后一根
+#   码位选择: a=第1码, b=第2码, c=第3码, ... z=最后一码
+#
+# 示例: 全码为4码定长方案，拆分 "在 𠂇 𠂇.1 2 土 土.1"
+#   逻辑根: [𠂇(码=[𠂇,𠂇.1]), 2(码=[2]), 土(码=[土,土.1])]
+#   Aa = 𠂇的第1码, Ab = 𠂇的第2码
+#   Ba = 2的第1码
+#   Ca = 土的第1码, Cz = 土的最后一码
+#   Za = 最后一根(土)的第1码, Zz = 最后一根(土)的最后一码
+
+[[simple_levels]]
+level = 1
+# code_num：每个"有效简码"最多可分配给几个全码字。有效简码 = 核心码（commit_keys 为空时）或
+#   核心码 + 一个上屏键（commit_keys 非空时，每个上屏键各算一个独立有效简码）。
+#   例：commit_keys="dk"、code_num=2 时 Ad 最多 2 字、Ak 最多 2 字（各自独立、互不超额）。
+#   0 = 该级退火不分配简码（但归属该级的固定简码仍生效并照常输出）。
+code_num = 1
+rules = ["Aa"]
+commit_keys = "eauo"     # 上屏键序列（默认 ""）。字母=主键盘键、_=空格；"" 表示自动上屏。
+                         # 例 "dk_"：上屏键可为 d/k/空格，按左右手交替偏好 + 轮转分配；
+                         # _ 只能放在序列开头(偏爱空格)或末尾(偏爱主键)。
+                         # "" 等价旧 space_commit=false；"_" 等价旧 space_commit=true。
+commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
+
+[[simple_levels]]
+level = 2
+code_num = 0
+rules = ["AaBa"]
+commit_keys = "eauo"
+commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
+
+[[simple_levels]]
+level = 3
+code_num = 0
+rules = ["AaBaZz"]
+commit_keys = ""
+commit_alt_hand_only = false  # 仅出异手上屏简码（手感优化，需求 37）；_ 始终出简。缺省 false
+
+# -------------------------------------------------------------------------
+# 🔒 固定简码映射（可选，默认整段注释）
+# 预先定义「汉字 = 简码」，简码为完整字面键位串（末键可为任意上屏键，含 _ 表示空格）。
+# - 不影响候选字按 simple_coverage_ratio 的选取，仅在选完后将这些字从候选集剔除；
+# - 归级规则：长度 T 的简码，匹配「核心码长==T 且该级 commit_keys 为空（纯核心）」
+#   或「核心码长==T-1 且末键∈该级 commit_keys（核心+上屏，占该上屏键的 commit slot）」；
+# - 无法归属任何级别时仅告警、不丢弃（仍输出、仍排除候选，但不占 commit slot）；
+# - 有效核心码长须严格小于该字全码长度。
+# 下例仅用于表达配置格式（默认全部注释）。
+# -------------------------------------------------------------------------
+[fixed_simple_codes]
+"不" = "u"
+"是" = "a"
+"我" = "o"
+"的" = "e"
+
+# -------------------------------------------------------------------------
+# 📐 量纲缩放配置（可选，缺失则自动校准）
+# 填写各指标的"典型值"（与 targets 中的指标同量纲），程序内部自动取倒数转为缩放因子
+# 全码 5 个字段均设置时（简码未启用则无需设置简码字段），跳过 calibrate 阶段
+# -------------------------------------------------------------------------
+# [scale]
+# collision_count = 100.0    # 典型重码数（如初始状态约 100 个重码）
+# collision_rate = 0.05      # 典型重码率（如 5%）
+# equivalence = 1.5          # 典型当量
+# equiv_cv = 0.3             # 典型当量变异系数
+# distribution = 5.0         # 典型分布偏差
+# simple_freq = 0.15         # 典型简码频率覆盖损失（= 1 - 覆盖率，如覆盖 85% 则填 0.15）
+# simple_equiv = 1.3         # 典型简码当量
+# simple_dist = 3.0          # 典型简码分布偏差
+# simple_collision_count = 20.0  # 典型简码重码数
+# simple_collision_rate = 0.02   # 典型简码重码率
+
+# -------------------------------------------------------------------------
+# 🎯 优化目标配置
+# enabled = false 时退回绝对值最小化模式（默认行为）
+# enabled = true 时启用目标偏差导向优化
+# -------------------------------------------------------------------------
+[targets.full_code]
+enabled = true               # 启用全码目标偏差模式；目标值均使用 Code Genie 内部指标量纲
+collision_count = 4800.0    # 第二轮内部前沿约 4817–4827，留小余量保护重码数
+collision_rate = 0.020      # 第16轮：继续收紧全码内部重码率，优先北语全码动态率
+equivalence = 1.255         # 自动优化 round-2：为正式全码速度 1.26 留出内部余量
+ equiv_cv = 0.125            # 第二轮内部前沿约 0.125
+ distribution = 50.0         # 第二轮内部前沿约 46–53
+low_weight = 0.01            # 超过目标用偏差平方惩罚，达标后保留微弱优化动力
+collision_count_max = 0.0    # 硬约束关闭；先用目标偏差模式观察方向
+collision_rate_max = 0.0     # 硬约束关闭；先用目标偏差模式观察方向
+equivalence_max = 0.0        # 硬约束关闭；先用目标偏差模式观察方向
+equiv_cv_max = 0.0           # 硬约束关闭；先用目标偏差模式观察方向
+distribution_max = 0.0       # 硬约束关闭；先用目标偏差模式观察方向
+
+[targets.simple_code]
+enabled = true               # 启用简码目标偏差模式；目标值均使用 Code Genie 内部指标量纲
+collision_count = 4750.0    # 第二轮内部前沿约 4753–4764，留小余量保护简码重码数
+collision_rate = 0.009       # 第18轮：继续收紧简码内部重码率，逼近正式简码动态率目标
+freq = 0.42                  # 简码覆盖率下限目标，按 0.42 = 42% 填写
+equiv = 1.247               # 第13轮：收回第12轮过严的简码当量目标
+dist = 305.0                # 第二轮内部前沿约 303–329
+low_weight = 0.01            # 超过目标用偏差平方惩罚，达标后保留微弱优化动力
+collision_count_max = 0.0    # 硬约束关闭；先用目标偏差模式观察方向
+collision_rate_max = 0.0     # 硬约束关闭；先用目标偏差模式观察方向
+freq_max = 0.0               # 硬约束关闭；先用目标偏差模式观察方向
+equiv_max = 0.0              # 硬约束关闭；先用目标偏差模式观察方向
+dist_max = 0.0               # 硬约束关闭；先用目标偏差模式观察方向

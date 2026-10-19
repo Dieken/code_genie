@@ -195,15 +195,12 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use List::Util qw/min/;
 
           $short_chars{"在"} = 1;
       } elsif ($ENV{ENCODE_RULE} eq "moqing") {
-          print "不\ta";
-          print "是\ti";
+          print "不\tu";
+          print "是\ta";
           print "我\to";
           print "的\te";
-          print "一\tfi";
 
           delete $short_chars{"了"};
-          $short_chars{"一"} = 1;
-          $short_codes{"fi"} = 1;
       } else {
           print "不\tu";
           print "是\ti";
@@ -339,11 +336,11 @@ perl -CSDA -Mautodie -Mutf8 -F'\t' -lanE 'use List::Util qw/min/;
                         $s = substr($v->{code}, 0, $i - 1) . "e";
                         $s = substr($v->{code}, 0, $i - 1) . "a" if exists $short_codes{$s};
                         if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
-                            $s = substr($v->{code}, 0, $i - 1) . "i" if exists $short_codes{$s};
+                            $s = substr($v->{code}, 0, $i - 1) . "u" if exists $short_codes{$s};
                             $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
                         }
                     } else {
-                        $s = substr($v->{code}, 0, $i - 1) . "i";
+                        $s = substr($v->{code}, 0, $i - 1) . "u";
                         $s = substr($v->{code}, 0, $i - 1) . "o" if exists $short_codes{$s};
                         if ($ENV{ENABLE_MOQING_ALL_SHORTCODE}) {
                             $s = substr($v->{code}, 0, $i - 1) . "e" if exists $short_codes{$s};

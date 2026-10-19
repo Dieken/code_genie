@@ -1,0 +1,1 @@
+./optimize.sh -c config-moqing.toml optimize --seed-keymap moqing-output/output-20261019-125310/thread-05/output-keymap.txt : round-6: 将全码与简码总权重从 0.6/0.4 平衡到 0.5/0.5，保持全码目标、五项内部权重、键位分布和 4000 万步不变，以第五轮 T05 争取同时满足全码与简码速度

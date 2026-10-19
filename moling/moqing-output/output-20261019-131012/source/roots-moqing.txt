@@ -1,0 +1,368 @@
+{周框}	bo	
+⺊	bo	
+リ	bo	
+不	bo	Bù -> b
+丷	bo	Bā -> b
+八	bo	Bā -> b
+勹	bo	Bāo -> b
+匕	bo	Bi -> b
+卜	bo	Bǔ -> b
+巴	bo	Bā -> b
+灬	bo	Biāo -> b
+疒	bo	Bìng -> b
+癶	bo	Bō -> b
+白	bo	Bái -> b
+貝	bo	Bèi -> b
+贝	bo	Bèi -> b
+髟	bo	Biāo -> b
+{冓上}	co	
+{專上}	co	
+{華中}	co	
+⻍	co	
+䒑	co	cǎo -> c
+丑	co	CHǒu -> c
+亍	co	CHù -> c
+冊	co	Cè -> c
+卄	co	Cǎo -> c
+厂	co	CHǎng -> c
+叀	co	
+寸	co	Cùn -> c
+屮	co	Cǎo -> c
+巛	co	CHuān -> c
+巜	co	
+川	co	CHuān -> c
+彳	co	CHì -> c
+臣	co	CHén -> c
+艹	co	Cǎo -> c
+虫	co	Chóng -> c
+車	co	CHē -> c
+车	co	CHè -> c
+辰	co	CHén -> c
+辶	co	CHuò -> c
+長	co	CHáng -> c
+镸	co	CHáng -> c
+长	co	CHáng -> c
+隹	co	Cuī -> c
+齒	co	CHǐ -> c
+龷	co	
+{阜上}	do	Duī -> d
+丁	do	Dīng -> d
+丶	do	Diǎn -> d ㊟點
+乀	do	
+刀	do	Dāo -> d
+刂	do	Dāo -> d
+大	do	Dà -> d
+电	do	Diàn -> d
+鬥	do	Dòu -> d
+𡗗	do	Dí -> d
+{荒下}	eo	
+{飞右}	eo	
+⺀	eo	
+二	eo	èr -> e
+儿	eo	ér -> e
+冫	eo	èr -> e
+而	eo	ér -> e
+耳	eo	ěr -> e
+{卑上}	fo	
+丰	fo	Fēng -> f
+匚	fo	Fāng -> f
+夫	fo	Fū -> f
+方	fo	Fāng -> f
+甫	fo	Fǔ -> f
+甶	fo	Fǔ -> f
+缶	fo	Fǒu -> f
+阝	fo	Fǔ -> f
+非	fo	Fēi -> f
+風	fo	Fēng -> f
+飛	fo	Fēi -> f
+{京上}	go	
+{亮上}	go	
+{即左}	go	
+{襄上}	go	
+{鬼左}	go	
+丱	go	Guān -> g
+古	go	Gǔ -> g
+工	go	Gōng -> g
+干	go	Gān -> g
+广	go	Guǎng -> g
+弓	go	Gōng -> g
+戈	go	Gē -> g
+瓜	go	Guā -> g
+艮	go	Gěn -> g
+革	go	Gé -> g
+骨	go	Gǔ -> g
+高	go	Gāo -> g
+鬼	go	Guǐ -> g
+{僉上}	ho	
+{虍上}	ho	
+{龠上}	ho	
+丆	ho	hǎn -> h ㊟古音
+亥	ho	Hài -> h
+合	ho	Hé -> h
+戶	ho	Hù -> h
+户	ho	Hù -> h
+戸	ho	
+火	ho	Huǒ -> h
+禾	ho	Hé -> h
+虍	ho	
+虎	ho	Hǔ -> h
+黑	ho	Hēi -> h
+{亜下}	io	
+{亞下}	io	yà = ià -> i ㊟取亞聲
+{亞中}	io	
+{姬右}	io	yí = í
+{弬右}	io	
+{衣下}	io	yī = ī ㊟取衣音y
+{鬯中}	io	
+⺁	io	yì -> ì
+⺶	io	
+⺷	io	
+ス	io	
+マ	io	
+一	io	yī = ī
+业	io	yè = iè -> i
+乂	io	yì = i
+乙	io	yǐ = ǐ
+乚	io	yí = i
+也	io	yě = iě -> i
+亦	io	yì = ì
+又	io	yòu = iòu -> i
+夭	io	yāo = iāo -> i
+尤	io	yóu = ióu -> i
+已	io	yǐ = i
+幺	io	yāo = iāo -> i
+廴	io	yín = ín -> i
+弋	io	yì = i
+牙	io	yá = iá -> i
+用	io	yòng = iòng -> i
+由	io	yóu = ióu -> i
+羊	io	yáng = iáng -> i
+衤	io	yī = ī
+言	io	yán = ián -> i
+讠	io	yán = ián -> i
+酉	io	yǒu = iǒu -> i
+{互中}	jo	
+{介下}	jo	Jiè -> j ㊟取介音j
+{冂丶}	jo	
+{反彐}	jo	
+{发左}	jo	
+{母框}	jo	
+{雋下}	jo	
+ᅲ	jo	
+⺽	jo	
+ㄗ	jo	
+㔾	jo	Jié -> j
+丌	jo	Jì -> j
+丩	jo	Jiū -> j
+九	jo	Jiǔ -> j
+冂	jo	Jiǒng -> j
+几	jo	Jǐ -> j
+卩	jo	
+己	jo	Jǐ -> j
+巾	jo	Jīn -> j
+彐	jo	Jì -> j
+彑	jo	Jì -> j
+斤	jo	Jīn -> j
+甲	jo	Jiā -> j
+肀	jo	
+臼	jo	Jìù -> j
+見	jo	Jiàn -> j
+见	jo	Jiàn -> j
+金	jo	Jīn -> j
+钅	jo	Jīn -> J
+{奉下}	ko	Kuǎ -> k
+コ	ko	Kuāng -> k ㊟取框音
+ユ	ko	
+㐄	ko	
+丂	ko	Kào -> k
+冎	ko	
+咼	ko	Kuǎi -> k ㊟古音
+{贏框}	lo	Luó -> l
+{鹿上}	lo	
+〇	lo	Líng -> l
+了	lo	Le -> l
+來	lo	Lái -> l
+力	lo	Lì -> l
+立	lo	Lì -> l
+耂	lo	Lǎo -> l
+里	lo	Lǐ -> l
+隶	lo	Lì -> l
+鹵	lo	Lǔ -> l
+鹿	lo	Lù -> l
+{于下}	mo	Mù -> m ㊟木無枝也故取木音
+{馬上}	mo	
+⺈	mo	
+乜	mo	Miē -> m
+冖	mo	Miǎn -> m
+卯	mo	Mǎo -> m
+厶	mo	Mǒu -> m
+宀	mo	Miǎn -> m
+木	mo	Mù -> m
+朩	mo	
+末	mo	Mò -> m
+母	mo	Mǔ -> m
+毛	mo	Máo -> m
+皿	mo	Mǐn -> m
+目	mo	Mù -> m
+米	mo	Mǐ -> m
+罒	mo	
+門	mo	Mén -> m
+门	mo	Mén -> m
+面	mo	Miàn -> m
+馬	mo	Mǎ -> m
+马	mo	Mǎ -> m
+麻	mo	Má -> m
+{鳥上}	no	
+{鸟上}	no	
+⺧	no	
+乃	no	Nǎi -> n
+女	no	Nǚ -> n
+廾	no	Niàn -> n ㊟生僻音
+牛	no	Niú -> n
+鳥	no	Niǎo -> n
+鸟	no	Niǎo -> n
+丿	po	Piě -> p
+夊	po	Pū -> p
+爿	po	Pán -> p
+片	po	Piàn -> p
+皮	po	Pí -> p
+{具上}	qo	
+七	qo	Qī -> q
+且	qo	Qiě -> q
+丬	qo	Qiáng -> q
+僉	qo	Qiān -> q
+其	qo	Qí -> q
+千	qo	Qiān -> q
+曲	qo	Qǔ -> q
+欠	qo	Qiān -> q
+气	qo	Qì -> q
+犬	qo	Quǎn -> q
+犭	qo	
+{南心}	ro	rén -> r
+{曾中}	ro	
+{横日}	ro	
+人	ro	rén -> r
+亻	ro	rén -> r
+入	ro	rù -> r
+壬	ro	rén -> r
+日	ro	rì -> r
+{丄丶}	so	
+{二撇}	so	
+{眉上}	so	
+{纟上}	so	
+{豕下}	so	
+〢	so	
+〣	so	
+丄	so	
+三	so	Sān -> s
+上	so	SHàng -> s
+世	so	SHì -> s
+丨	so	SHù -> s ㊟同豎
+十	so	SHi -> s
+卅	so	Sà -> s
+卌	so	
+士	so	SHēng -> s
+尚	so	SHàng -> s
+尸	so	SHī -> s
+山	so	SHān -> s
+巳	so	Sì -> s
+彡	so	SHān -> s
+手	so	SHǒu -> s
+扌	so	SHǒu -> s
+殳	so	SHǔ -> s
+水	so	SHuǐ -> s
+氵	so	SHuǐ -> s
+生	so	SHēng -> s
+申	so	SHēn -> s
+矢	so	SHǐ -> s
+石	so	SHí -> s
+示	so	SHì -> s
+糸	so	Sī -> s
+纟	so	Sī -> s
+舌	so	SHé -> s
+豕	so	SHǐ -> s
+身	so	SHēn -> s
+食	so	SHí -> s
+饣	so	SHi -> s
+龵	so	
+龶	so	SHēng -> s
+龸	so	
+亠	to	Tóu = t
+土	to	Tǔ -> t
+田	to	Tián -> t
+{乍下}	vo	Ø -> v ㊟無讀音或生僻部首
+{乐上}	vo	
+{卬左}	vo	
+{卯左}	vo	Ø -> v ㊟無讀音或生僻部首
+{囟框}	vo	Ø -> v ㊟無讀音或生僻部首
+{奐上}	vo	Ø -> v ㊟無讀音或生僻部首
+{微框}	vo	Ø -> v ㊟無讀音或生僻部首
+{曹上}	vo	Ø -> v ㊟無讀音或生僻部首
+{炙上}	vo	
+{畏下}	vo	Ø -> v ㊟無讀音或生僻部首
+{祭上}	vo	
+{穀框}	vo	Ø -> v ㊟無讀音或生僻部首
+{黽中}	vo	Ø -> v ㊟無讀音或生僻部首
+{鼠下}	vo	Ø -> v ㊟無讀音或生僻部首
+{齊右}	vo	
+{龍右}	vo	
+ㄩ	vo	Ø -> v ㊟無讀音或生僻部首
+予	vo	yǔ = ǚ -> v
+口	vo	Kǒu -> v ㊟特例
+曰	vo	yuē = ǖe -> v
+月	vo	yuè = y
+禺	vo	yǔ = ǚ -> v
+雨	vo	yǔ = ǚ -> v
+魚	vo	yú = ü -> v
+鱼	vo	yú = ǘ -> v
+{五下}	wo	wǔ -> w
+{烏上}	wo	
+{爲下}	wo	wéi -> w ㊟取爲音w
+乌	wo	wū -> w
+亡	wo	wáng -> w
+兀	wo	wù -> w
+囗	wo	wéi = w
+尢	wo	wǎng -> w
+戊	wo	wù -> w
+文	wo	wén -> w
+未	wo	wèi -> w
+烏	wo	wū -> w
+王	wo	wáng -> w
+瓦	wo	wǎ -> w
+{兴上}	xo	
+{向框}	xo	
+{步下}	xo	
+⺌	xo	
+⺍	xo	Xiǎo -> x
+丅	xo	
+下	xo	Xià -> x
+习	xo	Xí -> x
+向	xo	Xiàng -> x
+夕	xo	Xī -> x
+小	xo	Xiǎo -> x
+心	xo	Xīn -> x
+忄	xo	Xīn -> x
+穴	xo	Xuè -> x
+西	xo	Xī -> x
+辛	xo	Xīn -> x
+頁	xo	xiè -> x ㊟取古音
+页	xo	xiè -> x ㊟取古音
+{⺮右}	zo	
+{乞上}	zo	
+ナ	zo	Zuǒ -> z
+之	zo	ZHī -> z
+壴	zo	ZHú -> z
+子	zo	Zǐ -> z
+孑	zo	
+早	zo	Zǎo -> z
+止	zo	ZHǐ -> z
+正	zo	ZHèng -> z
+爪	zo	ZHuǎ -> z
+竹	zo	ZHú -> z
+自	zo	Zì -> z
+至	zo	ZHì -> z
+舟	zo	ZHōu -> z
+豸	zo	ZHì -> z
+走	zo	Zǒu -> z
+足	zo	Zú -> z
+龰	zo	
