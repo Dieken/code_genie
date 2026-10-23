@@ -1,0 +1,1 @@
+./optimize.sh -c config-moqing.toml optimize --seed-keymap moqing-output/output-20261019-153521/thread-01/output-keymap.txt : round-6: 保持第五轮 A 热力前沿，从 T1 继续搜索知乎全部简码速度

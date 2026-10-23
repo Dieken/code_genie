@@ -35,7 +35,7 @@ case "$SCHEMA" in
 
         : "${USE_MIXED_FREQ:=0}"        # 三码方案空间小，默认只优化简体 8105 通规字
 
-        : "${OPTIMIZE_KEYS=0eK}"        # 优化零声母和 B 区用作声母的映射，e 在卿云是零声母，i 在卿云代表 yi, 卿云的「口」的声母 k 映射到 v
+        : "${OPTIMIZE_KEYS=0eizK}"      # 优化零声母和 B 区用作声母的映射，e 在卿云是零声母，i 在卿云代表 yi, 卿云的「口」的声母 k 映射到 v
         export OPTIMIZE_KEYS
 
         : "${TOP_ROOT_KEYS:=qwrtyip sdfghjkl xcvbnm}"   # 高频字根大码约束
