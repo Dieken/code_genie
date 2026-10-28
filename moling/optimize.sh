@@ -109,8 +109,9 @@ comment="$0 -c $CONFIG $SUBCMD $@ : $comment"
 echo "$comment" >> "$OUT/COMMENT.txt"
 
 
-# (4) 备份目录直接用 $OUT/source；已存在（如 resume 复用 $OUT）则跳过备份。
+# (4) 备份目录直接用 $OUT/source；在 prepare 完成后备份本次实际输入。
 BAK="$OUT/source"
+backup_inputs() {
 if [ -d "$BAK" ]; then
     echo "备份目录 $BAK 已存在，跳过输入文件备份！"
 else
@@ -119,8 +120,15 @@ else
     for f in chars full-freq roots roots-fly roots-cluster \
         input-division input-fixed input-roots \
         key_distribution pair_equivalence; do
-        [ -f "$f-$SCHEMA.txt" ] && files+=" $f-$SCHEMA.txt" || files+=" $f.txt"
+        case "$SCHEMA:$f" in
+            lingyun:roots) files+=" roots-moqing.txt" ;;
+            lingyun:roots-cluster) files+=" roots-cluster-moqing.txt" ;;
+            *) [ -f "$f-$SCHEMA.txt" ] && files+=" $f-$SCHEMA.txt" || files+=" $f.txt" ;;
+        esac
     done
+    if [ "$SCHEMA" = lingyun ]; then
+        files+=" prepare-lingyun-structures.py structures-lingyun.tsv structure-conflicts-lingyun.tsv"
+    fi
 
     mkdir -p "$BAK"
     # backup configuration for later review
@@ -134,6 +142,7 @@ else
        $files \
        "$BAK/"
 fi
+}
 
 LOG="$OUT/optimize-$TS.log"
 date
@@ -158,6 +167,9 @@ echo "Running './prepare-inputs.sh' and '$CODE_GENIE -c $CONFIG $SUBCMD', writin
     else
         echo "NO_PREPARE 不为 1，执行 ./prepare-inputs.sh"
         $DRYRUN ./prepare-inputs.sh
+    fi
+    if [ -z "$DRYRUN" ]; then
+        backup_inputs
     fi
 
     echo

@@ -17,3 +17,7 @@ batch-test-weights.html
 *.ttf
 *.otf
 
+# 灵云由 prepare-inputs.sh 生成的结构分类与审校清单
+structures-lingyun.tsv
+structure-conflicts-lingyun.tsv
+

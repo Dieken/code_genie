@@ -10,6 +10,24 @@
 
 ## 方案默认配置
 case "$SCHEMA" in
+    lingyun)    # 灵云：卿云聚类大码、逐根乱序小码、六笔画首笔补码，按结构取码
+        : "${SCHEMA_NAME:=灵云}"
+        : "${ENCODE_RULE:=lingyun}"
+        : "${USE_VOWEL:=0}"
+        : "${USE_MIXED_FREQ:=0.1}"
+        : "${TOP_ROOT_KEYS:=qwrtyuopasghlxcvbnm}"
+        : "${HOT_ROOT_KEYS:=qwrtyuopasghlxcvbnm}"
+        : "${ALL_ROOT_KEYS:=qwrtyuopasghlxcvbnm}"
+        : "${SMALL_ROOT_KEYS:=qwrtyuopasghlzxcvbnm}"
+        : "${B_AREA_KEYS:=edfijk}"
+        : "${ROOTS_TXT:=roots-moqing.txt}"
+        : "${ROOTS_CLUSTER_TXT:=roots-cluster-moqing.txt}"
+        : "${IDS_ROOT:=$HOME/home/IDS}"
+        MAX_CODE_LEN=4
+        USE_STROKE_5_FOR_6=0
+        export SMALL_ROOT_KEYS IDS_ROOT
+        ;;
+
     # https://shurufa.app/ime/moling.html
     moling)     # 魔灵，@qq3qq, 四码自定码，25 键，大码聚类，小码(声码)为字根声母，补码(韵码)为字根首笔笔画，A1A2A3AzSzYz，仿灵明和星陈，二根字回头 A1A2S2S1Y1
         : "${SCHEMA_NAME:=魔靈}"
@@ -109,7 +127,7 @@ case "$SCHEMA" in
         ;;
 
     *)
-        echo "ERROR: unknown schema '$SCHEMA', supported schemas: moling xiaoming yaoling yueling yuling" >&2
+        echo "ERROR: unknown schema '$SCHEMA', supported schemas: moling moqing xiaoming lingyun yaoling yueling yuling" >&2
         exit 1
 esac
 

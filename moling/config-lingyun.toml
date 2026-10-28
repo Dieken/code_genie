@@ -1,0 +1,78 @@
+# 灵云起步配置：编码规则见 LINGYUN-OPTIMIZATION.md。
+# 参数参考现有 config.toml；未设置测评目标或硬上限，先用于摸底。
+[files]
+fixed = "input-fixed.txt"
+dynamic = "input-roots.txt"
+splits = "input-division.txt"
+pair_equiv = "pair_equivalence.txt"
+key_dist = "key_distribution-lingyun.txt"
+
+[annealing]
+threads = 8
+total_steps = 20000000
+temp_start = 0.005
+temp_end = 0.00005
+comfort_temp = 0.0005
+comfort_width = 0.15
+comfort_slowdown = 0.6
+swap_probability = 0.35
+min_improve_steps_ratio = 0.1
+perturb_interval_ratio = 0.0
+perturb_strength = 0.0
+reheat_factor = 1.0
+max_parts = 4
+checkpoint_interval_ratio = 0.05
+
+[keys]
+# 大码、小码、补码的分量约束由 prepare-inputs.sh 分别生成。
+allowed = "qwertyuiopasdfghjklzxcvbnm"
+display_order = "qwertyuiopasdfghjklzxcvbnm"
+termination_keys = "edfijk_"
+
+[weights.full_code]
+collision_count = 0.13
+collision_rate = 0.47
+equivalence = 0.36
+equiv_cv = 0.01
+distribution = 0.03
+
+[weights.simple_code]
+enabled = true
+full_code_weight = 0.6
+simple_code_weight = 0.4
+collision_count = 0.1
+collision_rate = 0.3
+freq = 0.2
+equiv = 0.2
+dist = 0.2
+simple_start_progress = 0.4
+simple_ramp_progress = 0.1
+simple_activation_reheat = 1.2
+simple_coverage_ratio = 1.0
+simple_active_coverage = 1.0
+reconcile_interval_ratio = 0.05
+simple_assign_mode = "frequency"
+simple_protect_top_n = 0
+
+# 保留纯单键级别以容纳固定 B 简，不分配其他单键简码。
+[[simple_levels]]
+level = 1
+code_num = 0
+rules = ["Aa"]
+commit_keys = ""
+
+# AB 简：全码首码 + edfijk，每个有效码位 1 字，三码字和四码字一起按频分配。
+[[simple_levels]]
+level = 2
+code_num = 1
+rules = ["AaZz"]
+commit_keys = ""
+commit_alt_hand_only = false
+
+[fixed_simple_codes]
+"我" = "e"
+"的" = "d"
+"是" = "f"
+"有" = "i"
+"在" = "j"
+"你" = "k"

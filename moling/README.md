@@ -28,7 +28,7 @@
 
 `optimize.sh` 调用了 `prepare-inputs.sh`(可以使用环境变量 `NO_PREPARE=1` 跳过)，后者接受几个环境变量来定制行为：
 
-* `SCHEMA`：值为 moling, moqing, xiaoming, yaoling, yueling, yuling 中的一个，表示优化对应方案，默认为 moling；
+* `SCHEMA`：值为 moling, moqing, xiaoming, lingyun, yaoling, yueling, yuling 中的一个，表示优化对应方案，默认为 moling；
 * `OPTIMIZE_KEYS`: 设置为按键序列的字符串：
     * 包含 0 时，使用退火算法决定零声母的按键，默认使用 w，可以使用环境变量 `OPTIMIZE_KEY_0` 设置；
     * 包含 y 时，使用退火算法决定声母 y 的按键，默认使用 k，可以使用环境变量 `OPTIMIZE_KEY_y` 设置；

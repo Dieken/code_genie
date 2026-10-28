@@ -470,6 +470,15 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
     }
   }
 
+  # 灵云：每根小码独立乱序；同类首笔的补码成组，在 B 区内退火分配。
+  if ($ENV{SCHEMA} eq "lingyun") {
+    die "No stroke found for $F[0]!\n" unless exists $strokes{$F[0]};
+    die "Invalid stroke for $F[0]!\n" unless $strokes{$F[0]} =~ /^[1-6]$/;
+    print "$F[0].S\t", join(" ", split //, $ENV{SMALL_ROOT_KEYS});
+    push @{ $lingyun_strokes{ $strokes{$F[0]} } }, "$F[0].Y";
+    next;
+  }
+
   # 潇明声码约束
   if ($ENV{SCHEMA} eq "xiaoming") {
     ### 2026-10-11: 潇明不再使用人为定义好的笔画映射，以利于退火优化时得到更好的当量
@@ -572,6 +581,12 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
   }
 
   END {
+    for my $stroke (sort keys %lingyun_strokes) {
+        print "# lingyun first stroke $stroke";
+        print join(" ", sort @{ $lingyun_strokes{$stroke} }), "\t",
+            join(" ", split //, $ENV{B_AREA_KEYS});
+    }
+
     for (sort keys %consonants) {
         print "# $_";
         print join(" ", map { "$_.S" } @{ $consonants{$_} }), "\t", join(" ", split /\s*/, $ENV{ALL_ROOT_KEYS});
@@ -609,10 +624,12 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE 'use Unicode::Normalize;
 
 
 echo '(10) 添加码灵输入文件 input-fixed.txt, 飞键约束 ...'
+if [ "$SCHEMA" != lingyun ]; then
 perl -CSDA -lanE '
   next if /^\s*#/ || /^\s*#/;
   print "$F[0].U\t", "a e u i o";
 ' roots-fly.txt >> input-fixed.txt
+fi
 
 
 echo '(11) 生成空的 input-roots.txt, 所有字根已定义于 input-fixed.txt ...'
@@ -620,8 +637,23 @@ echo '(11) 生成空的 input-roots.txt, 所有字根已定义于 input-fixed.tx
 
 
 echo '(12) 生成码灵输入文件 input-division.txt ...'
+if [ "$SCHEMA" = lingyun ]; then
+    python3 ./prepare-lingyun-structures.py --ids-root "$IDS_ROOT" \
+        --division chaifen.txt --structures structures-lingyun.tsv \
+        --conflicts structure-conflicts-lingyun.tsv
+fi
 perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
   BEGIN {
+    if ($ENV{ENCODE_RULE} eq "lingyun") {
+      open my $sfh, "structures-lingyun.tsv";
+      while (<$sfh>) {
+        next if /^#/;
+        chomp;
+        my @s = split /\t/;
+        $structures{$s[0]} = $s[1];
+      }
+    }
+
     open my $fh, $ENV{ROOTS_TXT};
     while (<$fh>) {
       chomp;
@@ -644,7 +676,19 @@ perl -CSDA -F'\t' -Mautodie -Mutf8 -lanE '
 
   for (@a) { die "Bad root $_\n" unless exists $h{$_} || exists $h2{$_}; }
 
-  if ($ENV{ENCODE_RULE} eq "yuling") {          # 使用宇浩灵明单字编码规则
+  if ($ENV{ENCODE_RULE} eq "lingyun") {        # 灵云：仅二、三根字区分最外层结构
+    if (@a == 1) {
+      push @b, "$a[0].A", "$a[0].S", "$a[0].Y";
+    } elsif (@a >= 4) {
+      push @b, "$a[0].A", "$a[1].A", "$a[2].A", "$a[-1].A";
+    } else {
+      die "No structure found for $F[0]!\n" unless exists $structures{$F[0]};
+      push @b, "$a[0].A", "$a[1].A";
+      push @b, "$a[-1].A" if @a == 3;
+      push @b, "$a[-1].S" if $structures{$F[0]} eq "lr";
+      push @b, "$a[-1].Y" if @a == 2 || $structures{$F[0]} ne "lr";
+    }
+  } elsif ($ENV{ENCODE_RULE} eq "yuling") {          # 使用宇浩灵明单字编码规则
     push @b, "$a[0].A";
     push @b, "$a[0].S" if length($h{$a[0]}) > 1;
     push @b, "$a[0].Y" if @a == 1;
